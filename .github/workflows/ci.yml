@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.backlogit/**'
+      - 'docs/**'
+      - '.autoharness/**'
+      - '*.md'                # root README/CHANGELOG/AGENTS.md
+      - '.github/**/*.md'     # instructions/prompts/agents
+      - 'scripts/**/*.md'     # scripts/metrics/README.md
+  pull_request:
+    paths-ignore:
+      - '.backlogit/**'
+      - 'docs/**'
+      - '.autoharness/**'
+      - '*.md'                # root README/CHANGELOG/AGENTS.md
+      - '.github/**/*.md'     # instructions/prompts/agents
+      - 'scripts/**/*.md'     # scripts/metrics/README.md
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          # 'every' requires ALL patterns to match per file, so the '!' negations
+          # actually exclude docs/markdown/backlog. Under the default 'some', the
+          # leading '**' alone would mark every file as matched and the negations
+          # would never take effect (see dorny/paths-filter README).
+          predicate-quantifier: 'every'
+          filters: |
+            # Denylist: match any changed file that is NOT pure docs/markdown/
+            # backlog state, so a code/config change can never silently skip the
+            # security-sensitive lint/vet/test gate (evaluated with 'every' above).
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!.backlogit/**'
+
+  # DISABLED: no go.mod exists yet — go-teams is pre-code (see AGENTS.md).
+  # Re-enable this job once `go mod init` has been run and cmd/teams-cli exists.
+  # test:
+  #   needs: changes
+  #   if: needs.changes.outputs.code == 'true'
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     matrix:
+  #       go-version: ["1.23", "1.24"]
+  #   steps:
+  #     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  #       with:
+  #         persist-credentials: false
+  #     - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+  #       with:
+  #         go-version: ${{ matrix.go-version }}
+  #     - name: Install dependencies
+  #       run: go mod download
+  #     - name: Lint
+  #       uses: golangci/golangci-lint-action@2226d7cb06a077cd73e56eedd38eecad18e5d837 # v6.5.0
+  #       with:
+  #         version: v1.64.8
+  #         args: --timeout=5m
+  #     - name: Vet
+  #       run: go vet ./...
+  #     - name: Test
+  #       run: go test -race -coverprofile=coverage.out ./...
+  #     - name: Coverage report
+  #       run: go tool cover -func=coverage.out
+
+  # DISABLED: requires go.mod and a `make docs-lint` target that don't exist yet.
+  # Re-enable once the Go module and Makefile are scaffolded.
+  # docs-lint:
+  #   name: Docline frontmatter gate
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  #       with:
+  #         persist-credentials: false
+  #     - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+  #       with:
+  #         go-version-file: go.mod
+  #     - name: Lint documentation frontmatter
+  #       run: make docs-lint
+

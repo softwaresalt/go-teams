@@ -1,0 +1,200 @@
+schema_version: "1.0.0"
+installed_at: "2026-07-08T00:00:00Z"
+autoharness_version: "1.4.11"
+autoharness_home: "C:\\Python\\Python312\\Lib\\site-packages\\autoharness\\data"
+profile_hash: "sha256-generated-from-workspace-profile.yaml"
+config_hash: null
+install_preset: "full"
+primary_stack_pack: "cli-tool"
+stack_packs: ["cli-tool"]
+install_layers: ["foundation", "instructions", "workflow", "review", "runtime", "backlog", "knowledge", "overlays"]
+capability_packs:
+  - "agent-intercom"
+  - "agent-engram"
+  - "backlogit"
+  - "browser-verification"
+  - "continuous-learning"
+  - "strict-safety"
+  - "release-observability"
+  - "adversarial-review"
+  - "graphtor-docs"
+capability_pack_overlays:
+  - pack: "agent-intercom"
+    overlay_targets: ["foundation-docs", "agent-intercom.instructions.md", "pipeline-agents", "ping-loop-prompt"]
+    verification_checks:
+      - "agent-intercom.instructions.md installed at .github/instructions/"
+      - ".stage.agent.md contains agent-intercom guidance and broadcast table"
+      - ".ship.agent.md contains agent-intercom guidance and broadcast table"
+      - "no unresolved {{VARIABLE}} in agent-intercom.instructions.md"
+  - pack: "agent-engram"
+    overlay_targets: ["foundation-docs", "agent-engram.instructions.md", "pipeline-agents", "analysis-heavy-workflows"]
+    verification_checks:
+      - "agent-engram.instructions.md installed at .github/instructions/"
+      - ".stage.agent.md contains Engram guidance"
+      - ".ship.agent.md contains Engram guidance"
+      - "copilot-instructions.md engram block cross-references installed instructions"
+      - "no unresolved {{VARIABLE}} in agent-engram.instructions.md"
+  - pack: "backlogit"
+    overlay_targets: ["backlog-integration.instructions.md", "backlogit.instructions.md", "backlogit-sql-schema.instructions.md", "backlogit-yaml-header-tooling.instructions.md", "pipeline-agents", "shipment-reconcile-skill"]
+    verification_checks:
+      - "backlogit.instructions.md, backlogit-sql-schema.instructions.md, backlogit-yaml-header-tooling.instructions.md installed"
+      - ".autoharness/backlog-registry.yaml matches backlogit registry"
+      - "shipment-reconcile skill installed (features.shipments: true)"
+  - pack: "browser-verification"
+    overlay_targets: ["browser-verification.instructions.md", "browser-automation-skill", "runtime-verification-skill"]
+    verification_checks:
+      - "browser-verification.instructions.md installed at .github/instructions/"
+      - "browser-automation/SKILL.md installed"
+  - pack: "continuous-learning"
+    overlay_targets: ["continuous-learning.instructions.md", "observe-skill", "learn-skill", "evolve-skill"]
+    verification_checks:
+      - "continuous-learning.instructions.md installed"
+      - "observe/SKILL.md, learn/SKILL.md, evolve/SKILL.md installed"
+  - pack: "strict-safety"
+    overlay_targets: ["strict-safety.instructions.md", "safety-modes-skill", "plan-harden-skill", "constitution"]
+    verification_checks:
+      - "strict-safety.instructions.md installed"
+      - "constitution.instructions.md and AGENTS.md reference ProposedAction/ActionRisk"
+  - pack: "release-observability"
+    overlay_targets: ["release-observability.instructions.md", "operational-closure-skill", "runtime-verification-skill"]
+    verification_checks:
+      - "release-observability.instructions.md installed"
+      - "operational-closure/SKILL.md references monitoring plan and rollback trigger"
+  - pack: "adversarial-review"
+    overlay_targets: ["adversarial-review.instructions.md", "adversarial-review-agent"]
+    verification_checks:
+      - "adversarial-review.instructions.md installed"
+      - "subagents/adversarial-review.agent.md installed"
+  - pack: "graphtor-docs"
+    overlay_targets: ["foundation-docs", "graphtor-docs.instructions.md", "pipeline-agents", ".env.local"]
+    verification_checks:
+      - "graphtor-docs.instructions.md installed at .github/instructions/"
+      - "no unresolved {{VARIABLE}} in graphtor-docs.instructions.md (GRAPHTOR_SOURCES_PATH and GRAPHTOR_BINARY_PATH resolved)"
+      - ".env.local contains GRAPHTOR_EMBED_MODEL_DIR"
+primitives_installed: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+vscode_settings:
+  applied: true
+  user_settings_path: "c:\\Users\\dewilliams\\AppData\\Roaming\\Code\\User\\settings.json"
+  entries_added:
+    - "chat.agentFilesLocations[\"C:\\Python\\Python312\\Lib\\site-packages\\autoharness\\data/.github/agents\"]"
+    - "chat.agentSkillsLocations[\"C:\\Python\\Python312\\Lib\\site-packages\\autoharness\\data/.github/skills\"]"
+    - "chat.promptFilesLocations[\"C:\\Python\\Python312\\Lib\\site-packages\\autoharness\\data/.github/prompts\"]"
+  skipped_because: null
+gitignore_updates:
+  env_local_ignored: true
+  file_lock_patterns_added: true
+artifacts:
+  - { path: "AGENTS.md", primitive: 9, template: "foundation/AGENTS.md.tmpl", checksum: "914da5bd4787946f9bc2567926e4db9fdbb73bb5462c46f6ed9f2fbaf157e939" }
+  - { path: ".github/copilot-instructions.md", primitive: 6, template: "foundation/copilot-instructions.md.tmpl", checksum: "9f7b8cb5a8bda31ca10ed86467feb07161f4c419f7a2c65ef4e8f4dc8c686557" }
+  - { path: ".github/instructions/constitution.instructions.md", primitive: 5, template: "foundation/constitution.instructions.md.tmpl", checksum: "9fc12aa729c009a5e63a4a14b7574c8f2e48424cb92a8c4d880f4c292ad26878" }
+  - { path: ".github/instructions/go.instructions.md", primitive: 6, template: "instructions/technology-go.instructions.md.tmpl", checksum: "172b9eb5f10a5ba1d7ac7cf24224bebb771d64ac8732a2f66804d7cb75d1e49a" }
+  - { path: ".github/instructions/commit-message.instructions.md", primitive: 6, template: "instructions/commit-message.instructions.md.tmpl", checksum: "c479d9207e8623319efbb612bb26fdc6a6dbd2de51eb9cb7d566799d9e5d4e1e" }
+  - { path: ".github/instructions/markdown.instructions.md", primitive: 6, template: "instructions/markdown.instructions.md.tmpl", checksum: "36b9faa412bb9b77adcb9d00b84b90d0adb226a1020d2789c497a72008fd85ae" }
+  - { path: ".github/instructions/writing-style.instructions.md", primitive: 6, template: "instructions/writing-style.instructions.md.tmpl", checksum: "74ede17cd141b15ff4f740d7dd55465fee4876d10b504971e4f874bbf0c6bbe8" }
+  - { path: ".github/instructions/coding-discipline.instructions.md", primitive: 6, template: "instructions/coding-discipline.instructions.md.tmpl", checksum: "6289c00134115f0072b45fa519040b30f3dbe4583b18838964013d2decbe1f0c" }
+  - { path: ".github/instructions/git-merge.instructions.md", primitive: 6, template: "instructions/git-merge.instructions.md.tmpl", checksum: "62e6ca56f90570f1ff895dad31827eed541050fd60fe7ec32559d3c394af2aa3" }
+  - { path: ".github/instructions/pull-request.instructions.md", primitive: 6, template: "instructions/pull-request.instructions.md.tmpl", checksum: "cbaaabb2a07bfb0b5c872773e661c3130880ad8759c8d9507997def9bca40595" }
+  - { path: ".github/instructions/prompt-builder.instructions.md", primitive: 6, template: "instructions/prompt-builder.instructions.md.tmpl", checksum: "0240f417c991c10bec481ee2c60b3290802de341795ddedcfeb9d50036fb401d" }
+  - { path: ".github/instructions/circuit-breaker.instructions.md", primitive: 5, template: "instructions/circuit-breaker.instructions.md.tmpl", checksum: "22a68c08a8dee5ba1c70edf9b458236f2b099f28a9010409a81013c316cd0b39" }
+  - { path: ".github/instructions/concurrency.instructions.md", primitive: 5, template: "instructions/concurrency.instructions.md.tmpl", checksum: "25ec9c915b64e654b88ab06046f7bf73709229542aa58c1829fa03b040be33fa" }
+  - { path: ".github/instructions/architecture-doc.instructions.md", primitive: 9, template: "instructions/architecture-doc.instructions.md.tmpl", checksum: "40461add600190fb13062ca94f24bf000ba262628b018e3b01f1c8ce9fa18d00" }
+  - { path: ".github/instructions/context-efficiency.instructions.md", primitive: 1, template: "instructions/context-efficiency.instructions.md.tmpl", checksum: "869e7744fa8dfb7df61ef5cc44b9b3a5f9591e678ace04a122eb7a4f73724ec3" }
+  - { path: ".github/instructions/output-timestamps.instructions.md", primitive: 7, template: "instructions/output-timestamps.instructions.md.tmpl", checksum: "4d7d0ee274b24acc714e1c29dc0fa90d63aa94a8f6cdba6be3f2cf51be903057" }
+  - { path: ".github/instructions/github-pr-automation.instructions.md", primitive: 10, template: "instructions/github-pr-automation.instructions.md.tmpl", checksum: "040a3d5c00e7cab4e3faf0b771dc44f054503614735083c96817c0d346009bfe" }
+  - { path: ".github/instructions/backlog-integration.instructions.md", primitive: 8, template: "instructions/backlog-integration.instructions.md.tmpl", checksum: "c4f4c5474ae5cd49cee79affd23b4a10d87a98f6f1df9a756faaf51f34e26427" }
+  - { path: ".github/instructions/role-enforcement.instructions.md", primitive: 5, template: "instructions/role-enforcement.instructions.md.tmpl", checksum: "5f88767fc559f2675368075bd27e47ede3fdf22a6d45ce878c17b7615f17de4b" }
+  - { path: ".github/instructions/agent-intercom.instructions.md", primitive: 6, template: "instructions/agent-intercom.instructions.md.tmpl", checksum: "5eb1017fb34a73c0dfa5f44756aa2c192eb8487c278554ed44572c92c79a25ca" }
+  - { path: ".github/instructions/agent-engram.instructions.md", primitive: 6, template: "instructions/agent-engram.instructions.md.tmpl", checksum: "b5872025913448cf4cfbc64d3d1a50101dd8d6984e7f13cd3a9ea032f3aa1356" }
+  - { path: ".github/instructions/graphtor-docs.instructions.md", primitive: 6, template: "instructions/graphtor-docs.instructions.md.tmpl", checksum: "0361795112deb08f8f742b2430c2b6df555e1e588494d03870b1b0b9bc392a9c" }
+  - { path: ".github/instructions/backlogit.instructions.md", primitive: 6, template: "instructions/backlogit.instructions.md.tmpl", checksum: "6923750b5069ecde43f7718ae4892baadf24212fa6d9e9736df4331255f2e84f" }
+  - { path: ".github/instructions/backlogit-sql-schema.instructions.md", primitive: 6, template: "instructions/backlogit-sql-schema.instructions.md.tmpl", checksum: "88d56af8cdcefee90317bbd03a1a7344cc7a3879dfb92280d7a7980d51a1dd58" }
+  - { path: ".github/instructions/backlogit-yaml-header-tooling.instructions.md", primitive: 6, template: "instructions/backlogit-yaml-header-tooling.instructions.md.tmpl", checksum: "1446eef921112f1c088945098a264aed6ca62dc6ee9a42a4051c76d359c571f9" }
+  - { path: ".github/instructions/browser-verification.instructions.md", primitive: 6, template: "instructions/browser-verification.instructions.md.tmpl", checksum: "6da34ee78d3baed1e0f7e8f31bd02273cb7bc9eb625175d4ffa40a9992881ecc" }
+  - { path: ".github/instructions/continuous-learning.instructions.md", primitive: 6, template: "instructions/continuous-learning.instructions.md.tmpl", checksum: "0f879053f26aa34d50191aeed34ccf44e1ca8e690ea16d98ba20e419eba4b39f" }
+  - { path: ".github/instructions/strict-safety.instructions.md", primitive: 5, template: "instructions/strict-safety.instructions.md.tmpl", checksum: "c8750778063d797fd4f0ca75915f6bbe4353667f683a39f157889aca90aa9b8c" }
+  - { path: ".github/instructions/release-observability.instructions.md", primitive: 10, template: "instructions/release-observability.instructions.md.tmpl", checksum: "45c9d90c3512746582dbd4ba81c3260e84c94de08dedaec657ec530decc9d897" }
+  - { path: ".github/instructions/adversarial-review.instructions.md", primitive: 7, template: "instructions/adversarial-review.instructions.md.tmpl", checksum: "d4aa90175276d37369a6b868a6773a68f5c6f5b02c2f9aa27cda9bef85bed62b" }
+  - { path: ".github/policies/workflow-policies.md", primitive: 8, template: "policies/workflow-policies.md.tmpl", checksum: "33e8af7e31371f3cd693b559a01b77e9b4edcdab7990d77aabf7d214f46f5601" }
+  - { path: ".github/prompts/ping-loop.prompt.md", primitive: 4, template: "prompts/ping-loop.prompt.md.tmpl", checksum: "3d9cdccec6566841d050ac3824cf59372d25e64dd8865e825eff459f5fe9f105" }
+  - { path: ".github/prompts/feature-flow.prompt.md", primitive: 4, template: "prompts/feature-flow.prompt.md.tmpl", checksum: "1aa567e2e8fc16ad85d69ad39163202273e3bef784dece9d975b2d7f02fc3bb8" }
+  - { path: ".github/prompts/feature-flow-parallel.prompt.md", primitive: 4, template: "prompts/feature-flow-parallel.prompt.md.tmpl", checksum: "79fe04114e12732abf9a3037841ca44108dc40976f8f0f555dd554ff2bb76aa4" }
+  - { path: ".github/prompts/feature-flow-dark.prompt.md", primitive: 4, template: "prompts/feature-flow-dark.prompt.md.tmpl", checksum: "4f5ff60fcb8e6771fc888ad7345125aa684a5b1d3921f415981fd1623a406cc1" }
+  - { path: ".github/prompts/stage-grouping-analysis.prompt.md", primitive: 4, template: "prompts/stage-grouping-analysis.prompt.md.tmpl", checksum: "60c7e9f59607d07c7a7715e64753a4146d00a922b3d736beda50078982dfa41c" }
+  - { path: ".github/agents/_orchestrator.agent.md", primitive: 4, template: "agents/_orchestrator.agent.md.tmpl", checksum: "472dda1db29735c898e459ab6e437c34ab608330fbfc2b7a37e49263c8da2ae4" }
+  - { path: ".github/agents/.stage.agent.md", primitive: 4, template: "agents/.stage.agent.md.tmpl", checksum: "ea71181d8c5ec962d1bed5a634261e0f067bbb379b727f57bb0c115dabbe6a27" }
+  - { path: ".github/agents/.ship.agent.md", primitive: 4, template: "agents/.ship.agent.md.tmpl", checksum: "61a211794dcc3b5e1ecc7efc37275f1dd8080c8f52fb3cccbd042de17566d9d1" }
+  - { path: ".github/agents/subagents/go-engineer.agent.md", primitive: 4, template: "agents/language-engineer.agent.md.tmpl", checksum: "5221b1ee3d67adc1684af0aebf6a8d4b03c29d65a0a1a654d58265b1190e90dc" }
+  - { path: ".github/agents/subagents/prompt-builder.agent.md", primitive: 4, template: "agents/prompt-builder.agent.md.tmpl", checksum: "b3170de4a91d86f9a9e4ce126329fa507d3be056fba9f0364446b61f197586f1" }
+  - { path: ".github/agents/subagents/security-sentinel.agent.md", primitive: 5, template: "agents/security-sentinel.agent.md.tmpl", checksum: "629eb7ccb9e1103c1834d3fcfdd3b0bd3c763ad82552119576cb7904db192ac7" }
+  - { path: ".github/agents/subagents/adversarial-review.agent.md", primitive: 7, template: "agents/adversarial-review.agent.md.tmpl", checksum: "d0b8458eccc5a65df60c4c7ad784e8bdbbf084fa665b78b09890ebc889a50558" }
+  - { path: ".github/agents/subagents/learnings-researcher.agent.md", primitive: 1, template: "agents/research/learnings-researcher.agent.md.tmpl", checksum: "4a0d02605d0128e1d20a5969195cbd479e9e31cfa91e843299dd935c49d278f9" }
+  - { path: ".github/agents/subagents/architecture-strategist.agent.md", primitive: 7, template: "agents/review/architecture-strategist.agent.md.tmpl", checksum: "baf1ae6a8a0d6afcf7359152559d30daec507cafb4b84d60e51910398bf66d86" }
+  - { path: ".github/agents/subagents/constitution-reviewer.agent.md", primitive: 7, template: "agents/review/constitution-reviewer.agent.md.tmpl", checksum: "8ebc1690aec52b745b56d84b31f5ea3eb7e57b6a722a73b32023c34685f480da" }
+  - { path: ".github/agents/subagents/correctness-reviewer.agent.md", primitive: 7, template: "agents/review/correctness-reviewer.agent.md.tmpl", checksum: "d80b5fc2d043ae6406a69b641fb257d5923f1e9ad5ff82c26dcfb3b3f1820a7b" }
+  - { path: ".github/agents/subagents/maintainability-reviewer.agent.md", primitive: 7, template: "agents/review/maintainability-reviewer.agent.md.tmpl", checksum: "334ac4510f1448c8a88fe7eb2fdef3c68b5895ea11c2e0c405395a420102fab0" }
+  - { path: ".github/agents/subagents/scope-boundary-auditor.agent.md", primitive: 7, template: "agents/review/scope-boundary-auditor.agent.md.tmpl", checksum: "77ebc6a7f9af50989c3d1aef6aadf62745eeac70c51a190daf569783c0924b88" }
+  - { path: ".github/agents/subagents/go-reviewer.agent.md", primitive: 7, template: "agents/review/technology-reviewer.agent.md.tmpl", checksum: "3fb504a9c65e240a2ff83d18be3369f359b8c307077c094b3c9653526159756b" }
+  - { path: ".github/agents/subagents/concurrency-reviewer.agent.md", primitive: 7, template: "agents/review/concurrency-reviewer.agent.md.tmpl", checksum: "cebdd0f115661d526f0d6f673217c729df405492de0867afdf9c0fecc4d64b06" }
+  - { path: ".github/agents/subagents/security-reviewer.agent.md", primitive: 7, template: "agents/review/security-reviewer.agent.md.tmpl", checksum: "22c37efbe653e8edc508ff2b053530c2920349fbc1f7628210f8a0d3ad2fd191" }
+  - { path: ".github/agents/subagents/security-lens-reviewer.agent.md", primitive: 7, template: "agents/review/security-lens-reviewer.agent.md.tmpl", checksum: "6c5366b593cbc9c4c53dfef4cfdf182c7e740027a9ce21e569f58079598cec25" }
+  - { path: ".github/skills/build-feature/SKILL.md", primitive: 4, template: "skills/build-feature/SKILL.md.tmpl", checksum: "51f67d4c5889553aa75c4181fba8aba559ed51290126ffa05963403843102c6e" }
+  - { path: ".github/skills/fix-ci/SKILL.md", primitive: 4, template: "skills/fix-ci/SKILL.md.tmpl", checksum: "3255a84c31da018701007991807730fc0e4d42bdb1b8eeffeb4e57fbc3f8ed74" }
+  - { path: ".github/skills/impl-plan/SKILL.md", primitive: 4, template: "skills/impl-plan/SKILL.md.tmpl", checksum: "1dd28a3bc79d2a8997be33692ee4efce64756451b81a02eb1bbc247dca41e78c" }
+  - { path: ".github/skills/deliberate/SKILL.md", primitive: 4, template: "skills/deliberate/SKILL.md.tmpl", checksum: "751c9a16a35d3972b1754acd51158b9f0a467a61a64d346834f52af9b9fe98a7" }
+  - { path: ".github/skills/spike/SKILL.md", primitive: 4, template: "skills/spike/SKILL.md.tmpl", checksum: "60805e695b97900181017fdcd3be6e270764ef67ae338563bbb2ec2fcfd3fd33" }
+  - { path: ".github/skills/plan-harden/SKILL.md", primitive: 4, template: "skills/plan-harden/SKILL.md.tmpl", checksum: "51ff2f68b000656483a37c21f12dd17cba390573760685a691669c510e2f860f" }
+  - { path: ".github/skills/compact-context/SKILL.md", primitive: 1, template: "skills/compact-context/SKILL.md.tmpl", checksum: "16560d9a91c515142599ebc3fbbc617dfd99a78d908f2b9aa8f1dc2b509238c1" }
+  - { path: ".github/skills/compound/SKILL.md", primitive: 1, template: "skills/compound/SKILL.md.tmpl", checksum: "2f57dfdbfdeb735bb9daa67ab5f390fb2e20021035d72f557a85f0f8c83d2847" }
+  - { path: ".github/skills/compound-refresh/SKILL.md", primitive: 1, template: "skills/compound-refresh/SKILL.md.tmpl", checksum: "d21e5d560a4e4f02576fa7b3e010cb76a957145739caf88ffe07d765c3013461" }
+  - { path: ".github/skills/harness-architect/SKILL.md", primitive: 4, template: "skills/harness-architect/SKILL.md.tmpl", checksum: "cdcdc6431f89f49eb2e5cccf811c4db057b2a478081faa6bc0cdd69f25ee9457" }
+  - { path: ".github/skills/harvest/SKILL.md", primitive: 4, template: "skills/harvest/SKILL.md.tmpl", checksum: "6d0c75d3160026208060243daa71a8e613b78c642f481a2160f62a4c93af6e02" }
+  - { path: ".github/skills/pr-lifecycle/SKILL.md", primitive: 4, template: "skills/pr-lifecycle/SKILL.md.tmpl", checksum: "0eb30c33d1fd527a124cc92be2528f815988d2744162df092ead4192863e6ce1" }
+  - { path: ".github/skills/safety-modes/SKILL.md", primitive: 5, template: "skills/safety-modes/SKILL.md.tmpl", checksum: "562768b3a5bb6e944a330c7bda8419f5f6afd05bff8f1602a9b35f3e9f3bf834" }
+  - { path: ".github/skills/file-lock/SKILL.md", primitive: 5, template: "skills/file-lock/SKILL.md.tmpl", checksum: "624df80c6cee4ceca496a5ee6fb1c9ec7603b1fcef190ef7c9f9198c6b9da74b" }
+  - { path: ".github/skills/skill-search/SKILL.md", primitive: 6, template: "skills/skill-search/SKILL.md.tmpl", checksum: "0fbdc29c4412dc3e152c015cdc982d5e6ddf82634d1d8c18a28d8f1661a50ab6" }
+  - { path: ".github/skills/security-audit/SKILL.md", primitive: 5, template: "skills/security-audit/SKILL.md.tmpl", checksum: "4ec5de521cffbbba206edd9ce631936826d60abc825f170cfc798fc659b92d2b" }
+  - { path: ".github/skills/runtime-verification/SKILL.md", primitive: 10, template: "skills/runtime-verification/SKILL.md.tmpl", checksum: "22d68ff03e60b5e6bd8b187e0c1a66eb9a88501331e581c7af93551f750aa709" }
+  - { path: ".github/skills/operational-closure/SKILL.md", primitive: 10, template: "skills/operational-closure/SKILL.md.tmpl", checksum: "d1ddb6adc8594389aaa04344b8a867522285f9af845f2b4265ed5b7e92cf41a0" }
+  - { path: ".github/skills/observe/SKILL.md", primitive: 1, template: "skills/observe/SKILL.md.tmpl", checksum: "94bd6a1950801bcfd4b0ccd4bbfbd161fd5aff03530909e69edba748e03d4617" }
+  - { path: ".github/skills/learn/SKILL.md", primitive: 1, template: "skills/learn/SKILL.md.tmpl", checksum: "86df3bd18f97fb2954da0af13eb2ffbcffbaab69278899fdd81f5b7623915194" }
+  - { path: ".github/skills/evolve/SKILL.md", primitive: 1, template: "skills/evolve/SKILL.md.tmpl", checksum: "9014af8347702a877be6c8438761be9a7454c3cde92c1addd2f21252c61850cc" }
+  - { path: ".github/skills/browser-automation/SKILL.md", primitive: 10, template: "skills/browser-automation/SKILL.md.tmpl", checksum: "1c178408c1bb5957b58b9ce60a196ca5685b0222c30e6ee31659bdf6ac99d06a" }
+  - { path: ".github/skills/iterative-experiment/SKILL.md", primitive: 4, template: "skills/iterative-experiment/SKILL.md.tmpl", checksum: "8334d1b0ccd421ed2b317d15e2d1a6a0b81d47d6527c14e3b1c8fdbc96839b5e" }
+  - { path: ".github/skills/harness-doctor/SKILL.md", primitive: 1, template: "skills/harness-doctor/SKILL.md.tmpl", checksum: "15b03934feeb29da89ef63b9baa72f5eb2a239e2fc0733f364f4b95c0787bb7d" }
+  - { path: ".github/skills/plan-review/SKILL.md", primitive: 7, template: "skills/plan-review/SKILL.md.tmpl", checksum: "7dc86df92c962a1897a19c77d48fd97271bb27e8c1656e32aa33e8b162ce4686" }
+  - { path: ".github/skills/review/SKILL.md", primitive: 7, template: "skills/review/SKILL.md.tmpl", checksum: "2c0e7cc23afdf28944cbff50a6933ce57358a292e18e40cfa76c7bfa7a0d9a10" }
+  - { path: ".github/skills/doc-review/SKILL.md", primitive: 7, template: "skills/doc-review/SKILL.md.tmpl", checksum: "fd8733a27ad2bfddaf86a5919b30763550fef0a73e50bca2ff76a794caa4551b" }
+  - { path: ".github/skills/shipment-reconcile/SKILL.md", primitive: 4, template: "skills/shipment-reconcile/SKILL.md.tmpl", checksum: "281a9cff5f6a5fee007d3774710c42d05489cf88a2d1b41e712c0ae48a949f30" }
+  - { path: "scripts/acquire_lock.ps1", primitive: 5, template: "skills/file-lock/scripts/acquire_lock.ps1", checksum: "d61a4760c49302d2c8c425d23552ded5e9fd51bf13c76362f1cf41ea3e3115f6" }
+  - { path: "scripts/acquire_lock.sh", primitive: 5, template: "skills/file-lock/scripts/acquire_lock.sh", checksum: "65c543969c5014f5c91623be6087986acaa57ef6e98eb5ea15b944962d8886e7" }
+  - { path: "scripts/release_lock.ps1", primitive: 5, template: "skills/file-lock/scripts/release_lock.ps1", checksum: "ec6ae8faddbe2dd11bf539b582154d77dc5b592406e3962522e1b216e283399d" }
+  - { path: "scripts/release_lock.sh", primitive: 5, template: "skills/file-lock/scripts/release_lock.sh", checksum: "975eefc6c944c93548988a87c158fa27d9683ea878b783a1e07d8ebd769a6b09" }
+  - { path: "scripts/search.ps1", primitive: 6, template: "skills/skill-search/scripts/search.ps1", checksum: "6b73b3ef9ca8fc7cba1429b0c8c3674aeb9b53d61f7d6223117436947688ac35" }
+  - { path: "scripts/search.sh", primitive: 6, template: "skills/skill-search/scripts/search.sh", checksum: "43b464100063496fa1965e3e312c127d22aeb0c0ec9209906972a4ade465d430" }
+  - { path: "start.ps1", primitive: 6, template: "scripts/start.ps1.tmpl", checksum: "11395469743e199f85e650a20b8cb013a2fc3fa553775f204bb1fd430afef8c0" }
+  - { path: "start.sh", primitive: 6, template: "scripts/start.sh.tmpl", checksum: "5bfeff8031f024f75ced16e2d02de30f3ee298028a7e9276641816896cc425cc" }
+  - { path: ".env.local", primitive: 6, template: "scripts/.env.local.tmpl", checksum: "9a79a7f422355316df5da084857877eaded42b55e99c1fb644f5bceeb7b016cc" }
+  - { path: "docs/compound/README.md", primitive: 9, template: null, checksum: "c0f1687b9ef0c13cda965687683bea872a41c1031b732809fa1ba0f8d974efa0" }
+  - { path: "docs/plans/README.md", primitive: 9, template: null, checksum: "c1c46ba205d608916103436389565992ce6c4c156ff1991b0a91a322e60a520e" }
+  - { path: "docs/decisions/README.md", primitive: 9, template: null, checksum: "6c929acd8b423d41e10a9b5a41e07b2405329b65b41525acd6b0874b88d59f6a" }
+  - { path: "docs/memory/README.md", primitive: 9, template: null, checksum: "7a70c33059e381a7f33e97da3f6c04aebecf7246dae1c83017bd415376611bb9" }
+  - { path: "docs/closure/README.md", primitive: 9, template: null, checksum: "ae9735f0f77de39dda331afdbe49d5cf2c55eab085ac838857ec034e44567c1c" }
+  - { path: ".autoharness/backlog-registry.yaml", primitive: 8, template: "backlog/registries/backlogit.registry.yaml", checksum: "d23da4aa25071acdfc555e437445f69540bdd45f15e0539f4e40924bc8862ba2" }
+  - { path: ".autoharness/workspace-profile.yaml", primitive: null, template: null, checksum: "a5fb021537c158712a696a429f137cb1c8a37bc59c023ae13fcac6ac6f8f7802" }
+variables_used:
+  PROJECT_NAME: "go-teams"
+  PRIMARY_LANGUAGE: "Go"
+  LANGUAGE_VERSION: "1.23+"
+  BUILD_COMMAND: "go build ./..."
+  TEST_COMMAND: "go test ./..."
+  LINT_COMMAND: "golangci-lint run"
+  FORMAT_COMMAND: "gofmt -l ."
+  FORMAT_FIX_COMMAND: "gofmt -w ."
+  BUILD_CHECK_COMMAND: "go vet ./..."
+  CI_PLATFORM: "GitHub Actions"
+  REPO_OWNER: "softwaresalt"
+  REPO_NAME: "go-teams"
+  BACKLOG_TOOL_NAME: "backlogit"
+  BACKLOG_DIRECTORY: ".backlogit"
+  DEFAULT_BRANCH: "main"
+  DOCS_ROOT: "docs"

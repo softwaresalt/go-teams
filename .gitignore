@@ -7,6 +7,14 @@
 *.dll
 *.so
 *.dylib
+diff.txt
+
+# Directories
+bin/
+logs/
+.vscode/
+.copilot/
+.mcp.json
 
 # Test binary, built with `go test -c`
 *.test
@@ -24,9 +32,42 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# Local environment files (secrets) — never commit. Only .env.example may be tracked.
 .env
+.env.*
+!.env.example
+
+# Plugin .mcp.json is intentionally tracked (distinct from local dev config)
+!plugin/.mcp.json
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Advisory file locks (autoharness concurrency protocol)
+.*.lock
+**/.*.lock
+
+# Engram runtime data (keep templates/, registry.yaml, .version)
+.engram/
+!.engram/.version
+!.engram/.workspace-id
+!.engram/config.toml
+!.engram/registry.yaml
+
+# graphtor-docs — managed by graphtor-docs install
+.graphtor/
+
+# Ephemeral SQLite databases (always regenerated; never commit)
+backlogit.db
+.backlogit/backlogit.db
+.backlogit/backlogit.db-shm
+.backlogit/backlogit.db-wal
+.backlogit/.telemetry-checkpoint.json
+
+# Runtime state (per-consumer checkpoints, not committed)
+.backlogit/runtime/
+.autoharness/staging/
+.autoharness/backups/
+prompt.md
+*.code-workspace

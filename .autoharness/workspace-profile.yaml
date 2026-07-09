@@ -1,0 +1,220 @@
+# .autoharness/workspace-profile.yaml
+schema_version: "1.0.0"
+generated_at: "2026-07-08T00:00:00Z"
+workspace_path: "c:\\Source\\GitHub\\go-teams"
+
+languages:
+  primary: "Go"
+  secondary: []
+  # NOTE: no go.mod or *.go files exist yet. This is a pre-code, spec-only
+  # repository. Go is confirmed by: repository name (go-teams), the
+  # architecture doc title ("...in the Go programming language"), and
+  # existing .gitignore Go boilerplate (*.test, go.work, go.work.sum).
+  # Operator confirmed via clarifying question during install.
+
+frameworks:
+  list: []
+  # Architecture doc names planned dependencies (chromedp, spf13/cobra,
+  # robfig/cron/v3) but none are vendored/imported yet — recorded as
+  # planned, not detected.
+  mcp_sdk: null
+  mcp_transport: null
+
+primary_stack_pack: "cli-tool"
+stack_packs: ["cli-tool"]
+
+build:
+  tool: "go"
+  command: "go build ./..."
+  check_command: "go vet ./..."
+
+test:
+  runner: "go test"
+  command: "go test ./..."
+  directory: "co-located *_test.go files (Go convention)"
+
+lint:
+  tool: "golangci-lint"
+  command: "golangci-lint run"
+
+format:
+  tool: "gofmt"
+  command: "gofmt -l ."
+  fix_command: "gofmt -w ."
+
+ci:
+  platform: "GitHub Actions"
+  # No workflow files exist yet (.github/workflows/ absent). Recorded as the
+  # default target platform since the repo is GitHub-hosted
+  # (origin: https://github.com/softwaresalt/go-teams.git); ci-security and
+  # workflows instructions are deferred until a workflow is actually added.
+  pipeline_steps: []
+  quality_gates:
+    - name: "check"
+      command: "go vet ./..."
+    - name: "lint"
+      command: "golangci-lint run"
+    - name: "fmt"
+      command: "gofmt -l ."
+    - name: "test"
+      command: "go test ./..."
+
+repo:
+  owner: "softwaresalt"
+  name: "go-teams"
+
+structure:
+  source_layout: "cmd/, internal/ (idiomatic Go layout — proposed, not yet created)"
+  test_layout: "co-located *_test.go files"
+  doc_layout: "docs/design-docs/, docs/product-specs/"
+
+runtime_surfaces:
+  cli: true
+  web_ui: false
+  public_api: false
+  background_jobs: true   # scheduled/daemon "schedule" mode per architecture doc
+  browser_tooling: ["chromedp (planned)"]
+  deployment_manifests: []
+
+runtime_validation:
+  validator_manifest:
+    surfaces:
+      - surface: "cli"
+        adapter_hint: "command"
+        probe_hints: ["go run ./cmd/... --help (once scaffolded)"]
+        manual_checkpoints: ["Microsoft Teams auth flow requires a human to complete MFA/login interactively"]
+  validation_expectations:
+    required: false
+    surfaces_expected: ["cli"]
+    minimum_verdict: "PASS_WITH_FOLLOW_UP"
+    preserve_invariants: []
+    release_blockers: []
+  releasability:
+    required: false
+    status_when_satisfied: "READY_WITH_CONDITIONS"
+    required_evidence: ["successful build", "successful test run"]
+
+conventions:
+  code_style: {}
+  git:
+    default_branch: "main"
+    remote: "https://github.com/softwaresalt/go-teams.git"
+  documentation:
+    architecture_doc: "docs/product-specs/Go-TeamsTranscriptCLI-Architecture.md"
+
+distribution: null   # not applicable — this is a normal target workspace, not a global tool distribution
+
+tools:
+  markdownlint: false
+  markdownlint_config: null
+
+harness_recommendations:
+  preset: "full"
+  capability_packs:
+    - "agent-intercom"
+    - "agent-engram"
+    - "backlogit"
+    - "browser-verification"
+    - "continuous-learning"
+    - "strict-safety"
+    - "release-observability"
+    - "adversarial-review"
+    - "graphtor-docs"
+  install_layers:
+    - "foundation"
+    - "instructions"
+    - "workflow"
+    - "review"
+    - "runtime"
+    - "backlog"
+    - "knowledge"
+    - "overlays"
+  recommendation_reasons:
+    preset: ["Operator explicitly requested preset=full."]
+    capability_packs:
+      - "agent-engram: .mcp.json + .engram/ present with config.toml, registry.yaml, run state — actively configured."
+      - "backlogit: .backlogit/ present with config.yaml, registry.yaml, queue/ — actively configured."
+      - "graphtor-docs: .graphtor/ present with bin/graphtor-docs.exe + config/sources.yaml, and .vscode/mcp.json registers the graphtor-docs MCP server. Not a 'full' preset default but operator opted in."
+      - "agent-intercom: no markers detected yet, included per 'full' preset default so overlay is ready when intercom is configured."
+      - "browser-verification: this project's core function is browser automation (chromedp against Microsoft Teams); included per 'full' preset default."
+      - "strict-safety: planned auth/session-persistence flows (Teams login, MFA) are security-sensitive and rollout-critical."
+      - "release-observability: background daemon/scheduler mode (Primitive 10 emphasis) benefits from monitoring-plan discipline."
+    install_layers: ["Full preset with capability packs selected -> overlays layer required."]
+
+agent_intercom:
+  detected: false
+  mcp_configured: false
+  config_paths: []
+  instruction_markers: []
+  recommended: true   # per full preset default, not per detection
+
+agent_engram:
+  detected: true
+  mcp_configured: true
+  config_paths: [".mcp.json", ".engram/config.toml", ".engram/registry.yaml"]
+  instruction_markers: ["<!-- engram:start -->", "<!-- engram:end -->"]
+  recommended: true
+
+graphtor_docs:
+  detected: true
+  mcp_configured: true
+  config_paths: [".vscode/mcp.json"]
+  sources_path: ".graphtor/config/sources.yaml"
+  binary_path: ".graphtor/bin/graphtor-docs.exe"
+  embed_model_dir: ""
+  instruction_markers: []
+  recommended: false   # not a 'full' default; operator opted in explicitly
+
+agent_native:
+  detected: false
+  mcp_sdk_present: false
+  mcp_transport: null
+  agent_tooling_markers: []
+  user_agent_parity_required: false
+  recommended_reviewer: false
+
+existing_harness:
+  has_harness: false
+  artifacts:
+    - path: ".github/copilot-instructions.md"
+      description: "Engram-injected block only (<!-- engram:start/end -->); no other harness content."
+    - path: ".github/copilot/mcp.json"
+      description: "Editor-local MCP config; superseded by root .mcp.json as canonical shared config."
+
+backlog_tool:
+  detected: true
+  tool_name: "backlogit"
+  directory: ".backlogit"
+  tool_type: "both"
+  mcp_registered: false   # not present in root .mcp.json yet; CLI-registered via .backlogit/config.yaml
+  cli_available: null
+  config_path: ".backlogit/config.yaml"
+  registry_path: ".backlogit/registry.yaml"
+  status_values: ["queued", "active", "blocked", "review", "done", "accepted", "rejected", "archived"]
+  features:
+    sql_query: true
+    milestones: false
+    documents: false
+    telemetry: true
+    memory: true
+    checkpoints: true
+    comments: true
+    dependencies: true
+    shipments: true
+    stash: true
+    semantic_links: true
+    deliberation: true
+  # NOTE: existing .backlogit/config.yaml artifact_types differ from the
+  # autoharness backlogit.registry.yaml suffix defaults:
+  #   feature=F, bug=B, deliberation=DL (not D), review=R, shipment=S,
+  #   subtask=ST, task=T. No chore/epic/spike types are configured in this
+  #   backlogit installation. Suffix variables below honor the project's
+  #   existing configuration where a type overlaps, and fall back to schema
+  #   defaults for types the project does not yet define (chore, epic, spike).
+
+vscode:
+  detected: true
+  user_settings_path: "c:\\Users\\dewilliams\\AppData\\Roaming\\Code\\User\\settings.json"
+  has_agent_settings: false
+
+drift_report: null

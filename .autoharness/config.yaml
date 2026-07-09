@@ -73,18 +73,18 @@ model_routing:
     model_family: "gpt-5.4-mini"     # Resolved into Tier 1 agent frontmatter
   tier2:
     model: claude-sonnet-5           # Standard: orchestration, code, review
-    reasoning_effort: ""
-    model_provider: ""
+    reasoning_effort: "high"
+    model_provider: "anthropic"
     model_family: "claude-sonnet-5"
   tier3:
     model: claude-opus-4.8           # Frontier: planning, architecture, analysis
-    reasoning_effort: ""
-    model_provider: ""
+    reasoning_effort: "xhigh"
+    model_provider: "anthropic"
     model_family: "claude-opus-4.8"
   orchestrator:
-    model_family: "gpt-5.4"          # Orchestrator model override (default: gpt-5.4)
-    reasoning_effort: ""
-    model_provider: ""
+    model_family: "claude-opus-4.8"          # Orchestrator model override (default: gpt-5.4)
+    reasoning_effort: "xhigh"
+    model_provider: "anthropic"
 
 # AI CLI tool startup configuration
 # Resolves the Copilot CLI path in the generated start.ps1 and start.sh scripts.

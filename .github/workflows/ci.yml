@@ -58,35 +58,34 @@ jobs:
               - '!docs/**'
               - '!.backlogit/**'
 
-  # DISABLED: no go.mod exists yet — go-teams is pre-code (see AGENTS.md).
-  # Re-enable this job once `go mod init` has been run and cmd/teams-cli exists.
-  # test:
-  #   needs: changes
-  #   if: needs.changes.outputs.code == 'true'
-  #   runs-on: ubuntu-latest
-  #   strategy:
-  #     matrix:
-  #       go-version: ["1.23", "1.24"]
-  #   steps:
-  #     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-  #       with:
-  #         persist-credentials: false
-  #     - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
-  #       with:
-  #         go-version: ${{ matrix.go-version }}
-  #     - name: Install dependencies
-  #       run: go mod download
-  #     - name: Lint
-  #       uses: golangci/golangci-lint-action@2226d7cb06a077cd73e56eedd38eecad18e5d837 # v6.5.0
-  #       with:
-  #         version: v1.64.8
-  #         args: --timeout=5m
-  #     - name: Vet
-  #       run: go vet ./...
-  #     - name: Test
-  #       run: go test -race -coverprofile=coverage.out ./...
-  #     - name: Coverage report
-  #       run: go tool cover -func=coverage.out
+  test:
+    name: Build, vet, lint & test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          go-version-file: go.mod
+      - name: Install dependencies
+        run: go mod download
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Lint
+        uses: golangci/golangci-lint-action@2226d7cb06a077cd73e56eedd38eecad18e5d837 # v6.5.0
+        with:
+          version: v1.64.8
+          install-mode: goinstall
+          args: --timeout=5m
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Coverage report
+        run: go tool cover -func=coverage.out
 
   # DISABLED: requires go.mod and a `make docs-lint` target that don't exist yet.
   # Re-enable once the Go module and Makefile are scaffolded.

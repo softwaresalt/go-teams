@@ -158,7 +158,7 @@ agent_engram:
 graphtor_docs:
   detected: true
   mcp_configured: true
-  config_paths: [".vscode/mcp.json"]
+  config_paths: [".mcp.json"]
   sources_path: ".graphtor/config/sources.yaml"
   binary_path: ".graphtor/bin/graphtor-docs.exe"
   embed_model_dir: ""
@@ -186,7 +186,7 @@ backlog_tool:
   tool_name: "backlogit"
   directory: ".backlogit"
   tool_type: "both"
-  mcp_registered: false   # not present in root .mcp.json yet; CLI-registered via .backlogit/config.yaml
+  mcp_registered: true   # not present in root .mcp.json yet; CLI-registered via .backlogit/config.yaml
   cli_available: null
   config_path: ".backlogit/config.yaml"
   registry_path: ".backlogit/registry.yaml"

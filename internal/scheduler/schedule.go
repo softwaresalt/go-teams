@@ -35,14 +35,15 @@ func (e Entry) Validate() error {
 }
 
 // Build validates entries and constructs a cron scheduler that invokes job for
-// each entry on its schedule. The returned scheduler is not started; call Start
-// on it to begin dispatching. Build returns an error if there are no entries or
-// if any entry is invalid.
-func Build(entries []Entry, job JobFunc) (*cron.Cron, error) {
+// each entry on its schedule. Additional cron options (for example a job
+// wrapper chain) may be supplied via opts. The returned scheduler is not
+// started; call Start on it to begin dispatching. Build returns an error if
+// there are no entries or if any entry is invalid.
+func Build(entries []Entry, job JobFunc, opts ...cron.Option) (*cron.Cron, error) {
 	if len(entries) == 0 {
 		return nil, ErrNoEntries
 	}
-	c := cron.New()
+	c := cron.New(opts...)
 	for _, e := range entries {
 		if err := e.Validate(); err != nil {
 			return nil, err

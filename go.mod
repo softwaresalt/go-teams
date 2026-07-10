@@ -3,6 +3,7 @@ module github.com/softwaresalt/go-teams
 go 1.26
 
 require (
+	github.com/braheezy/shine-mp3 v0.1.0
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
 	github.com/chromedp/chromedp v0.15.1
 	github.com/robfig/cron/v3 v3.0.1

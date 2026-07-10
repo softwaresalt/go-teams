@@ -36,7 +36,7 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
 	}
 	if err := teams.ValidateMeetingURL(m.opts.MeetingURL); err != nil {
-		return err
+		return fmt.Errorf("browser: invalid meeting url: %w", err)
 	}
 	if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {
 		return fmt.Errorf("browser: navigate to meeting: %w", err)

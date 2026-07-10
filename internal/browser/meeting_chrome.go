@@ -251,6 +251,7 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
 
 	workerCtx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
+	var workerErr error
 	defer func() {
 		cancel()
 		wg.Wait()
@@ -273,14 +274,23 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		enc := audio.NewEncoder(w, audio.SampleRate, audio.Channels)
+		enc := audio.NewEncoder(w, audio.SampleRate)
 		for {
 			select {
 			case <-workerCtx.Done():
 				return
 			case raw := <-payloads:
-				if err := handleAudioPayload(raw, enc.WritePCM); err != nil {
+				samples, err := decodeAudioPayload(raw)
+				if err != nil {
 					slog.Warn("browser: discarding malformed audio chunk", "err", err)
+					continue
+				}
+				if err := enc.WritePCM(samples); err != nil {
+					// A writer/encoder failure is fatal: record it and stop
+					// capture so CaptureAudio can surface it to the caller.
+					workerErr = err
+					cancel()
+					return
 				}
 			}
 		}
@@ -297,6 +307,11 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("browser: audio capture did not start (no audio track)")
 	}
 
-	<-ctx.Done()
-	return nil
+	// Wait for the caller's ctx or a fatal worker error (which cancels
+	// workerCtx). The deferred barrier then reaps the worker; workerErr is set
+	// before wg.Done, so reading it after wg.Wait is safe.
+	<-workerCtx.Done()
+	cancel()
+	wg.Wait()
+	return workerErr
 }

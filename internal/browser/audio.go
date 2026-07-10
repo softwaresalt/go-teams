@@ -47,24 +47,20 @@ const audioCaptureJS = `(async () => {
   return true;
 })()`
 
-// pcmSink consumes decoded PCM samples. In production it is the MP3 encoder's
-// WritePCM; tests use a capturing fake so decoding is verified without invoking
-// the encoder.
-type pcmSink func(samples []int16) error
-
-// handleAudioPayload decodes a base64 little-endian int16 PCM chunk and passes
-// the samples to sink.
-func handleAudioPayload(raw string, sink pcmSink) error {
+// decodeAudioPayload decodes a base64 little-endian int16 PCM chunk into mono
+// samples. It returns an error only for a malformed payload (bad base64 or odd
+// byte length).
+func decodeAudioPayload(raw string) ([]int16, error) {
 	data, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		return fmt.Errorf("browser: decode audio payload: %w", err)
+		return nil, fmt.Errorf("browser: decode audio payload: %w", err)
 	}
 	if len(data)%2 != 0 {
-		return fmt.Errorf("browser: audio payload has odd byte length %d", len(data))
+		return nil, fmt.Errorf("browser: audio payload has odd byte length %d", len(data))
 	}
 	samples := make([]int16, len(data)/2)
 	for i := range samples {
 		samples[i] = int16(binary.LittleEndian.Uint16(data[i*2:]))
 	}
-	return sink(samples)
+	return samples, nil
 }

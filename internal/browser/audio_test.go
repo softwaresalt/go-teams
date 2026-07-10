@@ -17,27 +17,21 @@ func encodePCM(samples []int16) string {
 	return base64.StdEncoding.EncodeToString(buf)
 }
 
-func TestHandleAudioPayloadDecodesPCM(t *testing.T) {
+func TestDecodeAudioPayload(t *testing.T) {
 	want := []int16{0, 100, -100, 32767, -32768, 12345}
-	var got []int16
-	sink := func(samples []int16) error {
-		got = append(got, samples...)
-		return nil
-	}
-	require.NoError(t, handleAudioPayload(encodePCM(want), sink))
+	got, err := decodeAudioPayload(encodePCM(want))
+	require.NoError(t, err)
 	assert.Equal(t, want, got)
 }
 
-func TestHandleAudioPayloadInvalidBase64(t *testing.T) {
-	called := false
-	err := handleAudioPayload("!!! not base64 !!!", func([]int16) error { called = true; return nil })
+func TestDecodeAudioPayloadInvalidBase64(t *testing.T) {
+	_, err := decodeAudioPayload("!!! not base64 !!!")
 	assert.Error(t, err)
-	assert.False(t, called)
 }
 
-func TestHandleAudioPayloadOddLength(t *testing.T) {
+func TestDecodeAudioPayloadOddLength(t *testing.T) {
 	raw := base64.StdEncoding.EncodeToString([]byte{1, 2, 3})
-	err := handleAudioPayload(raw, func([]int16) error { return nil })
+	_, err := decodeAudioPayload(raw)
 	assert.Error(t, err)
 }
 

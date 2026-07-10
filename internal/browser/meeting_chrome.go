@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"time"
 
+	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
 	"github.com/softwaresalt/go-teams/internal/teams"
+	"github.com/softwaresalt/go-teams/internal/transcript"
 )
 
 // admissionPollInterval controls how often awaitAdmission re-checks the DOM.
@@ -140,9 +142,61 @@ func (m *chromeMeeting) awaitAdmission(ctx context.Context) error {
 	}
 }
 
-// EnableCaptions implements Meeting. Pending the caption-capture release unit.
-func (m *chromeMeeting) EnableCaptions(context.Context, CaptionSink) error {
-	return fmt.Errorf("enable captions: %w", ErrNotImplemented)
+// EnableCaptions implements Meeting. It activates Teams live captions, registers
+// the sendCaptionToGo CDP binding, injects the caption MutationObserver, and
+// routes forwarded fragments through Go-side deduplication to sink. It blocks
+// until ctx is cancelled.
+func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) error {
+	if sink == nil {
+		return fmt.Errorf("browser: caption sink must not be nil")
+	}
+	if chromedp.FromContext(ctx) == nil {
+		return fmt.Errorf("browser: enable captions requires a chromedp browser context")
+	}
+	if err := m.activateCaptions(ctx); err != nil {
+		return err
+	}
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return cdpruntime.AddBinding(captionBinding).Do(ctx)
+	})); err != nil {
+		return fmt.Errorf("browser: add caption binding: %w", err)
+	}
+
+	dedup := transcript.NewDeduplicator()
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		bc, ok := ev.(*cdpruntime.EventBindingCalled)
+		if !ok || bc.Name != captionBinding {
+			return
+		}
+		if err := handleCaptionPayload(bc.Payload, dedup, sink); err != nil {
+			slog.Warn("browser: discarding malformed caption payload", "err", err)
+		}
+	})
+
+	var attached bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(captionObserverJS, &attached)); err != nil {
+		return fmt.Errorf("browser: inject caption observer: %w", err)
+	}
+	if !attached {
+		slog.Warn("browser: caption renderer not yet present; observer not attached")
+	}
+
+	<-ctx.Done()
+	return nil
+}
+
+// activateCaptions clicks through the meeting menu to turn on live captions:
+// "More actions" -> "Language and speech" -> "Turn on live captions".
+func (m *chromeMeeting) activateCaptions(ctx context.Context) error {
+	if err := chromedp.Run(ctx,
+		chromedp.Click(moreActionsSel, chromedp.ByQuery),
+		chromedp.Click(languageSpeechSel, chromedp.ByQuery),
+		chromedp.Click(turnOnCaptionsSel, chromedp.ByQuery),
+		chromedp.WaitVisible(captionWrapperSel, chromedp.ByQuery),
+	); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	return nil
 }
 
 // CaptureAudio implements Meeting. Pending the audio-capture release unit.

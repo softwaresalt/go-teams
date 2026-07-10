@@ -68,8 +68,9 @@ func TestMeetingJoin(t *testing.T) {
 	require.NoError(t, m.Join(ctx), "pre-join FSM must admit the bot to the meeting")
 }
 
-// TestMeetingEnableCaptions is a red contract test for the deferred caption
-// observer. It fails until captions are activated and streamed to the sink.
+// TestMeetingEnableCaptions verifies captions are activated and streamed to the
+// sink against a live meeting. EnableCaptions blocks until ctx is cancelled, so
+// it runs in a goroutine and the test waits for the first delivered utterance.
 func TestMeetingEnableCaptions(t *testing.T) {
 	m, bctx := newMeeting(t)
 	ctx, cancel := context.WithTimeout(bctx, 2*time.Minute)
@@ -78,13 +79,21 @@ func TestMeetingEnableCaptions(t *testing.T) {
 	require.NoError(t, m.Join(ctx))
 
 	got := make(chan struct{}, 1)
-	err := m.EnableCaptions(ctx, func(_, _ string) {
-		select {
-		case got <- struct{}{}:
-		default:
-		}
-	})
-	require.NoError(t, err, "caption observer must activate and stream utterances")
+	go func() {
+		_ = m.EnableCaptions(ctx, func(_, _ string) {
+			select {
+			case got <- struct{}{}:
+			default:
+			}
+		})
+	}()
+
+	select {
+	case <-got:
+		// A finalized caption was delivered.
+	case <-ctx.Done():
+		t.Fatal("no caption delivered before timeout")
+	}
 }
 
 // TestMeetingCaptureAudio is a red contract test for the deferred audio capture

@@ -29,7 +29,7 @@ func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 // name, click "Join now"), then polls until admitted or ctx is cancelled.
 func (m *chromeMeeting) Join(ctx context.Context) error {
 	if chromedp.FromContext(ctx) == nil {
-		return fmt.Errorf("browser: Join requires a chromedp browser context")
+		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
 	}
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(m.opts.MeetingURL),

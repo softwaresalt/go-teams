@@ -12,7 +12,9 @@ import (
 var ErrNotImplemented = errors.New("browser: not implemented")
 
 // CaptionSink receives finalized caption utterances (speaker and text) as the
-// in-meeting observer emits them.
+// in-meeting observer emits them. Implementations should return promptly; a
+// slow sink causes fragments to be dropped under backpressure rather than
+// blocking the browser event loop.
 type CaptionSink func(speaker, text string)
 
 // MeetingOptions configures a live meeting capture session.

@@ -11,6 +11,10 @@ import (
 // calls to forward caption fragments to Go.
 const captionBinding = "sendCaptionToGo"
 
+// captionQueueSize bounds the buffer between chromedp's event goroutine and the
+// caption worker, decoupling a slow sink from CDP event processing.
+const captionQueueSize = 256
+
 // Teams live-caption DOM selectors.
 //
 // VERIFY LIVE: these selectors are derived from the architecture spec and

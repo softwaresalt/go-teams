@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	cdpruntime "github.com/chromedp/cdproto/runtime"
@@ -162,16 +163,47 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 		return fmt.Errorf("browser: add caption binding: %w", err)
 	}
 
-	dedup := transcript.NewDeduplicator()
-	chromedp.ListenTarget(ctx, func(ev interface{}) {
+	// Decouple the caller's sink from chromedp's single event goroutine: the
+	// listener only enqueues payloads, and a worker goroutine performs dedup and
+	// sink delivery. This prevents a slow or blocking sink from stalling CDP
+	// event processing. The deferred teardown barrier stops the worker and waits
+	// for it, guaranteeing no sink call happens after EnableCaptions returns.
+	workerCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
+	payloads := make(chan string, captionQueueSize)
+	chromedp.ListenTarget(workerCtx, func(ev interface{}) {
 		bc, ok := ev.(*cdpruntime.EventBindingCalled)
 		if !ok || bc.Name != captionBinding {
 			return
 		}
-		if err := handleCaptionPayload(bc.Payload, dedup, sink); err != nil {
-			slog.Warn("browser: discarding malformed caption payload", "err", err)
+		select {
+		case payloads <- bc.Payload:
+		case <-workerCtx.Done():
+		default:
+			slog.Warn("browser: caption queue full; dropping fragment")
 		}
 	})
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dedup := transcript.NewDeduplicator()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case raw := <-payloads:
+				if err := handleCaptionPayload(raw, dedup, sink); err != nil {
+					slog.Warn("browser: discarding malformed caption payload", "err", err)
+				}
+			}
+		}
+	}()
 
 	var attached bool
 	if err := chromedp.Run(ctx, chromedp.Evaluate(captionObserverJS, &attached)); err != nil {

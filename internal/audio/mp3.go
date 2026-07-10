@@ -38,6 +38,9 @@ func (e *Encoder) WritePCM(mono []int16) error {
 	if len(mono) == 0 {
 		return nil
 	}
+	if e.w == nil {
+		return fmt.Errorf("audio: encoder has no writer")
+	}
 	stereo := make([]int16, len(mono)*2)
 	for i, s := range mono {
 		stereo[2*i] = s

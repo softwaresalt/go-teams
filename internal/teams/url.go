@@ -18,22 +18,36 @@ var bypassParams = map[string]string{
 	"suppressPrompt":   "true",
 }
 
+// ValidateMeetingURL reports whether raw is a non-empty absolute HTTP(S) URL
+// with a host. It is the single source of truth for meeting-URL validation,
+// reused by MutateJoinURL and by the browser package before navigation.
+func ValidateMeetingURL(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("teams: empty meeting url")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("teams: parse meeting url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("teams: meeting url must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("teams: meeting url must have a host")
+	}
+	return nil
+}
+
 // MutateJoinURL appends the Teams web-client bypass parameters to raw,
 // preserving any existing query parameters. It returns an error if raw is not
 // a valid absolute HTTP(S) URL.
 func MutateJoinURL(raw string) (string, error) {
-	if raw == "" {
-		return "", fmt.Errorf("teams: empty meeting url")
+	if err := ValidateMeetingURL(raw); err != nil {
+		return "", err
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("teams: parse meeting url: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("teams: meeting url must be http or https, got %q", u.Scheme)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("teams: meeting url must have a host")
 	}
 	q := u.Query()
 	for k, v := range bypassParams {

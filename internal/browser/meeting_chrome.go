@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+
+	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
 // admissionPollInterval controls how often awaitAdmission re-checks the DOM.
@@ -33,7 +35,7 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 	if chromedp.FromContext(ctx) == nil {
 		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
 	}
-	if err := validateMeetingURL(m.opts.MeetingURL); err != nil {
+	if err := teams.ValidateMeetingURL(m.opts.MeetingURL); err != nil {
 		return err
 	}
 	if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {

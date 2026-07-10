@@ -8,13 +8,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestNewMeetingCaptureStubs documents that the caption and audio capabilities
-// still report ErrNotImplemented. Join is exercised by the integration harness
-// because it drives a real browser.
-func TestNewMeetingCaptureStubs(t *testing.T) {
+// TestCaptureAudioStub documents that audio capture still reports
+// ErrNotImplemented pending its release unit.
+func TestCaptureAudioStub(t *testing.T) {
 	m := NewMeeting(MeetingOptions{MeetingURL: "https://teams.microsoft.com/x", BotName: "Agent"})
-	ctx := context.Background()
+	assert.ErrorIs(t, m.CaptureAudio(context.Background(), io.Discard), ErrNotImplemented)
+}
 
-	assert.ErrorIs(t, m.EnableCaptions(ctx, func(string, string) {}), ErrNotImplemented)
-	assert.ErrorIs(t, m.CaptureAudio(ctx, io.Discard), ErrNotImplemented)
+// TestEnableCaptionsValidation covers the input guards that do not require a
+// live browser: a nil sink and a non-chromedp context are both rejected.
+func TestEnableCaptionsValidation(t *testing.T) {
+	m := NewMeeting(MeetingOptions{MeetingURL: "https://teams.microsoft.com/x", BotName: "Agent"})
+
+	assert.Error(t, m.EnableCaptions(context.Background(), nil))
+	assert.Error(t, m.EnableCaptions(context.Background(), func(string, string) {}))
 }

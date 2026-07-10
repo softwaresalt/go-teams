@@ -35,9 +35,9 @@ disable `checkptr`, so production binaries run fine.
 shine-mp3 is the only viable pure-Go MP3 encoder and is spec-mandated, so keep
 it but isolate the `-race` incompatibility:
 
-1. Refactor `handleAudioPayload` to take a `pcmSink func([]int16) error` seam, so
-   the browser unit test verifies base64/PCM decoding with a **fake sink** and
-   never invokes the encoder under `-race`.
+1. Keep base64/PCM decoding in a pure `decodeAudioPayload(raw) ([]int16, error)`
+   so the browser unit test verifies decoding directly and never invokes the
+   encoder under `-race`.
 2. Guard the encoder's own test with a `//go:build race` /`//go:build !race`
    `raceDetectorEnabled` const and `t.Skip` under `-race`. Encoding correctness
    is still verified in non-race builds (synthetic PCM -> valid MP3 frames).

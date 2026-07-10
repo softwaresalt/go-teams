@@ -1,6 +1,9 @@
 package browser
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+)
 
 // Teams pre-join and in-meeting DOM selectors.
 //
@@ -60,4 +63,24 @@ func existsJS(selector string) string {
 // document body text contains substr.
 func containsTextJS(substr string) string {
 	return fmt.Sprintf(`document.body !== null && document.body.innerText.includes(%q)`, substr)
+}
+
+// validateMeetingURL checks that raw is a non-empty absolute HTTP(S) URL before
+// the browser attempts navigation, so an obviously invalid URL fails with a
+// clear message instead of a low-signal navigation error.
+func validateMeetingURL(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("browser: meeting url must not be empty")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("browser: parse meeting url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("browser: meeting url must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("browser: meeting url must have a host")
+	}
+	return nil
 }

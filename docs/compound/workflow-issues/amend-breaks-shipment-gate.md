@@ -39,9 +39,14 @@ Close the shipment via the sanctioned per-artifact path instead of the cascade
 
 ```text
 backlogit archive 004-F          # feature (done) -> archived
-backlogit move 004-S --status shipped
+backlogit move 004-S --status done
 backlogit archive 004-S          # shipment -> archived
 ```
+
+Note: `shipped` is not a valid `status` enum value for `backlogit move` (it is
+reachable only via `backlogit shipment ship`). Use `done` for the manual path;
+the archived shipment frontmatter can be normalized to `archived_status: shipped`
+to match shipments closed through the cascade.
 
 The merge SHA is recorded in the closure doc and PR, so traceability is
 preserved. This mirrors the shipment-reconcile skill's single-artifact

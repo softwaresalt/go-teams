@@ -70,3 +70,30 @@ go vet ./...          # Static analysis
 gofmt -l .            # Format check
 golangci-lint run     # Lint
 ```
+
+### Integration tests
+
+Live browser and meeting behavior is covered by an `integration`-tagged harness.
+The tests skip by default and only run when explicitly enabled, so they never
+launch a browser in unattended CI:
+
+```bash
+# Compile the harness (CI runs this to prevent bit-rot):
+go vet -tags=integration ./...
+
+# Browser launch smoke test (requires a Chromium-based browser):
+GO_TEAMS_INTEGRATION=1 go test -tags=integration ./internal/browser/ -run TestChromeRunnerLaunch
+
+# Live meeting contract tests (currently red — pending live-capture work):
+GO_TEAMS_INTEGRATION=1 TEAMS_MEETING_URL="https://teams.microsoft.com/l/meetup-join/..." \
+  go test -tags=integration ./internal/browser/
+```
+
+| Env var | Purpose |
+|---|---|
+| `GO_TEAMS_INTEGRATION` | Set to any non-empty value to enable integration tests |
+| `TEAMS_MEETING_URL` | A joinable Teams meeting URL for the live meeting tests |
+
+The `Meeting` contract (`Join`, `EnableCaptions`, `CaptureAudio`) is scaffolded
+and returns `ErrNotImplemented`; the live meeting tests are red until the
+live-capture release units implement it.

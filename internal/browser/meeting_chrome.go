@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+
+	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
 // admissionPollInterval controls how often awaitAdmission re-checks the DOM.
@@ -24,17 +26,22 @@ func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 	return &chromeMeeting{opts: opts}
 }
 
-// Join implements Meeting. ctx MUST be a chromedp browser context. It navigates
-// to the meeting URL, runs the pre-join sequence (enforce mute, inject the bot
-// name, click "Join now"), then polls until admitted or ctx is cancelled.
+// Join implements Meeting. ctx MUST be a chromedp browser context. It validates
+// the meeting URL, navigates to it, runs the pre-join sequence (enforce mute,
+// inject the bot name, click "Join now"), then polls until admitted or ctx is
+// cancelled. Navigation failures are reported separately from pre-join
+// readiness failures.
 func (m *chromeMeeting) Join(ctx context.Context) error {
 	if chromedp.FromContext(ctx) == nil {
 		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
 	}
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(m.opts.MeetingURL),
-		chromedp.WaitVisible(joinNowSel, chromedp.ByQuery),
-	); err != nil {
+	if err := teams.ValidateMeetingURL(m.opts.MeetingURL); err != nil {
+		return fmt.Errorf("browser: invalid meeting url: %w", err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {
+		return fmt.Errorf("browser: navigate to meeting: %w", err)
+	}
+	if err := chromedp.Run(ctx, chromedp.WaitVisible(joinNowSel, chromedp.ByQuery)); err != nil {
 		return fmt.Errorf("browser: pre-join not visible: %w", err)
 	}
 	if err := m.enforceMute(ctx); err != nil {

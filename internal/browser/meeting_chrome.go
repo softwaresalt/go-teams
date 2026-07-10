@@ -11,6 +11,7 @@ import (
 	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
+	"github.com/softwaresalt/go-teams/internal/audio"
 	"github.com/softwaresalt/go-teams/internal/teams"
 	"github.com/softwaresalt/go-teams/internal/transcript"
 )
@@ -231,7 +232,86 @@ func (m *chromeMeeting) activateCaptions(ctx context.Context) error {
 	return nil
 }
 
-// CaptureAudio implements Meeting. Pending the audio-capture release unit.
-func (m *chromeMeeting) CaptureAudio(context.Context, io.Writer) error {
-	return fmt.Errorf("capture audio: %w", ErrNotImplemented)
+// CaptureAudio implements Meeting. It registers the sendAudioToGo CDP binding,
+// starts in-browser getDisplayMedia PCM capture, and encodes forwarded chunks to
+// MP3 on w via a worker goroutine decoupled from the CDP event loop. It blocks
+// until ctx is cancelled.
+func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
+	if w == nil {
+		return fmt.Errorf("browser: audio writer must not be nil")
+	}
+	if chromedp.FromContext(ctx) == nil {
+		return fmt.Errorf("browser: capture audio requires a chromedp browser context")
+	}
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return cdpruntime.AddBinding(audioBinding).Do(ctx)
+	})); err != nil {
+		return fmt.Errorf("browser: add audio binding: %w", err)
+	}
+
+	workerCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	var workerErr error
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
+	payloads := make(chan string, audioQueueSize)
+	chromedp.ListenTarget(workerCtx, func(ev interface{}) {
+		bc, ok := ev.(*cdpruntime.EventBindingCalled)
+		if !ok || bc.Name != audioBinding {
+			return
+		}
+		select {
+		case payloads <- bc.Payload:
+		case <-workerCtx.Done():
+		default:
+			slog.Warn("browser: audio queue full; dropping chunk")
+		}
+	})
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		enc := audio.NewEncoder(w, audio.SampleRate)
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case raw := <-payloads:
+				samples, err := decodeAudioPayload(raw)
+				if err != nil {
+					slog.Warn("browser: discarding malformed audio chunk", "err", err)
+					continue
+				}
+				if err := enc.WritePCM(samples); err != nil {
+					// A writer/encoder failure is fatal: record it and stop
+					// capture so CaptureAudio can surface it to the caller.
+					workerErr = err
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	var started bool
+	awaitPromise := func(p *cdpruntime.EvaluateParams) *cdpruntime.EvaluateParams {
+		return p.WithAwaitPromise(true)
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(audioCaptureJS, &started, awaitPromise)); err != nil {
+		return fmt.Errorf("browser: start audio capture: %w", err)
+	}
+	if !started {
+		return fmt.Errorf("browser: audio capture did not start (no audio track)")
+	}
+
+	// Wait for the caller's ctx or a fatal worker error (which cancels
+	// workerCtx). The deferred barrier then reaps the worker; workerErr is set
+	// before wg.Done, so reading it after wg.Wait is safe.
+	<-workerCtx.Done()
+	cancel()
+	wg.Wait()
+	return workerErr
 }

@@ -100,8 +100,10 @@ func TestMeetingEnableCaptions(t *testing.T) {
 	}
 }
 
-// TestMeetingCaptureAudio is a red contract test for the deferred audio capture
-// and MP3 encoding. It fails until encoded audio bytes are written.
+// TestMeetingCaptureAudio verifies tab audio is captured and MP3-encoded to the
+// writer against a live meeting. CaptureAudio blocks until ctx is cancelled, so
+// it runs in a goroutine; the test lets capture run briefly, cancels, waits for
+// the teardown barrier, then asserts bytes were written.
 func TestMeetingCaptureAudio(t *testing.T) {
 	m, bctx := newMeeting(t)
 	ctx, cancel := context.WithTimeout(bctx, 1*time.Minute)
@@ -110,6 +112,22 @@ func TestMeetingCaptureAudio(t *testing.T) {
 	require.NoError(t, m.Join(ctx))
 
 	var buf bytes.Buffer
-	require.NoError(t, m.CaptureAudio(ctx, &buf), "audio capture must stream encoded bytes")
-	require.NotZero(t, buf.Len(), "expected captured audio bytes")
+	errCh := make(chan error, 1)
+	go func() { errCh <- m.CaptureAudio(ctx, &buf) }()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "CaptureAudio exited before capturing audio")
+		t.Fatal("CaptureAudio returned before capturing audio")
+	case <-time.After(10 * time.Second):
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "CaptureAudio should return cleanly after cancel")
+	case <-time.After(30 * time.Second):
+		t.Fatal("CaptureAudio did not return within 30s after cancel")
+	}
+	require.NotZero(t, buf.Len(), "expected captured MP3 bytes")
 }

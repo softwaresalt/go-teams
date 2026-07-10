@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
@@ -29,18 +30,39 @@ func meetingURL(t *testing.T) string {
 	return mutated
 }
 
-func newMeeting(t *testing.T) browser.Meeting {
-	return browser.NewMeeting(browser.MeetingOptions{
-		MeetingURL: meetingURL(t),
-		BotName:    "Transcription Agent",
+// browserContext allocates a chromedp browser context using the persisted
+// profile (TEAMS_PROFILE_DIR) so the bot session is already authenticated. The
+// context is cancelled via t.Cleanup, reaping the browser process.
+func browserContext(t *testing.T) context.Context {
+	t.Helper()
+	profile := os.Getenv("TEAMS_PROFILE_DIR")
+	if profile == "" {
+		t.Skip("set TEAMS_PROFILE_DIR to an authenticated profile for live meeting tests")
+	}
+	opts := browser.AllocatorOptions(browser.Options{
+		Headless:    true,
+		UserDataDir: profile,
 	})
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
+	t.Cleanup(cancelAlloc)
+	bctx, cancelBrowser := chromedp.NewContext(allocCtx)
+	t.Cleanup(cancelBrowser)
+	return bctx
 }
 
-// TestMeetingJoin is a red contract test for the deferred pre-join / lobby FSM.
-// It fails until NewMeeting returns a real implementation that admits the bot.
+func newMeeting(t *testing.T) (browser.Meeting, context.Context) {
+	url := meetingURL(t)
+	m := browser.NewMeeting(browser.MeetingOptions{
+		MeetingURL: url,
+		BotName:    "Transcription Agent",
+	})
+	return m, browserContext(t)
+}
+
+// TestMeetingJoin exercises the pre-join / lobby FSM against a live meeting.
 func TestMeetingJoin(t *testing.T) {
-	m := newMeeting(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	m, bctx := newMeeting(t)
+	ctx, cancel := context.WithTimeout(bctx, 2*time.Minute)
 	defer cancel()
 
 	require.NoError(t, m.Join(ctx), "pre-join FSM must admit the bot to the meeting")
@@ -49,8 +71,8 @@ func TestMeetingJoin(t *testing.T) {
 // TestMeetingEnableCaptions is a red contract test for the deferred caption
 // observer. It fails until captions are activated and streamed to the sink.
 func TestMeetingEnableCaptions(t *testing.T) {
-	m := newMeeting(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	m, bctx := newMeeting(t)
+	ctx, cancel := context.WithTimeout(bctx, 2*time.Minute)
 	defer cancel()
 
 	require.NoError(t, m.Join(ctx))
@@ -68,8 +90,8 @@ func TestMeetingEnableCaptions(t *testing.T) {
 // TestMeetingCaptureAudio is a red contract test for the deferred audio capture
 // and MP3 encoding. It fails until encoded audio bytes are written.
 func TestMeetingCaptureAudio(t *testing.T) {
-	m := newMeeting(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	m, bctx := newMeeting(t)
+	ctx, cancel := context.WithTimeout(bctx, 1*time.Minute)
 	defer cancel()
 
 	require.NoError(t, m.Join(ctx))

@@ -3,7 +3,6 @@ package browser
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 )
 
@@ -43,27 +42,10 @@ type Meeting interface {
 	CaptureAudio(ctx context.Context, w io.Writer) error
 }
 
-// NewMeeting returns a Meeting for opts. The returned implementation is a
-// scaffold whose methods return ErrNotImplemented; the live-capture release
-// units provide the real chromedp-backed behavior. The signature is stable so
-// the integration harness and callers can be written against it now.
+// NewMeeting returns a chromedp-backed Meeting for opts. The pre-join / lobby
+// FSM (Join) is implemented; EnableCaptions and CaptureAudio still return
+// ErrNotImplemented until their release units are built. Meeting methods
+// operate on a chromedp browser context supplied by the caller.
 func NewMeeting(opts MeetingOptions) Meeting {
-	return &stubMeeting{opts: opts}
-}
-
-// stubMeeting is the not-yet-implemented Meeting scaffold.
-type stubMeeting struct {
-	opts MeetingOptions
-}
-
-func (s *stubMeeting) Join(context.Context) error {
-	return fmt.Errorf("join meeting %q: %w", s.opts.MeetingURL, ErrNotImplemented)
-}
-
-func (s *stubMeeting) EnableCaptions(context.Context, CaptionSink) error {
-	return fmt.Errorf("enable captions: %w", ErrNotImplemented)
-}
-
-func (s *stubMeeting) CaptureAudio(context.Context, io.Writer) error {
-	return fmt.Errorf("capture audio: %w", ErrNotImplemented)
+	return newChromeMeeting(opts)
 }

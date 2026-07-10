@@ -39,7 +39,7 @@ Close the shipment via the sanctioned per-artifact path instead of the cascade
 
 ```text
 backlogit archive 004-F          # feature (done) -> archived
-backlogit move 004-S --status done
+backlogit move 004-S --status shipped
 backlogit archive 004-S          # shipment -> archived
 ```
 

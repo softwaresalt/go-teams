@@ -123,6 +123,11 @@ func TestMeetingCaptureAudio(t *testing.T) {
 	}
 
 	cancel()
-	require.NoError(t, <-errCh, "CaptureAudio should return cleanly after cancel")
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "CaptureAudio should return cleanly after cancel")
+	case <-time.After(30 * time.Second):
+		t.Fatal("CaptureAudio did not return within 30s after cancel")
+	}
 	require.NotZero(t, buf.Len(), "expected captured MP3 bytes")
 }

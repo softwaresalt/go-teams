@@ -41,7 +41,10 @@ const audioCaptureJS = `(async () => {
     }
     const bytes = new Uint8Array(pcm.buffer);
     let binary = '';
-    for (let i = 0; i < bytes.length; i++) { binary += String.fromCharCode(bytes[i]); }
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
     window.sendAudioToGo(btoa(binary));
   };
   return true;

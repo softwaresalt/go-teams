@@ -1,1 +1,0 @@
-{"id":"36EA24F8","priority":"high","kind":"feature","text":"Audio capture + MP3: getDisplayMedia({audio,video}); isolate audio track; MediaRecorder chunks -> base64 over sendAudioToGo binding; pure-Go MP3 encode (shine-mp3); stream to .mp3. Acceptance: TestMeetingCaptureAudio passes.","created_at":"2026-07-10T02:04:11.8418193Z"}

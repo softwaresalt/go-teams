@@ -88,3 +88,9 @@ func TestEncoderEmptyInput(t *testing.T) {
 	assert.NoError(t, enc.WritePCM(nil))
 	assert.Zero(t, buf.Len())
 }
+
+func TestEncoderNilWriter(t *testing.T) {
+	enc := NewEncoder(nil, SampleRate)
+	// Must return an error rather than panicking on a nil writer.
+	assert.Error(t, enc.WritePCM([]int16{1, 2, 3, 4}))
+}

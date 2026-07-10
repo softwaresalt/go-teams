@@ -35,6 +35,9 @@ func NewEncoder(w io.Writer, sampleRate int) *Encoder {
 // the underlying writer. The samples are interleaved as dual-mono stereo before
 // encoding. Empty input is a no-op.
 func (e *Encoder) WritePCM(mono []int16) error {
+	if e.w == nil {
+		return fmt.Errorf("audio: encoder has no writer")
+	}
 	if len(mono) == 0 {
 		return nil
 	}

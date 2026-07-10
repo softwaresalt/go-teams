@@ -2,14 +2,8 @@ package browser
 
 import (
 	"context"
-	"errors"
 	"io"
 )
-
-// ErrNotImplemented marks capability stubs that are scaffolded with a defined
-// contract but not yet implemented. The live-capture release units replace the
-// stub returned by NewMeeting.
-var ErrNotImplemented = errors.New("browser: not implemented")
 
 // CaptionSink receives finalized caption utterances (speaker and text) as the
 // in-meeting observer emits them. Implementations should return promptly; a
@@ -44,10 +38,9 @@ type Meeting interface {
 	CaptureAudio(ctx context.Context, w io.Writer) error
 }
 
-// NewMeeting returns a chromedp-backed Meeting for opts. The pre-join / lobby
-// FSM (Join) is implemented; EnableCaptions and CaptureAudio still return
-// ErrNotImplemented until their release units are built. Meeting methods
-// operate on a chromedp browser context supplied by the caller.
+// NewMeeting returns a chromedp-backed Meeting for opts. Join, EnableCaptions,
+// and CaptureAudio are all implemented; the methods operate on a chromedp
+// browser context supplied by the caller.
 func NewMeeting(opts MeetingOptions) Meeting {
 	return newChromeMeeting(opts)
 }

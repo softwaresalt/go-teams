@@ -8,18 +8,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestCaptureAudioStub documents that audio capture still reports
-// ErrNotImplemented pending its release unit.
-func TestCaptureAudioStub(t *testing.T) {
+// TestMeetingInputValidation covers the input guards on the Meeting methods that
+// do not require a live browser: nil sink/writer and a non-chromedp context are
+// all rejected.
+func TestMeetingInputValidation(t *testing.T) {
 	m := NewMeeting(MeetingOptions{MeetingURL: "https://teams.microsoft.com/x", BotName: "Agent"})
-	assert.ErrorIs(t, m.CaptureAudio(context.Background(), io.Discard), ErrNotImplemented)
-}
+	bg := context.Background()
 
-// TestEnableCaptionsValidation covers the input guards that do not require a
-// live browser: a nil sink and a non-chromedp context are both rejected.
-func TestEnableCaptionsValidation(t *testing.T) {
-	m := NewMeeting(MeetingOptions{MeetingURL: "https://teams.microsoft.com/x", BotName: "Agent"})
-
-	assert.Error(t, m.EnableCaptions(context.Background(), nil))
-	assert.Error(t, m.EnableCaptions(context.Background(), func(string, string) {}))
+	assert.Error(t, m.EnableCaptions(bg, nil), "nil caption sink")
+	assert.Error(t, m.EnableCaptions(bg, func(string, string) {}), "non-chromedp context")
+	assert.Error(t, m.CaptureAudio(bg, nil), "nil audio writer")
+	assert.Error(t, m.CaptureAudio(bg, io.Discard), "non-chromedp context")
 }

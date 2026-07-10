@@ -79,8 +79,9 @@ func TestMeetingEnableCaptions(t *testing.T) {
 	require.NoError(t, m.Join(ctx))
 
 	got := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
 	go func() {
-		_ = m.EnableCaptions(ctx, func(_, _ string) {
+		errCh <- m.EnableCaptions(ctx, func(_, _ string) {
 			select {
 			case got <- struct{}{}:
 			default:
@@ -91,6 +92,9 @@ func TestMeetingEnableCaptions(t *testing.T) {
 	select {
 	case <-got:
 		// A finalized caption was delivered.
+	case err := <-errCh:
+		require.NoError(t, err, "EnableCaptions exited before delivering a caption")
+		t.Fatal("EnableCaptions returned before delivering a caption")
 	case <-ctx.Done():
 		t.Fatal("no caption delivered before timeout")
 	}

@@ -9,7 +9,6 @@ import "fmt"
 // confirmed and adjusted via the integration harness (TestMeetingJoin) against
 // a live meeting before the FSM can be considered working.
 const (
-	preJoinContainerSel = `[data-tid="prejoin-join-button"]`
 	micToggleSel        = `[data-tid="toggle-mute"]`
 	displayNameInputSel = `input[data-tid="prejoin-display-name-input"]`
 	joinNowSel          = `[data-tid="prejoin-join-button"]`

@@ -28,9 +28,12 @@ func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 // to the meeting URL, runs the pre-join sequence (enforce mute, inject the bot
 // name, click "Join now"), then polls until admitted or ctx is cancelled.
 func (m *chromeMeeting) Join(ctx context.Context) error {
+	if chromedp.FromContext(ctx) == nil {
+		return fmt.Errorf("browser: Join requires a chromedp browser context")
+	}
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(m.opts.MeetingURL),
-		chromedp.WaitVisible(preJoinContainerSel, chromedp.ByQuery),
+		chromedp.WaitVisible(joinNowSel, chromedp.ByQuery),
 	); err != nil {
 		return fmt.Errorf("browser: pre-join not visible: %w", err)
 	}

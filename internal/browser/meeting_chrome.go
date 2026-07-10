@@ -47,18 +47,26 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 }
 
 // enforceMute clicks the microphone toggle if it is currently enabled so the
-// bot joins muted.
+// bot joins muted. It probes for the toggle first (a single, non-blocking
+// evaluation) because chromedp query actions retry until the context expires
+// when a selector matches nothing.
 func (m *chromeMeeting) enforceMute(ctx context.Context) error {
-	var ariaChecked string
-	var ok bool
-	err := chromedp.Run(ctx,
-		chromedp.AttributeValue(micToggleSel, "aria-checked", &ariaChecked, &ok, chromedp.ByQuery),
-	)
-	if err != nil {
+	var present bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(micToggleSel), &present)); err != nil {
+		return fmt.Errorf("browser: probe mic toggle: %w", err)
+	}
+	if !present {
 		// The mic toggle may be absent in some pre-join variants; treat as
 		// already muted rather than failing the join.
-		slog.Warn("browser: mic toggle not found; assuming muted", "err", err)
+		slog.Warn("browser: mic toggle not found; assuming muted")
 		return nil
+	}
+	var ariaChecked string
+	var ok bool
+	if err := chromedp.Run(ctx,
+		chromedp.AttributeValue(micToggleSel, "aria-checked", &ariaChecked, &ok, chromedp.ByQuery),
+	); err != nil {
+		return fmt.Errorf("browser: read mic toggle state: %w", err)
 	}
 	if ok && muteRequired(ariaChecked) {
 		if err := chromedp.Run(ctx, chromedp.Click(micToggleSel, chromedp.ByQuery)); err != nil {

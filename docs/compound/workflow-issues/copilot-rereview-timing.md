@@ -53,3 +53,15 @@ before the current-HEAD re-review has actually landed.
   the current HEAD.
 - When `dismiss_stale_reviews_on_push` is on, every fix push starts a new review
   cycle; budget for it before merging.
+
+## Scope (relationship to the advisory-by-default policy)
+
+This learning **complements** — it does not override —
+`github-pr-automation.instructions.md`, under which shadow review is advisory by
+default and a timed-out or unavailable shadow review is non-blocking. The rule
+here applies specifically when an agent has **chosen to address** shadow-review
+comments before merge: in that case, do not declare the comments fully addressed
+(or merge on that basis) until a Copilot review exists at the current HEAD.
+It does not make shadow review a mandatory merge gate, and the standard
+review-fix cycle limit still applies — remaining advisory comments at the cycle
+limit are surfaced as follow-ups rather than blocking the merge.

@@ -35,8 +35,11 @@ After pushing any fix, do NOT trust an empty unresolved-thread list until a
 
 1. Record the pushed HEAD SHA.
 2. Poll `pullRequest.reviews` until there is a Copilot review whose
-   `commit.oid == HEAD` (or `submittedAt` is after the push time). Use the
-   back-off cadence (2-5 min, up to ~15 min).
+   `commit.oid` equals the pushed HEAD SHA. Do **not** rely on `submittedAt`: a
+   review that started for the previous SHA can finish (submit) after the push,
+   so a later timestamp does not prove the review covered the new HEAD. The
+   `commit.oid` match is the only reliable signal. Use the back-off cadence
+   (2-5 min, up to ~15 min).
 3. Only then evaluate unresolved threads; address each; re-verify.
 4. Merge only when the latest Copilot review is at the current HEAD AND there are
    zero unresolved threads.

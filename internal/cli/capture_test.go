@@ -89,3 +89,20 @@ func TestRunCaptureNewMeetingErrorNoCleanup(t *testing.T) {
 		t.Fatalf("cleanup must not run on newMeeting failure, got %d", got)
 	}
 }
+
+func TestRunCaptureCleanupOnCancellation(t *testing.T) {
+	var cleanupCalls int32
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // caller cancellation (e.g. Ctrl+C) must still tear the browser down
+	sess := &fakeSession{runErr: context.Canceled}
+	d := &deps{
+		newMeeting: func(mctx context.Context, _ config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			return nil, mctx, func() { atomic.AddInt32(&cleanupCalls, 1) }, nil
+		},
+		newSession: func(config.Config, string) meetingSession { return sess },
+	}
+	_ = runCapture(ctx, d, config.Config{}, "url")
+	if got := atomic.LoadInt32(&cleanupCalls); got != 1 {
+		t.Fatalf("cleanup must run on cancellation, got %d", got)
+	}
+}

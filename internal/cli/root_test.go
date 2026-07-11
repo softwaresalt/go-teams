@@ -36,12 +36,38 @@ func validConfig() config.Config {
 	return config.Config{OutputDir: "out", ProfileDir: "prof", BotName: "bot"}
 }
 
-// depsWith returns a deps set whose loader always succeeds and whose runner is
-// the supplied fake.
+// captureRecorder records what the capture seams were invoked with so join and
+// schedule wiring can be asserted without a real browser.
+type captureRecorder struct {
+	url     string
+	called  bool
+	runErr  error
+	meetErr error
+}
+
+type recorderSession struct{ rec *captureRecorder }
+
+func (s recorderSession) Run(context.Context, browser.Meeting) error {
+	s.rec.called = true
+	return s.rec.runErr
+}
+
+// depsWith returns a deps set whose loader always succeeds, whose runner is the
+// supplied fake, and whose capture seams route through a throwaway recorder.
 func depsWith(runner browser.Runner) *deps {
+	return depsWithCapture(runner, &captureRecorder{})
+}
+
+// depsWithCapture is depsWith with an inspectable capture recorder.
+func depsWithCapture(runner browser.Runner, rec *captureRecorder) *deps {
 	return &deps{
 		loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
 		newRunner:  func(config.Config) browser.Runner { return runner },
+		newMeeting: func(ctx context.Context, _ config.Config, url string) (browser.Meeting, context.Context, func(), error) {
+			rec.url = url
+			return nil, ctx, func() {}, rec.meetErr
+		},
+		newSession: func(config.Config, string) meetingSession { return recorderSession{rec} },
 	}
 }
 
@@ -64,20 +90,20 @@ func TestAuthCommandInvokesAuthenticate(t *testing.T) {
 }
 
 func TestJoinCommandMutatesURL(t *testing.T) {
-	fake := &fakeRunner{}
-	err := runCmd(context.Background(), depsWith(fake),
+	rec := &captureRecorder{}
+	err := runCmd(context.Background(), depsWithCapture(&fakeRunner{}, rec),
 		"join", "https://teams.microsoft.com/l/meetup-join/x")
 	require.NoError(t, err)
-	require.True(t, fake.joinCalled)
-	assert.Contains(t, fake.joinURL, "msLaunch=false")
-	assert.Contains(t, fake.joinURL, "suppressPrompt=true")
+	require.True(t, rec.called)
+	assert.Contains(t, rec.url, "msLaunch=false")
+	assert.Contains(t, rec.url, "suppressPrompt=true")
 }
 
 func TestJoinCommandRejectsInvalidURL(t *testing.T) {
-	fake := &fakeRunner{}
-	err := runCmd(context.Background(), depsWith(fake), "join", "not-a-url")
+	rec := &captureRecorder{}
+	err := runCmd(context.Background(), depsWithCapture(&fakeRunner{}, rec), "join", "not-a-url")
 	require.Error(t, err)
-	assert.False(t, fake.joinCalled)
+	assert.False(t, rec.called)
 }
 
 func TestJoinCommandRequiresArg(t *testing.T) {

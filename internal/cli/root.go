@@ -2,9 +2,12 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
+	"github.com/softwaresalt/go-teams/internal/capture"
 	"github.com/softwaresalt/go-teams/internal/config"
 )
 
@@ -13,6 +16,12 @@ import (
 type deps struct {
 	loadConfig func(path string) (config.Config, error)
 	newRunner  func(config.Config) browser.Runner
+	// newMeeting builds a browser.Meeting bound to a fresh Chromium context
+	// derived from ctx, plus a cleanup func that tears the browser down. The
+	// returned context is the one that drives the meeting's methods.
+	newMeeting func(ctx context.Context, cfg config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error)
+	// newSession builds the capture session that records a joined meeting.
+	newSession func(cfg config.Config, meetingURL string) meetingSession
 }
 
 func defaultDeps() *deps {
@@ -24,7 +33,24 @@ func defaultDeps() *deps {
 				Headless:    c.Headless,
 			})
 		},
+		newMeeting: defaultNewMeeting,
+		newSession: func(c config.Config, meetingURL string) meetingSession {
+			return capture.NewSession(capture.SessionConfig{
+				OutputDir:  c.OutputDir,
+				MeetingURL: meetingURL,
+				BotName:    c.BotName,
+			})
+		},
 	}
+}
+
+// defaultNewMeeting allocates a headless Chromium context for automated capture
+// and returns a chromedp-backed Meeting bound to it. The cleanup func cancels
+// the browser and allocator contexts, terminating the spawned Chromium process.
+func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
+	return browser.NewLiveMeeting(ctx,
+		browser.Options{UserDataDir: c.ProfileDir, Headless: true},
+		browser.MeetingOptions{MeetingURL: meetingURL, BotName: c.BotName})
 }
 
 // NewRootCommand builds the root command with all subcommands attached, using

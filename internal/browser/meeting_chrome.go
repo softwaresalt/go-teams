@@ -144,6 +144,65 @@ func (m *chromeMeeting) awaitAdmission(ctx context.Context) error {
 	}
 }
 
+// payloadPump decouples a chromedp binding listener from a single processing
+// worker goroutine. The listener enqueues raw payloads via offer; the worker
+// applies process to each in arrival order. stop provides a full producer
+// barrier: it rejects new payloads, waits for in-flight offers to finish, then
+// drains every buffered payload to the worker before returning — so no payload
+// is lost when the meeting is cancelled (e.g. on Ctrl+C).
+type payloadPump struct {
+	payloads chan string
+	mu       sync.Mutex
+	closing  bool
+	prodWG   sync.WaitGroup
+	workWG   sync.WaitGroup
+}
+
+// newPayloadPump starts a worker goroutine that applies process to each payload
+// in arrival order until the pump is stopped.
+func newPayloadPump(size int, process func(string)) *payloadPump {
+	p := &payloadPump{payloads: make(chan string, size)}
+	p.workWG.Add(1)
+	go func() {
+		defer p.workWG.Done()
+		for raw := range p.payloads {
+			process(raw)
+		}
+	}()
+	return p
+}
+
+// offer enqueues raw for processing. It returns false when the pump is stopping
+// or the queue is full, in which case the payload is dropped as backpressure.
+func (p *payloadPump) offer(raw string) bool {
+	p.mu.Lock()
+	if p.closing {
+		p.mu.Unlock()
+		return false
+	}
+	p.prodWG.Add(1)
+	p.mu.Unlock()
+	defer p.prodWG.Done()
+	select {
+	case p.payloads <- raw:
+		return true
+	default:
+		return false
+	}
+}
+
+// stop performs the producer barrier: it rejects further offers, waits for
+// in-flight offers to complete, closes the queue, and waits for the worker to
+// drain the remaining payloads and exit.
+func (p *payloadPump) stop() {
+	p.mu.Lock()
+	p.closing = true
+	p.mu.Unlock()
+	p.prodWG.Wait()
+	close(p.payloads)
+	p.workWG.Wait()
+}
+
 // EnableCaptions implements Meeting. It activates Teams live captions, registers
 // the sendCaptionToGo CDP binding, injects the caption MutationObserver, and
 // routes forwarded fragments through Go-side deduplication to sink. It blocks
@@ -164,47 +223,35 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 		return fmt.Errorf("browser: add caption binding: %w", err)
 	}
 
-	// Decouple the caller's sink from chromedp's single event goroutine: the
-	// listener only enqueues payloads, and a worker goroutine performs dedup and
-	// sink delivery. This prevents a slow or blocking sink from stalling CDP
-	// event processing. The deferred teardown barrier stops the worker and waits
-	// for it, guaranteeing no sink call happens after EnableCaptions returns.
+	// Decouple the caller's sink from chromedp's single event goroutine via a
+	// payloadPump: the listener only enqueues, and a worker performs dedup and
+	// sink delivery. pump.stop() is a producer barrier that drains all buffered
+	// fragments before EnableCaptions returns, so the transcript tail is not
+	// lost on shutdown and no sink call happens after return.
 	workerCtx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
+	dedup := transcript.NewDeduplicator()
+	pump := newPayloadPump(captionQueueSize, func(raw string) {
+		if err := handleCaptionPayload(raw, dedup, sink); err != nil {
+			slog.Warn("browser: discarding malformed caption payload", "err", err)
+		}
+	})
 	defer func() {
 		cancel()
-		wg.Wait()
+		pump.stop()
 	}()
 
-	payloads := make(chan string, captionQueueSize)
 	chromedp.ListenTarget(workerCtx, func(ev interface{}) {
 		bc, ok := ev.(*cdpruntime.EventBindingCalled)
 		if !ok || bc.Name != captionBinding {
 			return
 		}
-		select {
-		case payloads <- bc.Payload:
-		case <-workerCtx.Done():
-		default:
+		if workerCtx.Err() != nil {
+			return
+		}
+		if !pump.offer(bc.Payload) {
 			slog.Warn("browser: caption queue full; dropping fragment")
 		}
 	})
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		dedup := transcript.NewDeduplicator()
-		for {
-			select {
-			case <-workerCtx.Done():
-				return
-			case raw := <-payloads:
-				if err := handleCaptionPayload(raw, dedup, sink); err != nil {
-					slog.Warn("browser: discarding malformed caption payload", "err", err)
-				}
-			}
-		}
-	}()
 
 	var attached bool
 	if err := chromedp.Run(ctx, chromedp.Evaluate(captionObserverJS, &attached)); err != nil {
@@ -236,7 +283,7 @@ func (m *chromeMeeting) activateCaptions(ctx context.Context) error {
 // starts in-browser getDisplayMedia PCM capture, and encodes forwarded chunks to
 // MP3 on w via a worker goroutine decoupled from the CDP event loop. It blocks
 // until ctx is cancelled.
-func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
+func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err error) {
 	if w == nil {
 		return fmt.Errorf("browser: audio writer must not be nil")
 	}
@@ -249,52 +296,55 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("browser: add audio binding: %w", err)
 	}
 
+	// A payloadPump decouples the CDP event loop from MP3 encoding and provides a
+	// producer barrier on stop, so buffered audio chunks are drained (not lost)
+	// on shutdown. workerErr is written only by the pump's worker goroutine and
+	// is read after pump.stop() joins it, so the access is race-free.
 	workerCtx, cancel := context.WithCancel(ctx)
-	var wg sync.WaitGroup
 	var workerErr error
+	enc := audio.NewEncoder(w, audio.SampleRate)
+	pump := newPayloadPump(audioQueueSize, func(raw string) {
+		if workerErr != nil {
+			return // already failed fatally; skip remaining drained chunks
+		}
+		samples, decodeErr := decodeAudioPayload(raw)
+		if decodeErr != nil {
+			slog.Warn("browser: discarding malformed audio chunk", "err", decodeErr)
+			return
+		}
+		if writeErr := enc.WritePCM(samples); writeErr != nil {
+			// A writer/encoder failure is fatal: record it and stop capture so
+			// CaptureAudio can surface it to the caller.
+			workerErr = writeErr
+			cancel()
+		}
+	})
 	defer func() {
 		cancel()
-		wg.Wait()
+		pump.stop()
+		// Emit any buffered sub-frame remainder now that the worker has stopped.
+		if workerErr == nil {
+			if flushErr := enc.Flush(); flushErr != nil {
+				workerErr = flushErr
+			}
+		}
+		if err == nil {
+			err = workerErr
+		}
 	}()
 
-	payloads := make(chan string, audioQueueSize)
 	chromedp.ListenTarget(workerCtx, func(ev interface{}) {
 		bc, ok := ev.(*cdpruntime.EventBindingCalled)
 		if !ok || bc.Name != audioBinding {
 			return
 		}
-		select {
-		case payloads <- bc.Payload:
-		case <-workerCtx.Done():
-		default:
+		if workerCtx.Err() != nil {
+			return
+		}
+		if !pump.offer(bc.Payload) {
 			slog.Warn("browser: audio queue full; dropping chunk")
 		}
 	})
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		enc := audio.NewEncoder(w, audio.SampleRate)
-		for {
-			select {
-			case <-workerCtx.Done():
-				return
-			case raw := <-payloads:
-				samples, err := decodeAudioPayload(raw)
-				if err != nil {
-					slog.Warn("browser: discarding malformed audio chunk", "err", err)
-					continue
-				}
-				if err := enc.WritePCM(samples); err != nil {
-					// A writer/encoder failure is fatal: record it and stop
-					// capture so CaptureAudio can surface it to the caller.
-					workerErr = err
-					cancel()
-					return
-				}
-			}
-		}
-	}()
 
 	var started bool
 	awaitPromise := func(p *cdpruntime.EvaluateParams) *cdpruntime.EvaluateParams {
@@ -307,11 +357,8 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("browser: audio capture did not start (no audio track)")
 	}
 
-	// Wait for the caller's ctx or a fatal worker error (which cancels
-	// workerCtx). The deferred barrier then reaps the worker; workerErr is set
-	// before wg.Done, so reading it after wg.Wait is safe.
+	// Block until the caller's ctx is cancelled or a fatal worker error cancels
+	// workerCtx; the deferred barrier drains and reaps the worker.
 	<-workerCtx.Done()
-	cancel()
-	wg.Wait()
-	return workerErr
+	return nil
 }

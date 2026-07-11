@@ -4,9 +4,42 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strings"
 	"text/template"
 	"time"
+	"unicode"
 )
+
+// markdownEscaper backslash-escapes the runes that let participant-controlled
+// caption text inject Markdown or HTML structure. Backslash is listed first so
+// it is not double-escaped by the single-pass replacer.
+var markdownEscaper = strings.NewReplacer(
+	`\`, `\\`,
+	"`", "\\`",
+	"*", `\*`,
+	"_", `\_`,
+	"[", `\[`,
+	"]", `\]`,
+	"<", `\<`,
+	">", `\>`,
+	"#", `\#`,
+	"|", `\|`,
+)
+
+// sanitizeField neutralizes participant-controlled text (speaker names and
+// caption text are supplied by meeting participants) for safe inclusion in the
+// Markdown transcript: control characters and line breaks collapse to a single
+// space so they cannot break the line structure, and Markdown-structural runes
+// are backslash-escaped. Ordinary words and sentence punctuation are unchanged.
+func sanitizeField(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	return markdownEscaper.Replace(s)
+}
 
 // Metadata is the header information written as YAML frontmatter at the top of
 // a transcript file.
@@ -61,10 +94,12 @@ func (w *Writer) WriteHeader(meta Metadata) error {
 	return nil
 }
 
-// WriteEvent appends a formatted caption event to the transcript.
+// WriteEvent appends a formatted caption event to the transcript. The
+// participant-controlled speaker and text are sanitized to prevent Markdown or
+// HTML injection into the rendered transcript.
 func (w *Writer) WriteEvent(ev CaptionEvent) error {
 	line := fmt.Sprintf("**%s (%s):** %s\n\n",
-		ev.Speaker, ev.Timestamp.Format("15:04:05"), ev.Text)
+		sanitizeField(ev.Speaker), ev.Timestamp.Format("15:04:05"), sanitizeField(ev.Text))
 	if _, err := w.bw.WriteString(line); err != nil {
 		return fmt.Errorf("transcript: write event: %w", err)
 	}

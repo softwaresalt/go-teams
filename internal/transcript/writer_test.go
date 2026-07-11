@@ -9,6 +9,64 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWriteEventEscapesMarkdownInjection(t *testing.T) {
+	ts := time.Date(2026, 7, 9, 13, 6, 5, 0, time.UTC)
+	tests := []struct {
+		name     string
+		speaker  string
+		text     string
+		contains []string
+		absent   []string
+	}{
+		{
+			name:     "heading and newline in text",
+			speaker:  "Bob",
+			text:     "hi\n# Injected Heading",
+			contains: []string{`\# Injected Heading`},
+			absent:   []string{"\n# "},
+		},
+		{
+			name:     "link in text",
+			speaker:  "Bob",
+			text:     "[click](http://evil)",
+			contains: []string{`\[click\]`},
+		},
+		{
+			name:     "html in text",
+			speaker:  "Bob",
+			text:     "<script>x</script>",
+			contains: []string{`\<script\>`},
+		},
+		{
+			name:     "emphasis in speaker",
+			speaker:  "**Admin**",
+			text:     "ok",
+			contains: []string{`\*\*Admin\*\*`},
+		},
+		{
+			name:     "carriage return does not break the line",
+			speaker:  "Bob",
+			text:     "a\r\n- injected list",
+			absent:   []string{"\r", "\n- "},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			w := NewWriter(&buf)
+			require.NoError(t, w.WriteEvent(CaptionEvent{Timestamp: ts, Speaker: tc.speaker, Text: tc.text}))
+			require.NoError(t, w.Flush())
+			out := buf.String()
+			for _, c := range tc.contains {
+				assert.Containsf(t, out, c, "output: %q", out)
+			}
+			for _, a := range tc.absent {
+				assert.NotContainsf(t, out, a, "output: %q", out)
+			}
+		})
+	}
+}
+
 func TestWriterHeader(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewWriter(&buf)

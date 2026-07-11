@@ -82,6 +82,37 @@ func TestEncoderEncodesAllSamples(t *testing.T) {
 		frames, frames*samplesPerFrame, got, frames/2)
 }
 
+// TestEncoderHandlesNonFrameAlignedInput is the regression for the shine-mp3
+// out-of-bounds read: browser callbacks deliver 4096-sample chunks (not a
+// multiple of 1152), which previously over-read the encoder's interleaved buffer
+// on the final pass of every callback. Buffering whole frames must prevent this.
+func TestEncoderHandlesNonFrameAlignedInput(t *testing.T) {
+	if raceDetectorEnabled {
+		t.Skip("shine-mp3 uses unsafe pointer arithmetic incompatible with -race checkptr")
+	}
+	var buf bytes.Buffer
+	enc := NewEncoder(&buf, SampleRate)
+	for i := 0; i < 4; i++ { // four 4096-sample browser callbacks
+		require.NoError(t, enc.WritePCM(sineMono(4096)))
+	}
+	require.NoError(t, enc.Flush())
+	require.Positive(t, buf.Len())
+}
+
+// TestEncoderFlushEmitsRemainder verifies the buffered sub-frame tail is encoded
+// on Flush rather than dropped.
+func TestEncoderFlushEmitsRemainder(t *testing.T) {
+	if raceDetectorEnabled {
+		t.Skip("shine-mp3 is incompatible with -race checkptr")
+	}
+	var buf bytes.Buffer
+	enc := NewEncoder(&buf, SampleRate)
+	require.NoError(t, enc.WritePCM(sineMono(500))) // fewer than one frame
+	assert.Zero(t, buf.Len(), "sub-frame input should be buffered, not encoded")
+	require.NoError(t, enc.Flush())
+	assert.Positive(t, buf.Len(), "Flush should emit the padded remainder frame")
+}
+
 func TestEncoderEmptyInput(t *testing.T) {
 	var buf bytes.Buffer
 	enc := NewEncoder(&buf, SampleRate)

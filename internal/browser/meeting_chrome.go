@@ -322,6 +322,12 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 	defer func() {
 		cancel()
 		pump.stop()
+		// Emit any buffered sub-frame remainder now that the worker has stopped.
+		if workerErr == nil {
+			if flushErr := enc.Flush(); flushErr != nil {
+				workerErr = flushErr
+			}
+		}
 		if err == nil {
 			err = workerErr
 		}

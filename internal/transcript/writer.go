@@ -4,9 +4,63 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"regexp"
+	"strings"
 	"text/template"
 	"time"
+	"unicode"
 )
+
+// markdownEscaper backslash-escapes the runes that let participant-controlled
+// caption text inject Markdown or HTML structure. Backslash is listed first so
+// it is not double-escaped by the single-pass replacer.
+var markdownEscaper = strings.NewReplacer(
+	`\`, `\\`,
+	"`", "\\`",
+	"*", `\*`,
+	"_", `\_`,
+	"[", `\[`,
+	"]", `\]`,
+	"<", `\<`,
+	">", `\>`,
+	"#", `\#`,
+	"|", `\|`,
+	"~", `\~`,
+)
+
+// autolinkDefuser matches the scheme/prefix that triggers GitHub-Flavored
+// Markdown bare URL autolinking. A zero-width space is inserted after the match
+// so a participant-supplied URL renders as inert text rather than a clickable
+// link.
+var autolinkDefuser = regexp.MustCompile(`(?i)(https?://|ftp://|www\.)`)
+
+// emailDefuser matches GFM bare email autolinks. A zero-width space is inserted
+// after the "@" so a participant-supplied address does not render as a clickable
+// mailto link.
+var emailDefuser = regexp.MustCompile(`([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})`)
+
+// controlToSpace maps control characters and Unicode line/paragraph separators
+// to a space; all other runes pass through. This prevents participant text from
+// breaking the transcript's line structure.
+func controlToSpace(r rune) rune {
+	if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+		return ' '
+	}
+	return r
+}
+
+// sanitizeField neutralizes participant-controlled text (speaker names and
+// caption text come from meeting participants) for safe inclusion in the
+// Markdown transcript: control characters and line/paragraph separators are
+// replaced with spaces so they cannot break the line structure,
+// Markdown-structural runes are backslash-escaped, and bare URL and email
+// autolinks are defused. Ordinary words and sentence punctuation are unchanged.
+func sanitizeField(s string) string {
+	s = strings.Map(controlToSpace, s)
+	s = markdownEscaper.Replace(s)
+	s = autolinkDefuser.ReplaceAllString(s, "${1}\u200b")
+	return emailDefuser.ReplaceAllString(s, "${1}@\u200b${2}")
+}
 
 // Metadata is the header information written as YAML frontmatter at the top of
 // a transcript file.
@@ -61,10 +115,12 @@ func (w *Writer) WriteHeader(meta Metadata) error {
 	return nil
 }
 
-// WriteEvent appends a formatted caption event to the transcript.
+// WriteEvent appends a formatted caption event to the transcript. The
+// participant-controlled speaker and text are sanitized to prevent Markdown or
+// HTML injection into the rendered transcript.
 func (w *Writer) WriteEvent(ev CaptionEvent) error {
 	line := fmt.Sprintf("**%s (%s):** %s\n\n",
-		ev.Speaker, ev.Timestamp.Format("15:04:05"), ev.Text)
+		sanitizeField(ev.Speaker), ev.Timestamp.Format("15:04:05"), sanitizeField(ev.Text))
 	if _, err := w.bw.WriteString(line); err != nil {
 		return fmt.Errorf("transcript: write event: %w", err)
 	}

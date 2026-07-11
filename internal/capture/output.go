@@ -98,6 +98,14 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		_ = os.Remove(mdPath)
 		return nil, fmt.Errorf("capture: write transcript header: %w", err)
 	}
+	// Flush the header immediately so a physical write failure (e.g. a full
+	// filesystem) surfaces here and triggers rollback, rather than being
+	// deferred inside the bufio buffer until the first caption is written.
+	if err := w.Flush(); err != nil {
+		_ = mdFile.Close()
+		_ = os.Remove(mdPath)
+		return nil, fmt.Errorf("capture: flush transcript header: %w", err)
+	}
 	mp3File, err := os.OpenFile(mp3Path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
 	if err != nil {
 		// Best-effort rollback so a failed pair leaves no partial artifacts;

@@ -9,7 +9,7 @@ import (
 func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "join <meeting-url>",
-		Short: "Join a Teams meeting immediately from a meeting URL",
+		Short: "Join a Teams meeting immediately and capture its transcript and audio",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfigFrom(d, *configPath)
@@ -20,7 +20,7 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return d.newRunner(cfg).Join(cmd.Context(), mutated)
+			return runCapture(cmd.Context(), d, cfg, mutated)
 		},
 	}
 }

@@ -83,6 +83,32 @@ func TestWriteEventEscapesMarkdownInjection(t *testing.T) {
 			text:    "a\r\n- injected list",
 			absent:  []string{"\r", "\n- "},
 		},
+		{
+			name:     "strikethrough tilde escaped",
+			speaker:  "Bob",
+			text:     "~~redacted~~",
+			contains: []string{`\~\~redacted\~\~`},
+		},
+		{
+			name:     "bare email defused",
+			speaker:  "Bob",
+			text:     "mail support@paypa1.example please",
+			contains: []string{"support@\u200bpaypa1.example"},
+			absent:   []string{"support@paypa1.example"},
+		},
+		{
+			name:     "unicode line separator collapsed",
+			speaker:  "Bob",
+			text:     "a\u2028# heading",
+			contains: []string{`\# heading`},
+			absent:   []string{"\u2028"},
+		},
+		{
+			name:    "unicode paragraph separator collapsed",
+			speaker: "Bob",
+			text:    "a\u2029- item",
+			absent:  []string{"\u2029"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

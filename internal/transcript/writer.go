@@ -25,12 +25,19 @@ var markdownEscaper = strings.NewReplacer(
 	">", `\>`,
 	"#", `\#`,
 	"|", `\|`,
+	"~", `\~`,
 )
 
 // autolinkDefuser matches the scheme/prefix that triggers GitHub-Flavored
-// Markdown bare autolinking. A zero-width space is inserted after the match so a
-// participant-supplied URL renders as inert text rather than a clickable link.
+// Markdown bare URL autolinking. A zero-width space is inserted after the match
+// so a participant-supplied URL renders as inert text rather than a clickable
+// link.
 var autolinkDefuser = regexp.MustCompile(`(?i)(https?://|ftp://|www\.)`)
+
+// emailDefuser matches GFM bare email autolinks. A zero-width space is inserted
+// after the "@" so a participant-supplied address does not render as a clickable
+// mailto link.
+var emailDefuser = regexp.MustCompile(`([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})`)
 
 // controlToSpace maps control characters and Unicode line/paragraph separators
 // to a space; all other runes pass through. This prevents participant text from
@@ -46,12 +53,13 @@ func controlToSpace(r rune) rune {
 // caption text come from meeting participants) for safe inclusion in the
 // Markdown transcript: control characters and line/paragraph separators are
 // replaced with spaces so they cannot break the line structure,
-// Markdown-structural runes are backslash-escaped, and bare URL autolinks are
-// defused. Ordinary words and sentence punctuation are unchanged.
+// Markdown-structural runes are backslash-escaped, and bare URL and email
+// autolinks are defused. Ordinary words and sentence punctuation are unchanged.
 func sanitizeField(s string) string {
 	s = strings.Map(controlToSpace, s)
 	s = markdownEscaper.Replace(s)
-	return autolinkDefuser.ReplaceAllString(s, "${1}\u200b")
+	s = autolinkDefuser.ReplaceAllString(s, "${1}\u200b")
+	return emailDefuser.ReplaceAllString(s, "${1}@\u200b${2}")
 }
 
 // Metadata is the header information written as YAML frontmatter at the top of

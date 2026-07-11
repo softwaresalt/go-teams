@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -26,19 +27,31 @@ var markdownEscaper = strings.NewReplacer(
 	"|", `\|`,
 )
 
+// autolinkDefuser matches the scheme/prefix that triggers GitHub-Flavored
+// Markdown bare autolinking. A zero-width space is inserted after the match so a
+// participant-supplied URL renders as inert text rather than a clickable link.
+var autolinkDefuser = regexp.MustCompile(`(?i)(https?://|ftp://|www\.)`)
+
+// controlToSpace maps control characters and Unicode line/paragraph separators
+// to a space; all other runes pass through. This prevents participant text from
+// breaking the transcript's line structure.
+func controlToSpace(r rune) rune {
+	if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+		return ' '
+	}
+	return r
+}
+
 // sanitizeField neutralizes participant-controlled text (speaker names and
-// caption text are supplied by meeting participants) for safe inclusion in the
-// Markdown transcript: control characters and line breaks collapse to a single
-// space so they cannot break the line structure, and Markdown-structural runes
-// are backslash-escaped. Ordinary words and sentence punctuation are unchanged.
+// caption text come from meeting participants) for safe inclusion in the
+// Markdown transcript: control characters and line/paragraph separators are
+// replaced with spaces so they cannot break the line structure,
+// Markdown-structural runes are backslash-escaped, and bare URL autolinks are
+// defused. Ordinary words and sentence punctuation are unchanged.
 func sanitizeField(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, s)
-	return markdownEscaper.Replace(s)
+	s = strings.Map(controlToSpace, s)
+	s = markdownEscaper.Replace(s)
+	return autolinkDefuser.ReplaceAllString(s, "${1}\u200b")
 }
 
 // Metadata is the header information written as YAML frontmatter at the top of

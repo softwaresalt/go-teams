@@ -2,12 +2,46 @@ package transcript
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWriteEventCollapsesLineBreaks(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	require.NoError(t, w.WriteEvent(CaptionEvent{
+		Timestamp: time.Date(2026, 7, 9, 13, 6, 5, 0, time.UTC),
+		Speaker:   "Bob",
+		Text:      "hi\r\n# Injected",
+	}))
+	require.NoError(t, w.Flush())
+
+	body := strings.TrimSuffix(buf.String(), "\n\n")
+	// The embedded CR/LF must be gone (proving collapse, not just that # is escaped).
+	assert.NotContains(t, body, "\n", "embedded newline must be collapsed")
+	assert.NotContains(t, body, "\r", "embedded carriage return must be collapsed")
+	assert.Equal(t, `**Bob (13:06:05):** hi  \# Injected`, body)
+}
+
+func TestWriteEventDefusesBareAutolink(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	require.NoError(t, w.WriteEvent(CaptionEvent{
+		Timestamp: time.Date(2026, 7, 9, 13, 6, 5, 0, time.UTC),
+		Speaker:   "Bob",
+		Text:      "visit http://evil.example and www.evil.example",
+	}))
+	require.NoError(t, w.Flush())
+	out := buf.String()
+	// The contiguous URL must be broken by a zero-width space after the scheme.
+	assert.NotContains(t, out, "http://evil.example")
+	assert.Contains(t, out, "http://\u200bevil.example")
+	assert.Contains(t, out, "www.\u200bevil.example")
+}
 
 func TestWriteEventEscapesMarkdownInjection(t *testing.T) {
 	ts := time.Date(2026, 7, 9, 13, 6, 5, 0, time.UTC)
@@ -44,10 +78,10 @@ func TestWriteEventEscapesMarkdownInjection(t *testing.T) {
 			contains: []string{`\*\*Admin\*\*`},
 		},
 		{
-			name:     "carriage return does not break the line",
-			speaker:  "Bob",
-			text:     "a\r\n- injected list",
-			absent:   []string{"\r", "\n- "},
+			name:    "carriage return does not break the line",
+			speaker: "Bob",
+			text:    "a\r\n- injected list",
+			absent:  []string{"\r", "\n- "},
 		},
 	}
 	for _, tc := range tests {

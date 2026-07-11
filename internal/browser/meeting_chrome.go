@@ -144,6 +144,32 @@ func (m *chromeMeeting) awaitAdmission(ctx context.Context) error {
 	}
 }
 
+// drainWorker processes payloads until ctx is cancelled, then drains any
+// buffered payloads before returning, so the tail of a recording is not lost
+// when the meeting is cancelled (e.g. on Ctrl+C). process returns false to stop
+// early, for example on a fatal writer error.
+func drainWorker(ctx context.Context, payloads <-chan string, process func(string) bool) {
+	for {
+		select {
+		case <-ctx.Done():
+			for {
+				select {
+				case raw := <-payloads:
+					if !process(raw) {
+						return
+					}
+				default:
+					return
+				}
+			}
+		case raw := <-payloads:
+			if !process(raw) {
+				return
+			}
+		}
+	}
+}
+
 // EnableCaptions implements Meeting. It activates Teams live captions, registers
 // the sendCaptionToGo CDP binding, injects the caption MutationObserver, and
 // routes forwarded fragments through Go-side deduplication to sink. It blocks
@@ -194,16 +220,12 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 	go func() {
 		defer wg.Done()
 		dedup := transcript.NewDeduplicator()
-		for {
-			select {
-			case <-workerCtx.Done():
-				return
-			case raw := <-payloads:
-				if err := handleCaptionPayload(raw, dedup, sink); err != nil {
-					slog.Warn("browser: discarding malformed caption payload", "err", err)
-				}
+		drainWorker(workerCtx, payloads, func(raw string) bool {
+			if err := handleCaptionPayload(raw, dedup, sink); err != nil {
+				slog.Warn("browser: discarding malformed caption payload", "err", err)
 			}
-		}
+			return true
+		})
 	}()
 
 	var attached bool
@@ -275,25 +297,21 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
 	go func() {
 		defer wg.Done()
 		enc := audio.NewEncoder(w, audio.SampleRate)
-		for {
-			select {
-			case <-workerCtx.Done():
-				return
-			case raw := <-payloads:
-				samples, err := decodeAudioPayload(raw)
-				if err != nil {
-					slog.Warn("browser: discarding malformed audio chunk", "err", err)
-					continue
-				}
-				if err := enc.WritePCM(samples); err != nil {
-					// A writer/encoder failure is fatal: record it and stop
-					// capture so CaptureAudio can surface it to the caller.
-					workerErr = err
-					cancel()
-					return
-				}
+		drainWorker(workerCtx, payloads, func(raw string) bool {
+			samples, err := decodeAudioPayload(raw)
+			if err != nil {
+				slog.Warn("browser: discarding malformed audio chunk", "err", err)
+				return true
 			}
-		}
+			if err := enc.WritePCM(samples); err != nil {
+				// A writer/encoder failure is fatal: record it and stop capture
+				// so CaptureAudio can surface it to the caller.
+				workerErr = err
+				cancel()
+				return false
+			}
+			return true
+		})
 	}()
 
 	var started bool

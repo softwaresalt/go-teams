@@ -19,8 +19,9 @@ import (
 
 const (
 	maxMeetingIDLen = 64
-	// dirPerm and filePerm keep transcripts and audio owner-only, since they
-	// may contain confidential meeting content.
+	// filePerm keeps each transcript/audio file owner-only (they may contain
+	// confidential meeting content). dirPerm applies only when this code creates
+	// the output directory; a pre-existing directory keeps its own permissions.
 	dirPerm  = 0o700
 	filePerm = 0o600
 	// timestampLayout includes milliseconds so concurrent captures that share a
@@ -75,11 +76,15 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	id := sanitizeMeetingID(cfg.MeetingURL)
 	base := fmt.Sprintf("%s-%s", id, now.Format(timestampLayout))
 
-	if err := os.MkdirAll(cfg.Dir, dirPerm); err != nil {
-		return nil, fmt.Errorf("capture: create output dir %s: %w", cfg.Dir, err)
+	dir, err := filepath.Abs(cfg.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("capture: resolve output dir %s: %w", cfg.Dir, err)
 	}
-	mdPath := filepath.Join(cfg.Dir, base+".md")
-	mp3Path := filepath.Join(cfg.Dir, base+".mp3")
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return nil, fmt.Errorf("capture: create output dir %s: %w", dir, err)
+	}
+	mdPath := filepath.Join(dir, base+".md")
+	mp3Path := filepath.Join(dir, base+".mp3")
 
 	mdFile, err := os.OpenFile(mdPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
 	if err != nil {

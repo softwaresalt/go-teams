@@ -20,3 +20,18 @@ func TestMeetingInputValidation(t *testing.T) {
 	assert.Error(t, m.CaptureAudio(bg, nil), "nil audio writer")
 	assert.Error(t, m.CaptureAudio(bg, io.Discard), "non-chromedp context")
 }
+
+// TestNewLiveMeeting verifies the live-meeting constructor wires a Meeting,
+// context, and cleanup func without launching a browser (Chromium starts only
+// on the first chromedp.Run). Cleanup must be safe to call regardless.
+func TestNewLiveMeeting(t *testing.T) {
+	m, ctx, cleanup, err := NewLiveMeeting(context.Background(),
+		Options{Headless: true},
+		MeetingOptions{MeetingURL: "https://teams.microsoft.com/x", BotName: "Agent"})
+	assert.NoError(t, err)
+	assert.NotNil(t, m)
+	assert.NotNil(t, ctx)
+	if assert.NotNil(t, cleanup) {
+		cleanup()
+	}
+}

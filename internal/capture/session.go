@@ -64,8 +64,8 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		return err
 	}
 	defer func() {
-		if closeErr := out.Close(); err == nil {
-			err = closeErr
+		if closeErr := out.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 		}
 	}()
 

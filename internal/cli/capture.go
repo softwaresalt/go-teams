@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/config"
@@ -19,8 +20,11 @@ type meetingSession interface {
 func runCapture(ctx context.Context, d *deps, cfg config.Config, meetingURL string) error {
 	meeting, browserCtx, cleanup, err := d.newMeeting(ctx, cfg, meetingURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: create meeting: %w", err)
 	}
 	defer cleanup()
-	return d.newSession(cfg, meetingURL).Run(browserCtx, meeting)
+	if err := d.newSession(cfg, meetingURL).Run(browserCtx, meeting); err != nil {
+		return fmt.Errorf("cli: capture session: %w", err)
+	}
+	return nil
 }

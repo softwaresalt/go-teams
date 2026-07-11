@@ -81,7 +81,7 @@ func TestSetupOutputCreatesPairWithHeader(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = out.Close() })
 
-	wantBase := "meeting-abc123-20260710-150405"
+	wantBase := "meeting-abc123-20260710-150405.000"
 	if filepath.Base(out.TranscriptPath) != wantBase+".md" {
 		t.Errorf("transcript path = %q, want base %q.md", out.TranscriptPath, wantBase)
 	}
@@ -109,6 +109,27 @@ func TestSetupOutputCreatesPairWithHeader(t *testing.T) {
 		if !strings.Contains(header, want) {
 			t.Errorf("transcript header missing %q; got:\n%s", want, header)
 		}
+	}
+}
+
+func TestSetupOutputRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	cfg := OutputConfig{
+		Dir:        dir,
+		MeetingURL: "https://teams.microsoft.com/l/meetup-join/19%3ameeting_X%40thread.v2/0",
+		BotName:    "Bot",
+		Now:        fixedTime(),
+	}
+	first, err := setupOutput(cfg)
+	if err != nil {
+		t.Fatalf("first setupOutput: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	// A second capture with the same id and timestamp must not silently
+	// truncate the first capture's files; it must fail loudly instead.
+	if _, err := setupOutput(cfg); err == nil {
+		t.Fatal("expected setupOutput to refuse overwriting an existing capture, got nil error")
 	}
 }
 

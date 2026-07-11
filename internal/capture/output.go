@@ -19,8 +19,13 @@ import (
 
 const (
 	maxMeetingIDLen = 64
-	dirPerm         = 0o755
-	timestampLayout = "20060102-150405"
+	// dirPerm and filePerm keep transcripts and audio owner-only, since they
+	// may contain confidential meeting content.
+	dirPerm  = 0o700
+	filePerm = 0o600
+	// timestampLayout includes milliseconds so concurrent captures that share a
+	// sanitized meeting id do not collide on the same output file name.
+	timestampLayout = "20060102-150405.000"
 )
 
 var (
@@ -56,9 +61,12 @@ type Output struct {
 }
 
 // setupOutput creates the output directory and the transcript+MP3 file pair,
-// writes the transcript frontmatter header, and returns the open Output. On any
-// error every file and handle created so far is rolled back so no partial
-// artifacts remain (the pair is created atomically).
+// writes the transcript frontmatter header, and returns the open Output. Files
+// are created with O_EXCL so an existing file is never silently truncated; a
+// name collision (same meeting id in the same millisecond) surfaces as an error
+// instead of corrupting a concurrent capture. On any error every file and
+// handle created so far is rolled back so no partial artifacts remain (the pair
+// is created atomically).
 func setupOutput(cfg OutputConfig) (*Output, error) {
 	now := cfg.Now
 	if now.IsZero() {
@@ -73,18 +81,22 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	mdPath := filepath.Join(cfg.Dir, base+".md")
 	mp3Path := filepath.Join(cfg.Dir, base+".mp3")
 
-	mdFile, err := os.Create(mdPath)
+	mdFile, err := os.OpenFile(mdPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
 	w := transcript.NewWriter(mdFile)
 	if err := w.WriteHeader(transcript.Metadata{MeetingID: id, StartTime: now, BotName: cfg.BotName}); err != nil {
+		// Best-effort rollback of the partial transcript; the header-write
+		// error is the failure worth surfacing to the caller.
 		_ = mdFile.Close()
 		_ = os.Remove(mdPath)
 		return nil, fmt.Errorf("capture: write transcript header: %w", err)
 	}
-	mp3File, err := os.Create(mp3Path)
+	mp3File, err := os.OpenFile(mp3Path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
 	if err != nil {
+		// Best-effort rollback so a failed pair leaves no partial artifacts;
+		// the audio-create error is the failure worth surfacing.
 		_ = mdFile.Close()
 		_ = os.Remove(mdPath)
 		return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)

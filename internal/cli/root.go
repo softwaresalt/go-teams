@@ -4,7 +4,6 @@ package cli
 import (
 	"context"
 
-	"github.com/chromedp/chromedp"
 	"github.com/spf13/cobra"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
@@ -49,15 +48,9 @@ func defaultDeps() *deps {
 // and returns a chromedp-backed Meeting bound to it. The cleanup func cancels
 // the browser and allocator contexts, terminating the spawned Chromium process.
 func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
-	opts := browser.Options{UserDataDir: c.ProfileDir, Headless: true}
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, browser.AllocatorOptions(opts)...)
-	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
-	cleanup := func() {
-		cancelBrowser()
-		cancelAlloc()
-	}
-	m := browser.NewMeeting(browser.MeetingOptions{MeetingURL: meetingURL, BotName: c.BotName})
-	return m, browserCtx, cleanup, nil
+	return browser.NewLiveMeeting(ctx,
+		browser.Options{UserDataDir: c.ProfileDir, Headless: true},
+		browser.MeetingOptions{MeetingURL: meetingURL, BotName: c.BotName})
 }
 
 // NewRootCommand builds the root command with all subcommands attached, using

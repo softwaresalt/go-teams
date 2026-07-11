@@ -3,6 +3,8 @@ package browser
 import (
 	"context"
 	"io"
+
+	"github.com/chromedp/chromedp"
 )
 
 // CaptionSink receives finalized caption utterances (speaker and text) as the
@@ -43,4 +45,19 @@ type Meeting interface {
 // browser context supplied by the caller.
 func NewMeeting(opts MeetingOptions) Meeting {
 	return newChromeMeeting(opts)
+}
+
+// NewLiveMeeting allocates a headless Chromium context for automated capture and
+// returns a chromedp-backed Meeting bound to it, the context that drives the
+// meeting's methods, and a cleanup func that cancels the browser and allocator
+// contexts (terminating the spawned Chromium process). The caller MUST invoke
+// cleanup when the meeting is done, on success, failure, and cancellation.
+func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Meeting, context.Context, func(), error) {
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, AllocatorOptions(opts)...)
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	cleanup := func() {
+		cancelBrowser()
+		cancelAlloc()
+	}
+	return NewMeeting(mopts), browserCtx, cleanup, nil
 }

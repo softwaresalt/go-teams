@@ -45,12 +45,19 @@ Two **separate** shine-mp3 issues exist:
 
 1. **Over-read from non-frame-aligned input** (this learning) — a *caller* bug,
    fully fixable by frame-buffering. Fixed in `internal/audio/mp3.go`.
-2. **Inherent internal `unsafe` in `windowFilterSubband`** (`l3subband.go:70`) —
-   trips `-race` checkptr **even for valid frame-aligned input**. NOT fixable
-   without patching/replacing shine-mp3. Tracked by stash `3E55DF0D`. Encoder
-   tests stay skipped under `-race` (`raceDetectorEnabled`); encoding is verified
-   in non-race/production builds.
+2. **End-of-buffer pointer in `windowFilterSubband`** (`l3subband.go:70`) — after
+   the final frame it advances a read pointer one stride past the last sample
+   (index `len+1`), a pointer it never dereferences, which tripped `-race`
+   checkptr **even for valid frame-aligned input**. **RESOLVED in 009-S** by
+   giving the interleaved buffer extra *capacity* (`encoderTailSlack`) in
+   `audio.encodeFrames`, so the pointer stays inside the allocation. shine-mp3 is
+   `NOASSERTION`-licensed, so it was NOT forked/patched. Encoder tests now run
+   under `-race` (the `raceDetectorEnabled` skip and `race.go`/`norace.go` were
+   removed). See `shine-mp3-race-checkptr.md`.
 
-Verifying "the over-read is fixed" by running under `-race` will still crash on
-issue #2 — verify the fix by confirming shine-mp3 receives a frame-aligned length
-(e.g. 9216 = 4×2304) in the stack, not by expecting `-race` to pass.
+Historical note: before the 009-S capacity-slack fix, running the encoder under
+`-race` crashed inside issue #2 regardless of frame alignment, so the over-read
+fix (issue #1) had to be verified by confirming a frame-aligned length reached
+shine-mp3 (e.g. 9216 = 4×2304) rather than by expecting `-race` to pass. With the
+slack fix in place, `go test -race ./internal/audio/` now passes and is the
+regression gate for both issues.

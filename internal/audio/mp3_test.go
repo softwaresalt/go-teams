@@ -51,10 +51,6 @@ func sineMono(n int) []int16 {
 }
 
 func TestEncoderProducesMP3Frames(t *testing.T) {
-	if raceDetectorEnabled {
-		t.Skip("shine-mp3 uses unsafe pointer arithmetic incompatible with -race checkptr; " +
-			"encoding is verified in non-race builds")
-	}
 	var buf bytes.Buffer
 	enc := NewEncoder(&buf, SampleRate)
 	require.NoError(t, enc.WritePCM(sineMono(SampleRate)))
@@ -65,9 +61,6 @@ func TestEncoderProducesMP3Frames(t *testing.T) {
 // stride dropping half of mono input: the encoded frame count must reflect the
 // full sample count (~samples/1152), not half of it.
 func TestEncoderEncodesAllSamples(t *testing.T) {
-	if raceDetectorEnabled {
-		t.Skip("shine-mp3 is incompatible with -race checkptr")
-	}
 	const frames = 8
 	const samplesPerFrame = 1152
 	var buf bytes.Buffer
@@ -87,9 +80,6 @@ func TestEncoderEncodesAllSamples(t *testing.T) {
 // multiple of 1152), which previously over-read the encoder's interleaved buffer
 // on the final pass of every callback. Buffering whole frames must prevent this.
 func TestEncoderHandlesNonFrameAlignedInput(t *testing.T) {
-	if raceDetectorEnabled {
-		t.Skip("shine-mp3 uses unsafe pointer arithmetic incompatible with -race checkptr")
-	}
 	var buf bytes.Buffer
 	enc := NewEncoder(&buf, SampleRate)
 	for i := 0; i < 4; i++ { // four 4096-sample browser callbacks
@@ -102,9 +92,6 @@ func TestEncoderHandlesNonFrameAlignedInput(t *testing.T) {
 // TestEncoderFlushEmitsRemainder verifies the buffered sub-frame tail is encoded
 // on Flush rather than dropped.
 func TestEncoderFlushEmitsRemainder(t *testing.T) {
-	if raceDetectorEnabled {
-		t.Skip("shine-mp3 is incompatible with -race checkptr")
-	}
 	var buf bytes.Buffer
 	enc := NewEncoder(&buf, SampleRate)
 	require.NoError(t, enc.WritePCM(sineMono(500))) // fewer than one frame

@@ -25,6 +25,13 @@ const encodeChannels = 2
 // whole frames are ever handed to the encoder.
 const monoSamplesPerFrame = 1152
 
+// encoderTailSlack is spare capacity (in int16 values) appended to the
+// interleaved buffer handed to shine-mp3. Its Write advances an internal read
+// pointer up to two elements past the last sample of the final frame; the slack
+// keeps that end-of-buffer pointer inside the allocation so the -race checkptr
+// instrumentation does not fault. It is capacity only and never encoded.
+const encoderTailSlack = 4
+
 // Encoder streams mono int16 PCM samples to an io.Writer as MP3 using a pure-Go
 // encoder (no CGO or external tools). Mono input is encoded as dual-mono stereo
 // to work around shine-mp3's stereo-only stride, and is buffered into whole MP3
@@ -91,7 +98,13 @@ func (e *Encoder) Flush() error {
 // stereo. len(mono) MUST be a non-zero multiple of monoSamplesPerFrame so the
 // encoder never reads past the interleaved buffer.
 func (e *Encoder) encodeFrames(mono []int16) error {
-	stereo := make([]int16, len(mono)*2)
+	// shine-mp3's Write advances an internal read pointer one/two elements past
+	// the end of the final frame — a benign end-of-buffer pointer it never
+	// dereferences. Give the interleaved buffer a small extra capacity so that
+	// pointer arithmetic stays within the allocation and does not trip the
+	// -race checkptr instrumentation. The extra capacity is never part of the
+	// encoded length, so the output is unchanged.
+	stereo := make([]int16, len(mono)*2, len(mono)*2+encoderTailSlack)
 	for i, s := range mono {
 		stereo[2*i] = s
 		stereo[2*i+1] = s

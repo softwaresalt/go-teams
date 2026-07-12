@@ -19,17 +19,25 @@ const encodeChannels = 2
 
 // monoSamplesPerFrame is the MPEG-1 Layer III samples-per-channel per frame
 // (1152). shine-mp3 advances its interleaved input by 2*1152 values per pass and
-// unsafely reads a full pass from the chunk pointer even for the final, short
-// chunk. Feeding a buffer whose length is not a whole number of frames therefore
-// reads past the slice (out of bounds). WritePCM buffers partial frames so only
-// whole frames are ever handed to the encoder.
+// unsafely DEREFERENCES a full pass from the chunk pointer even for the final,
+// short chunk. Feeding a buffer whose length is not a whole number of frames
+// therefore reads real samples past the slice (a genuine out-of-bounds read).
+// WritePCM buffers partial frames so only whole frames are ever handed to the
+// encoder, keeping every dereference in bounds.
 const monoSamplesPerFrame = 1152
 
-// encoderTailSlack is spare capacity (in int16 values) appended to the
-// interleaved buffer handed to shine-mp3. Its Write advances an internal read
-// pointer up to two elements past the last sample of the final frame; the slack
-// keeps that end-of-buffer pointer inside the allocation so the -race checkptr
-// instrumentation does not fault. It is capacity only and never encoded.
+// encoderTailSlack is spare CAPACITY (in int16 values) appended to the
+// interleaved buffer handed to shine-mp3. Distinct from monoSamplesPerFrame
+// (which prevents out-of-bounds dereferences): shine-mp3 v0.1.0's
+// windowFilterSubband also ADVANCES a read pointer one stride past the final
+// sample without dereferencing it. Because the right channel starts at offset 1
+// and the stride is 2, that end pointer reaches index len+1 — two elements past
+// the last valid index. The slack keeps that pointer inside the allocation so
+// the -race checkptr instrumentation does not fault; 4 (>= the required 2)
+// leaves margin. It is capacity only, never part of the encoded length, so the
+// MP3 output is byte-identical. The re-enabled `go test -race ./internal/audio/`
+// is the upgrade gate: if a future shine-mp3 version moves the pointer further,
+// that test faults and this constant must be revisited.
 const encoderTailSlack = 4
 
 // Encoder streams mono int16 PCM samples to an io.Writer as MP3 using a pure-Go
@@ -98,12 +106,10 @@ func (e *Encoder) Flush() error {
 // stereo. len(mono) MUST be a non-zero multiple of monoSamplesPerFrame so the
 // encoder never reads past the interleaved buffer.
 func (e *Encoder) encodeFrames(mono []int16) error {
-	// shine-mp3's Write advances an internal read pointer one/two elements past
-	// the end of the final frame — a benign end-of-buffer pointer it never
-	// dereferences. Give the interleaved buffer a small extra capacity so that
-	// pointer arithmetic stays within the allocation and does not trip the
-	// -race checkptr instrumentation. The extra capacity is never part of the
-	// encoded length, so the output is unchanged.
+	// Whole-frame input (monoSamplesPerFrame) keeps every shine-mp3 dereference
+	// in bounds; encoderTailSlack additionally keeps its benign end-of-buffer
+	// pointer (advanced but never dereferenced) inside the allocation so -race
+	// checkptr does not fault. The slack is capacity only, so output is unchanged.
 	stereo := make([]int16, len(mono)*2, len(mono)*2+encoderTailSlack)
 	for i, s := range mono {
 		stereo[2*i] = s

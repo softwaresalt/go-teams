@@ -42,6 +42,12 @@ lint:
 format:
   tool: "gofmt"
   command: "gofmt -l ."
+  # NOTE: `gofmt -l .` only LISTS unformatted files — it exits 0 either way, so it
+  # cannot be used directly as a pass/fail gate. check_command below fails on
+  # non-empty output. The generated pre-push hooks carry a shell-appropriate
+  # equivalent per shell (POSIX `test -z "$(...)"`, PowerShell output check),
+  # because a single interpolated command string cannot be quote-safe in both.
+  check_command: "test -z \"$(gofmt -l .)\""
   fix_command: "gofmt -w ."
 
 ci:
@@ -49,15 +55,20 @@ ci:
   # Hand-maintained workflows already exist: .github/workflows/ci.yml,
   # cli-reference-drift.yml, release.yml. This merge install preserves them and
   # does NOT generate the autoharness ci.yml template over the existing pipeline.
+  # pipeline_steps mirrors the real ci.yml job steps. NOTE: CI does NOT run a
+  # gofmt check — formatting is enforced only by the local pre-push gate.
   pipeline_steps:
+    - "go mod download"
+    - "go build ./..."
     - "go vet ./..."
-    - "golangci-lint run"
-    - "gofmt -l ."
-    - "go test ./..."
+    - "go vet -tags=integration ./..."
+    - "golangci-lint run (golangci-lint-action)"
+    - "go test -race -coverprofile=coverage.out ./..."
+    - "go tool cover -func=coverage.out"
   quality_gates:
     - "go vet ./..."
     - "golangci-lint run"
-    - "gofmt -l ."
+    - "test -z \"$(gofmt -l .)\""
     - "go test ./..."
   required_check_name: "ci gate"
   linux_only: true
@@ -121,13 +132,13 @@ runtime_validation:
         adapter_hint: "job"
         probe_hints:
           - id: "scheduler-dry-run"
-            kind: "job-trigger"
-            target: "teams-cli schedule daemon"
-            command: "go run ./cmd/teams-cli schedule --dry-run"
-            expected_signal: "cron entries parsed and next fire times reported without starting a browser"
+            kind: "command"
+            target: "teams-cli schedule command surface"
+            command: "go run ./cmd/teams-cli schedule --help"
+            expected_signal: "schedule usage text renders and exits 0 without starting a browser"
             required: false
-            evidence_types: ["stdout", "exit-code", "log-line"]
-            notes: "Covers the cron daemon surface described in the architecture doc."
+            evidence_types: ["stdout", "exit-code"]
+            notes: "The schedule command takes no flags (cobra.NoArgs); --help is the only non-blocking probe. Replace with a real --dry-run probe if one is added."
           - id: "scheduler-liveness-log"
             kind: "log-check"
             target: "scheduler process log"
@@ -328,7 +339,7 @@ backlog_tool:
   tool_name: "backlogit"
   directory: ".backlogit"
   tool_type: "both"
-  mcp_registered: true   # not present in root .mcp.json yet; CLI-registered via .backlogit/config.yaml
+  mcp_registered: true   # registered as a stdio server in the root .mcp.json, and CLI-available
   cli_available: true
   config_path: ".backlogit/config.yaml"
   registry_path: ".backlogit/registry.yaml"

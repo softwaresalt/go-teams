@@ -48,9 +48,9 @@ below through deterministic gates, linters, and policies. De-prioritize ONLY the
 purely mechanical, process, or style nits so review attention stays on substantive
 defects:
 
-* Formatting and linting — `gofmt -l .` and `golangci-lint run` (config: `.golangci.yml`) are hard CI gates.
+* Linting and static analysis — `golangci-lint run` and `go vet ./...` (including `-tags=integration`) are hard CI gates; `gofmt` formatting is enforced by the local pre-push gate only, so still report formatting problems that cause real defects.
 * Commit, branch, and merge hygiene — conventional-commit scopes, merge-commit-only (P-009), and PR readiness are enforced by `commit-message`, `git-merge`, `pull-request`, and `github-pr-automation` instructions.
-* Test-first red-green gates — P-002 and P-004 plus the `harness-architect` skill require a compiling-but-failing harness before implementation, verified by `go test ./...`.
+* Test-first red-green gates — P-002 and P-004 plus the `harness-architect` skill require a compiling-but-failing harness before implementation, verified in CI by `go test -race ./...`.
 * Backlog bookkeeping — work-item IDs, status transitions, and traceability are managed through the backlogit registry at `.autoharness/backlog-registry.yaml`.
 * Role-boundary compliance — the two-agent Stage/Ship model and `role-enforcement.instructions.md` gate which agent may mutate which artifact class.
 

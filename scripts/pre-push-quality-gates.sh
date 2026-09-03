@@ -81,9 +81,8 @@ run_gate() {
 
 echo "Running local pre-push quality gates..."
 
+run_gate "Format" "gofmt" "test -z \"\$(gofmt -l .)\" || { gofmt -l .; false; }"
 run_gate "Lint" "golangci-lint" "golangci-lint run"
-run_gate "Format" "gofmt" "gofmt -l ."
-run_gate "Typecheck" "" ""
 run_gate "Test" "go" "go test ./..."
 run_gate "Build" "go" "go vet ./..."
 

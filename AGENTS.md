@@ -237,7 +237,7 @@ go vet ./...
 golangci-lint run
 
 # Gate 3 — fmt
-gofmt -l .
+test -z "$(gofmt -l .)"
 
 # Gate 4 — test
 go test ./...

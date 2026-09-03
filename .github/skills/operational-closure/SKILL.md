@@ -96,8 +96,14 @@ structured.
 
 ### Step 4: Source artifact cleanup (backlogit)
 
-Before feeding knowledge back into the harness, retire the intake artifacts that
-produced this release unit so the backlog does not accumulate orphaned sources.
+**Skip condition**: run this step ONLY when `mode` is `post-merge`. On a
+`pre-merge` or `post-deploy` invocation, skip it entirely. Archiving a source
+artifact before the PR merges would violate P-021 C5, which permits retirement
+of the source stash entry only after a successful merge, and the merge commit
+SHA required below does not exist yet at pre-merge time.
+
+Retire the intake artifacts that produced this release unit so the backlog does
+not accumulate orphaned sources.
 
 1. Read the shipped work item's `custom_fields` for `source_stash_id` and
    `source_deliberation_id`. Use `backlogit_query_sql` (for example

@@ -29,7 +29,7 @@ The audit covers:
 * **OWASP Top 10 Compliance** — Assess coverage across A01-A10 with language-specific patterns
 * **Third-Party Dependency Review** — Known vulnerable dependencies (if package manifest is present)
 
-Language-specific detection uses `Go injection, auth, and exposure patterns: `exec.Command` argument construction, `chromedp.Evaluate`/`chromedp.ActionFunc` script interpolation, credential and cookie handling under `internal/auth` and `internal/browser`, `UserDataDir` session persistence writes, `log/slog` calls that could emit tokens or transcript PII, and `filepath.Join` path-traversal boundaries`.
+Language-specific detection uses `Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries`.
 
 ## Invocation
 
@@ -52,7 +52,7 @@ Default scope when no argument is provided: `full`.
 ### Phase 2: Input Validation and Injection Analysis
 
 1. Scan source files matching `**/*.go` for unvalidated external inputs
-2. Apply injection detection patterns from `Go injection, auth, and exposure patterns: `exec.Command` argument construction, `chromedp.Evaluate`/`chromedp.ActionFunc` script interpolation, credential and cookie handling under `internal/auth` and `internal/browser`, `UserDataDir` session persistence writes, `log/slog` calls that could emit tokens or transcript PII, and `filepath.Join` path-traversal boundaries`
+2. Apply injection detection patterns from `Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries`
 3. Check parameterized query usage vs. string-built queries in data access layers
 4. Check template rendering for user-controlled values
 5. Record findings with file, line, severity, and evidence
@@ -76,7 +76,7 @@ Default scope when no argument is provided: `full`.
 
 ### Phase 5: OWASP Top 10 Assessment
 
-Score the workspace against OWASP Top 10 categories using `Go injection, auth, and exposure patterns: `exec.Command` argument construction, `chromedp.Evaluate`/`chromedp.ActionFunc` script interpolation, credential and cookie handling under `internal/auth` and `internal/browser`, `UserDataDir` session persistence writes, `log/slog` calls that could emit tokens or transcript PII, and `filepath.Join` path-traversal boundaries`:
+Score the workspace against OWASP Top 10 categories using `Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries`:
 
 | Category | Check |
 |---|---|

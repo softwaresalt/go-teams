@@ -212,7 +212,7 @@ Run in order. Do not skip any gate.
 ```text
 go vet ./...
 golangci-lint run
-gofmt -l .
+test -z "$(gofmt -l .)"
 go test ./...
 ```
 

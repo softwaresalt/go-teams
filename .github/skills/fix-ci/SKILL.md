@@ -303,7 +303,7 @@ Run the full quality gate sequence:
 ```text
 go vet ./...
 golangci-lint run
-gofmt -l .
+test -z "$(gofmt -l .)"
 go test ./...
 ```
 

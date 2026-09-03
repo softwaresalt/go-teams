@@ -13,7 +13,7 @@ go-teams is a standalone Go CLI for autonomous Microsoft Teams live-transcriptio
 | Test            | go test           | `go test ./...`                    |
 | Lint            | golangci-lint                | `golangci-lint run`                    |
 | Format          | gofmt             | `gofmt -l .`                  |
-| CI              | GitHub Actions           | GitHub Actions runs vet, golangci-lint, gofmt, and the Go test suite; release and CLI-reference-drift workflows run separately.                          |
+| CI              | GitHub Actions           | GitHub Actions runs go build, go vet (including -tags=integration), golangci-lint, and go test -race with coverage. Formatting is NOT checked in CI — gofmt is enforced only by the local pre-push gate. Release and CLI-reference-drift workflows run separately.                          |
 | Browser automation | chromedp | Pure-Go CDP client — no external driver downloads |
 | CLI framework   | spf13/cobra | Command routing: `auth`, `join`, `schedule` |
 | Scheduler       | robfig/cron/v3 | Cron-based daemon mode |

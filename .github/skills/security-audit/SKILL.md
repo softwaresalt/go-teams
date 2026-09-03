@@ -38,7 +38,7 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 | `Go` | Primary language for pattern selection |
 | `docs/security` | Output directory for persisted reports (default: `docs/security`) |
 | `GitHub Copilot CLI and VS Code agentic config rules for a Go workspace (permissive tool allow-lists, unvalidated instruction inputs, hardcoded credentials, exposed env defaults, missing CI security gates)` | Per-environment config rule table |
-| `Go OWASP patterns: `fmt.Sprintf` interpolation into SQL or shell strings, `exec.Command`/`exec.CommandContext` with user-controlled arguments, `text/template` rendering of untrusted values, `encoding/gob` and `gopkg.in/yaml.v3` decoding of untrusted input, `os.WriteFile`/`os.MkdirAll` outside the workspace root, unvalidated `filepath.Join` path traversal, and `chromedp.Evaluate` with interpolated page data` | Language-specific OWASP detection patterns |
+| `Go OWASP patterns: fmt.Sprintf interpolation into SQL or shell strings; exec.Command and exec.CommandContext with user-controlled arguments; text/template rendering of untrusted values; encoding/gob and gopkg.in/yaml.v3 decoding of untrusted input; os.WriteFile and os.MkdirAll outside the workspace root; unvalidated filepath.Join path traversal; and chromedp.Evaluate with interpolated page data` | Language-specific OWASP detection patterns |
 
 ## Workflow
 
@@ -88,7 +88,7 @@ Apply judgment: record findings with reasoning, not just pattern matches. These 
 
 **Skip condition**: Skip unless `scope:full`, `scope:owasp`, or `scope:<path>`.
 
-Scan source files matching `**/*.go` (or the specified path) using `Go OWASP patterns: `fmt.Sprintf` interpolation into SQL or shell strings, `exec.Command`/`exec.CommandContext` with user-controlled arguments, `text/template` rendering of untrusted values, `encoding/gob` and `gopkg.in/yaml.v3` decoding of untrusted input, `os.WriteFile`/`os.MkdirAll` outside the workspace root, unvalidated `filepath.Join` path traversal, and `chromedp.Evaluate` with interpolated page data`:
+Scan source files matching `**/*.go` (or the specified path) using `Go OWASP patterns: fmt.Sprintf interpolation into SQL or shell strings; exec.Command and exec.CommandContext with user-controlled arguments; text/template rendering of untrusted values; encoding/gob and gopkg.in/yaml.v3 decoding of untrusted input; os.WriteFile and os.MkdirAll outside the workspace root; unvalidated filepath.Join path traversal; and chromedp.Evaluate with interpolated page data`:
 
 | Category | What to look for |
 |---|---|

@@ -85,9 +85,8 @@ function Invoke-Gate {
 
 Write-Host "Running local pre-push quality gates..."
 
+Invoke-Gate "Format" "gofmt" '$unformatted = gofmt -l .; if ($unformatted) { Write-Host ($unformatted -join [Environment]::NewLine); $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }'
 Invoke-Gate "Lint" "golangci-lint" "golangci-lint run"
-Invoke-Gate "Format" "gofmt" "gofmt -l ."
-Invoke-Gate "Typecheck" "" ""
 Invoke-Gate "Test" "go" "go test ./..."
 Invoke-Gate "Build" "go" "go vet ./..."
 

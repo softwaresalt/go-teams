@@ -27,10 +27,7 @@ You are the Security Reviewer persona. You evaluate code changes for exploitable
 
 This persona is conditionally invoked when the diff touches security-sensitive surfaces:
 
-* File paths matching `internal/auth/*`, `internal/browser/*`, `**/session*.go`, `**/config*.go`
-* Content keywords: `login`, `token`, `password`, `credential`, `session`, `cookie`, `secret`, `key`, `UserDataDir`, `permission`, `role`
-* Any `exec.Command`/`exec.CommandContext` invocation
-* Any file write to a persisted profile/session directory
+internal/cli/auth.go, internal/cli/root.go, internal/teams/**, internal/browser/**, internal/config/**, **/session*.go, **/token*.go; content keywords: login, token, password, credential, session, cookie, secret, key, UserDataDir, permission, role, exec.Command
 
 ## Confidence Threshold
 

@@ -46,6 +46,7 @@ Invoke when:
 * Confidence reflects repetition and strength of evidence
 * Ambiguous patterns remain provisional instead of becoming premature guidance
 
+
 ## Model Routing
 
 This skill operates at **Tier 1 (Fast/Cheap)** — pattern clustering is low-complexity.

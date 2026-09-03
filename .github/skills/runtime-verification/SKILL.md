@@ -181,6 +181,7 @@ condition.
 * Risky actions remain legible when verification is proving a high-risk or rollback-sensitive path
 * Follow-up risks are explicit, not implied
 
+
 ## Model Routing
 
 This skill operates at **Tier 2 (Standard)** — runtime surface validation follows defined protocol.

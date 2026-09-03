@@ -3,11 +3,10 @@ name: Concurrency Reviewer
 description: "Reviews code changes involving concurrent or parallel execution patterns for safety and correctness"
 maturity: stable
 tools: read, search
-model_tier: 1
 max_subagent_tier: 1
 reasoning_effort: ""
-model_provider: ""
-model_family: "gpt-5.4-mini"
+model_provider: "anthropic"
+model_family: "claude-haiku-4.5"
 subagent_depth: 0
 ---
 
@@ -29,12 +28,7 @@ You are the Concurrency Reviewer persona. You evaluate code changes that involve
 
 This persona is conditionally invoked when the diff contains patterns suggesting concurrency:
 
-* `go func(...)` goroutine launches
-* Channel operations (`chan`, `<-`, `select`)
-* `sync.Mutex`, `sync.RWMutex`, `sync.WaitGroup`, `sync.Once`, `sync/atomic`
-* `context.Context` cancellation/timeout wiring
-* `errgroup.Group` fan-out/fan-in
-* chromedp allocator/browser-tab lifecycle code shared across goroutines (e.g., transcript capture running concurrently with audio capture or the cron scheduler)
+goroutines, `sync.WaitGroup`, `sync.Mutex`/`RWMutex`, channels, `context.Context` cancellation, `errgroup`, `select` loops, `atomic` operations
 
 ## Output Format
 

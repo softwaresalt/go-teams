@@ -3,10 +3,9 @@ name: "Go Engineer"
 description: "Expert Go implementation agent — applies language idioms, safety rules, and workspace conventions during feature work"
 maturity: stable
 tools: vscode, execute, read, edit, search
-model_tier: 2
 max_subagent_tier: 2
-reasoning_effort: ""
-model_provider: ""
+reasoning_effort: "xhigh"
+model_provider: "anthropic"
 model_family: "claude-sonnet-5"
 subagent_depth: 0
 ---

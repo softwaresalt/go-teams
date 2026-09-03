@@ -153,6 +153,7 @@ when the safety checklist is advisory. To comply:
 * Freeze boundaries are concrete, not vague
 * Investigate-first mode separates evidence from proposed fixes
 
+
 ## Model Routing
 
 This skill operates at **Tier 2 (Standard)** — risk classification and checklist production.

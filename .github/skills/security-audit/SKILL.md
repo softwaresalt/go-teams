@@ -31,34 +31,14 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 
 ## Variables
 
-| Variable | Value for this workspace |
+| Variable | Purpose |
 |---|---|
-| Agentic config glob | `.github/**`, `.vscode/**`, `.claude/**`, `.cursor/**`, `.mcp.json` |
-| Application source glob | `**/*.go` |
-| Primary language | Go |
-| Output directory | `docs/security` |
-| Config rule table | See below |
-| OWASP detection patterns | See below |
-
-### Config rules (Tier 1 deterministic)
-
-* Hardcoded credential patterns (passwords, tokens, keys, AAD client secrets) in config files
-* Overly permissive tool allow-lists in `.github/`, `.claude/`, `.cursor/` agent config (e.g., `always: true` on destructive terminal commands)
-* Missing input validation rules in agent instruction files
-* `.vscode/settings.json` terminal auto-approve patterns that are overly broad
-* Exposed secrets in `.env.local` or environment variable defaults
-* MCP server config (`.mcp.json`, `.vscode/mcp.json`) referencing credentials in plaintext instead of environment variable indirection
-* Missing branch protection or CI security gate references
-
-### Go OWASP detection patterns
-
-* `fmt.Sprintf`-built SQL/shell strings instead of parameterized queries or `exec.Command` arg slices
-* `exec.Command`/`exec.CommandContext` invoked with unsanitized user/network input
-* `os.ReadFile`/`filepath.Join` with unsanitized path segments (path traversal)
-* Disabled TLS verification (`InsecureSkipVerify: true`)
-* Credentials or session tokens (Teams `UserDataDir` cookies/AAD tokens) written to disk without restrictive file permissions
-* `text/template` used where `html/template` is required for any HTML output
-* Unbounded goroutine spawn from external input (DoS via resource exhaustion)
+| `.github/**`, `.vscode/**`, `.claude/**`, `.cursor/**`, `.mcp.json` | Glob patterns for agentic config files (e.g., `.github/**`, `.vscode/**`) |
+| `**/*.go` | Application source file patterns (e.g., `src/**/*.go`) |
+| `Go` | Primary language for pattern selection |
+| `docs/security` | Output directory for persisted reports (default: `docs/security`) |
+| `GitHub Copilot CLI and VS Code agentic config rules for a Go workspace (permissive tool allow-lists, unvalidated instruction inputs, hardcoded credentials, exposed env defaults, missing CI security gates)` | Per-environment config rule table |
+| `Go OWASP patterns: `fmt.Sprintf` interpolation into SQL or shell strings, `exec.Command`/`exec.CommandContext` with user-controlled arguments, `text/template` rendering of untrusted values, `encoding/gob` and `gopkg.in/yaml.v3` decoding of untrusted input, `os.WriteFile`/`os.MkdirAll` outside the workspace root, unvalidated `filepath.Join` path traversal, and `chromedp.Evaluate` with interpolated page data` | Language-specific OWASP detection patterns |
 
 ## Workflow
 
@@ -72,14 +52,22 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 
 1. Enumerate agentic config surfaces matching `.github/**`, `.vscode/**`, `.claude/**`, `.cursor/**`, `.mcp.json`
 2. Enumerate application source files matching `**/*.go`
-3. Identify the primary language (Go) and select corresponding OWASP patterns
+3. Identify the primary language (`Go`) and select corresponding OWASP patterns
 4. Record the audit scope, file counts, and entry points found
 
 ### Phase 2: Config Tier 1 — Deterministic Config Scan
 
 **Skip condition**: Skip unless `scope:full`, `scope:config`, or `scope:<path>` where the scoped path intersects config surfaces.
 
-Apply deterministic regex checks to config surfaces found in Phase 1 using the config rule table above. Findings in this tier are eligible for `mode:fix` auto-remediation.
+Apply deterministic regex checks to config surfaces found in Phase 1. Findings in this tier are eligible for `mode:fix` auto-remediation.
+
+Rules from `GitHub Copilot CLI and VS Code agentic config rules for a Go workspace (permissive tool allow-lists, unvalidated instruction inputs, hardcoded credentials, exposed env defaults, missing CI security gates)`:
+
+* Hardcoded credential patterns (passwords, tokens, keys) in config files
+* Overly permissive tool allow-lists (e.g., `always: true` on destructive terminal commands)
+* Missing input validation rules in agent instruction files
+* Exposed secrets in environment variable defaults
+* Missing branch protection or CI security gate references
 
 For each match: record file, line number, matched pattern, severity, and fix action.
 
@@ -90,8 +78,8 @@ For each match: record file, line number, matched pattern, severity, and fix act
 Evaluate config files that require semantic interpretation rather than regex matching:
 
 * Agent instruction files that grant broad tool permissions without scope constraints
-* CI workflows that allow arbitrary code execution from pull requests (once `.github/workflows/` exists)
-* Dependency configuration files (`go.mod`) with unpinned versions in security-sensitive packages
+* CI workflows that allow arbitrary code execution from pull requests
+* Dependency configuration files with unpinned versions in security-sensitive packages
 * Agentic tool configurations that bypass the workspace's own safety policies
 
 Apply judgment: record findings with reasoning, not just pattern matches. These findings are advisory in `mode:fix` — they require human review before action.
@@ -100,7 +88,7 @@ Apply judgment: record findings with reasoning, not just pattern matches. These 
 
 **Skip condition**: Skip unless `scope:full`, `scope:owasp`, or `scope:<path>`.
 
-Scan source files matching `**/*.go` (or the specified path) using the Go OWASP detection patterns above:
+Scan source files matching `**/*.go` (or the specified path) using `Go OWASP patterns: `fmt.Sprintf` interpolation into SQL or shell strings, `exec.Command`/`exec.CommandContext` with user-controlled arguments, `text/template` rendering of untrusted values, `encoding/gob` and `gopkg.in/yaml.v3` decoding of untrusted input, `os.WriteFile`/`os.MkdirAll` outside the workspace root, unvalidated `filepath.Join` path traversal, and `chromedp.Evaluate` with interpolated page data`:
 
 | Category | What to look for |
 |---|---|

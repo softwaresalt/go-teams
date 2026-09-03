@@ -46,6 +46,7 @@ Invoke when:
 * Learned artifacts are specific, reviewable, and traceable back to evidence
 * Insufficiently mature instincts do not get hardened into workflow law
 
+
 ## Model Routing
 
 This skill operates at **Tier 1 (Fast/Cheap)** — promotion decision is low-complexity.

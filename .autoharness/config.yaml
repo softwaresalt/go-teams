@@ -6,7 +6,7 @@
 #
 # Schema: schemas/harness-config.schema.json
 
-schema_version: "1.0.0"
+schema_version: "1.1.0"
 
 # Installation preset: starter | standard | full
 preset: full
@@ -20,6 +20,10 @@ install_layers: ["foundation", "instructions", "workflow", "review", "runtime", 
 
 # Capability packs enabled for this workspace
 capability_packs: ["agent-intercom", "agent-engram", "backlogit", "browser-verification", "continuous-learning", "strict-safety", "release-observability", "adversarial-review", "graphtor-docs"]
+
+# Sidecar syncs the startup scripts run before launching the AI CLI tool.
+# Derived from the enabled capability packs.
+sidecars: ["backlogit", "engram", "graphtor-docs"]
 
 # Backlog tool configuration
 backlog:
@@ -67,24 +71,32 @@ strict_safety:
 # Model routing preferences (map tiers to model identifiers and per-tier config)
 model_routing:
   tier1:
-    model: gpt-5.4-mini              # Fast/cheap: memory, docs, compaction
-    reasoning_effort: ""             # Leave empty to use model default
-    model_provider: ""               # e.g., openai, anthropic — leave empty for default
-    model_family: "gpt-5.4-mini"     # Resolved into Tier 1 agent frontmatter
+    model: claude-haiku-4.5              # Fast/cheap: memory, docs, compaction (e.g., gpt-5.4-mini)
+    reasoning_effort: ""  # Leave empty to use model default
+    model_provider: "anthropic"       # e.g., openai, anthropic — leave empty for default
+    model_family: "claude-haiku-4.5"           # Resolved into Tier 1 agent frontmatter
   tier2:
-    model: claude-sonnet-5           # Standard: orchestration, code, review
-    reasoning_effort: "high"
+    model: claude-sonnet-5              # Standard: orchestration, code, review (e.g., claude-sonnet-4.6)
+    reasoning_effort: "xhigh"
     model_provider: "anthropic"
     model_family: "claude-sonnet-5"
   tier3:
-    model: claude-opus-4.8           # Frontier: planning, architecture, analysis
+    model: claude-opus-4.8              # Frontier: planning, architecture, analysis (e.g., claude-opus-4.6)
     reasoning_effort: "xhigh"
     model_provider: "anthropic"
     model_family: "claude-opus-4.8"
   orchestrator:
-    model_family: "claude-opus-4.8"          # Orchestrator model override (default: gpt-5.4)
+    model_family: "gpt-5.6-sol"     # Orchestrator model override (default: claude-opus-4.8)
     reasoning_effort: "xhigh"
-    model_provider: "anthropic"
+    model_provider: "openai"
+  # P-013.5 role route: Stage falls back per-field to tier3 (claude-opus-4.8).
+  # P-013.6 nested escalation route: must differ from Stage's own resolved role
+  # route, otherwise the same-route guard fires ESCALATION_DEGRADED (no-op).
+  stage:
+    escalation:
+      model_provider: "anthropic"
+      model_family: "claude-opus-5"
+      reasoning_effort: "max"
 
 # AI CLI tool startup configuration
 # Resolves the Copilot CLI path in the generated start.ps1 and start.sh scripts.

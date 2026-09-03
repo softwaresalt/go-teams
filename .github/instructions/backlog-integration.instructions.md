@@ -13,9 +13,8 @@ This workspace uses **backlogit** for structured backlog management. All agents 
 |---------|-------|
 | Tool | backlogit |
 | Directory | `.backlogit/` |
-| Access | both (MCP + CLI) |
+| Access | both |
 | Registry | `.autoharness/backlog-registry.yaml` |
-| Project config | `.backlogit/config.yaml` |
 
 ## Operation Reference
 
@@ -25,13 +24,13 @@ Use these operations for all backlog interactions. The operation names are abstr
 
 | Operation | MCP Tool | CLI Command | Purpose |
 |-----------|----------|-------------|---------|
-| Create task | `backlogit_create_item` | `backlogit add --type {artifact_type} --title {title}` | Create a new task/artifact |
+| Create task | `backlogit_create_item` | `backlogit add --type {{artifact_type}} --title {{title}}` | Create a new task/artifact |
 | List tasks | `backlogit_list_items` | `backlogit list` | List tasks with filters |
-| Get task | `backlogit_get_item` | `backlogit get {id}` | Retrieve task details |
-| Update task | `backlogit_update_item` | `backlogit update {id}` | Modify task fields |
-| Move task | `backlogit_move_item` | `backlogit move {id} --status {status}` | Change task status |
-| Search | `backlogit_search_items` | `backlogit search {query}` | Full-text search |
-| Complete | `backlogit_move_item` | `backlogit move {id} --status done` | Mark task complete |
+| Get task | `backlogit_get_item` | `backlogit get {{id}}` | Retrieve task details |
+| Update task | `backlogit_update_item` | `backlogit update {{id}}` | Modify task fields |
+| Move task | `backlogit_move_item` | `backlogit move {{id}} --status {{status}}` | Change task status |
+| Search | `backlogit_search_items` | `backlogit search {{query}}` | Full-text search |
+| Complete | `backlogit_move_item` | `backlogit move {{id}} --status done` | Mark task complete |
 
 ### Status Values
 
@@ -42,32 +41,56 @@ Use these operations for all backlog interactions. The operation names are abstr
 | Done | `done` |
 | Blocked | `blocked` |
 
-> Note: this project's `.backlogit/config.yaml` defines a wider status
-> enum (`queued`, `active`, `blocked`, `review`, `done`, `accepted`,
-> `rejected`, `archived`). The four abstract statuses above map to the
-> registry defaults; `review`, `accepted`, `rejected`, and `archived` are
-> additional project-specific states agents may also encounter.
-
 ### Extended Operations (Tool-Dependent)
 
-| Feature | MCP Tool(s) | Purpose |
-|---|---|---|
-| SQL query | `backlogit_query_sql` | Token-efficient targeted lookup instead of scanning files |
-| Sync index | `backlogit_sync_index` | Refresh the index after out-of-band edits |
-| Comments | `backlogit_append_comment` | Traceability notes on an item |
-| Telemetry | `backlogit_log_telemetry`, `backlogit_telemetry_harvest` | Structured event logging and harvesting |
-| Memory | `backlogit_save_memory` | Session continuity summaries |
-| Checkpoints | `backlogit_create_checkpoint`, `backlogit_list_checkpoints`, `backlogit_get_checkpoint`, `backlogit_resolve_checkpoint` | Durable state snapshots across sessions |
-| Hook events | `backlogit_poll_hook_events`, `backlogit_ack_hook_events` | Event-driven coordination |
-| Queue | `backlogit_get_queue` | Ready-work selection with filters/grouping |
-| Dependencies | `backlogit_add_dependency`, `backlogit_remove_dependency`, `backlogit_get_dependencies` | Sequencing and blocking relationships |
-| Commit tracking | `backlogit_track_commit` | Associate commits with task IDs |
-| Shipments | `backlogit_create_shipment`, `backlogit_get_shipment`, `backlogit_list_shipments`, `backlogit_claim_shipment`, `backlogit_ship_shipment`, `backlogit_add_to_shipment`, `backlogit_return_blocked` | Release-unit assembly and closure |
-| Stash | `backlogit_stash`, `backlogit_stash_edit`, `backlogit_stash_get`, `backlogit_stash_remove`, `backlogit_stash_archive`, `backlogit_fetch_stash`, `backlogit_harvest_stash` | Parked ideas awaiting triage/promotion |
-| Deliberation | `backlogit_deliberate` | Structured decision capture (problem frame, options, chosen direction) |
-| Semantic links | `backlogit_add_link`, `backlogit_remove_link`, `backlogit_get_links` | Non-hierarchical relationships between items |
-| Lifecycle hygiene | `backlogit_archive_item`, `backlogit_adopt_item`, `backlogit_doctor`, `backlogit_cleanup_checkpoints` | Archival, re-parenting, orphan/duplicate detection |
-| Discovery | `backlogit_get_metadata_catalog`, `backlogit_list_types`, `backlogit_list_templates`, `backlogit_get_wit_metadata`, `backlogit_get_version`, `backlogit_export_command_map` | Type/field/section metadata and cached command reference |
+| Operation | MCP Tool | CLI Command | Purpose |
+|---|---|---|---|
+| `ack_hook_events` | `backlogit_ack_hook_events` | `` | ack hook events |
+| `add_dependency` | `backlogit_add_dependency` | `backlogit dep add {{task_id}} {{depends_on}} --type {{dep_type}}` | add dependency |
+| `add_link` | `backlogit_add_link` | `backlogit link add {{source_id}} {{target_id}} --type {{link_type}}` | add link |
+| `add_to_shipment` | `backlogit_add_to_shipment` | `` | add to shipment |
+| `adopt_item` | `backlogit_adopt_item` | `backlogit adopt {{item_id}} --parent {{new_parent_id}}` | adopt item |
+| `append_comment` | `backlogit_append_comment` | `` | append comment |
+| `archive_item` | `backlogit_archive_item` | `backlogit archive {{id}}` | archive item |
+| `claim_shipment` | `backlogit_claim_shipment` | `backlogit shipment claim {{id}}` | claim shipment |
+| `cleanup_checkpoints` | `backlogit_cleanup_checkpoints` | `backlogit checkpoint cleanup` | cleanup checkpoints |
+| `create_checkpoint` | `backlogit_create_checkpoint` | `backlogit checkpoint create --state-dump {{state_dump}}` | create checkpoint |
+| `create_shipment` | `backlogit_create_shipment` | `backlogit shipment create --title {{title}} --items {{items}}` | create shipment |
+| `deliberate` | `backlogit_deliberate` | `` | deliberate |
+| `doctor` | `backlogit_doctor` | `backlogit doctor` | doctor |
+| `export_command_map` | `backlogit_export_command_map` | `` | export command map |
+| `fetch_stash` | `backlogit_fetch_stash` | `backlogit stash list` | fetch stash |
+| `get_checkpoint` | `backlogit_get_checkpoint` | `backlogit checkpoint get {{filename}}` | get checkpoint |
+| `get_dependencies` | `backlogit_get_dependencies` | `backlogit dep list {{task_id}}` | get dependencies |
+| `get_links` | `backlogit_get_links` | `backlogit link list {{id}}` | get links |
+| `get_metadata_catalog` | `backlogit_get_metadata_catalog` | `` | get metadata catalog |
+| `get_queue` | `backlogit_get_queue` | `backlogit queue view` | get queue |
+| `get_shipment` | `backlogit_get_shipment` | `backlogit shipment get {{id}}` | get shipment |
+| `get_version` | `backlogit_get_version` | `` | get version |
+| `get_wit_metadata` | `backlogit_get_wit_metadata` | `` | get wit metadata |
+| `harvest_stash` | `backlogit_harvest_stash` | `backlogit stash harvest` | harvest stash |
+| `list_checkpoints` | `backlogit_list_checkpoints` | `backlogit checkpoint list` | list checkpoints |
+| `list_shipments` | `backlogit_list_shipments` | `backlogit shipment list` | list shipments |
+| `list_templates` | `backlogit_list_templates` | `` | list templates |
+| `list_types` | `backlogit_list_types` | `` | list types |
+| `log_telemetry` | `backlogit_log_telemetry` | `` | log telemetry |
+| `merge_sync` | `backlogit_merge_sync` | `` | merge sync |
+| `poll_hook_events` | `backlogit_poll_hook_events` | `` | poll hook events |
+| `query` | `backlogit_query_sql` | `backlogit query {{sql}}` | query |
+| `remove_dependency` | `backlogit_remove_dependency` | `backlogit dep remove {{task_id}} {{depends_on}}` | remove dependency |
+| `remove_link` | `backlogit_remove_link` | `backlogit link remove {{source_id}} {{target_id}} --type {{link_type}}` | remove link |
+| `resolve_checkpoint` | `backlogit_resolve_checkpoint` | `backlogit checkpoint resolve {{filename}}` | resolve checkpoint |
+| `return_blocked` | `backlogit_return_blocked` | `backlogit shipment return-blocked --shipment {{shipment_id}} --item {{item_id}} --reason {{reason}}` | return blocked |
+| `save_memory` | `backlogit_save_memory` | `` | save memory |
+| `ship_shipment` | `backlogit_ship_shipment` | `backlogit shipment ship {{id}}` | ship shipment |
+| `stash` | `backlogit_stash` | `backlogit stash add --text {{text}}` | stash |
+| `stash_archive` | `backlogit_stash_archive` | `backlogit stash archive {{stash_id}}` | stash archive |
+| `stash_edit` | `backlogit_stash_edit` | `` | stash edit |
+| `stash_get` | `backlogit_stash_get` | `` | stash get |
+| `stash_remove` | `backlogit_stash_remove` | `` | stash remove |
+| `sync_index` | `backlogit_sync_index` | `backlogit sync` | sync index |
+| `telemetry_harvest` | `backlogit_telemetry_harvest` | `` | telemetry harvest |
+| `track_commit` | `backlogit_track_commit` | `backlogit update {{task_id}} --commit {{sha}}` | track commit |
 
 ## Agent Workflow Patterns
 
@@ -96,7 +119,6 @@ Call backlogit_move_item with:
 ```text
 Call backlogit_move_item with:
   id: "task-id"
-  status: "done"
 ```
 
 ### Listing Ready Tasks
@@ -118,26 +140,15 @@ Call backlogit_update_item with:
 
 If the registry advertises advanced features, prefer them over ad hoc workarounds:
 
-* **Token-efficient lookup** — use `backlogit_query_sql` (`features.sql_query` is true)
-* **Ready-work selection** — use `backlogit_get_queue` (`features.queue` is true)
-* **Dependency reasoning** — use dependency operations (`features.dependencies` is true)
-* **Agent continuity** — use memory and checkpoint operations (`features.memory` and `features.checkpoints` are true)
-* **Traceability** — use comment and commit-tracking operations (`features.comments` and `features.commit_tracking` are true)
-* **Index freshness** — use `backlogit_sync_index` when the workspace was edited outside normal mutation tools
+* **Token-efficient lookup** — use the query operation when `features.sql_query` is true
+* **Ready-work selection** — use queue-aware operations when `features.queue` is true
+* **Dependency reasoning** — use dependency operations when `features.dependencies` is true
+* **Agent continuity** — use memory and checkpoint operations when `features.memory` or `features.checkpoints` are true
+* **Traceability** — use comment or commit-tracking operations when `features.comments` or `features.commit_tracking` are true
+* **Index freshness** — use sync / rehydration operations when the workspace was edited outside normal mutation tools
 
-This project's registry reports `sql_query`, `telemetry`, `memory`,
-`checkpoints`, `comments`, `dependencies`, `queue`, `commit_tracking`,
-`shipments`, `stash`, `semantic_links`, `deliberation`, `discovery`, and
-`lifecycle_hygiene` all enabled — prefer these over manual workarounds.
-`milestones`, `documents`, `definition_of_done`, and `workflow_guides`
-are NOT enabled for this project.
-
-For type-specific field, section, and hierarchy details, follow the
-tool-specific overlay instructions in
-`.github/instructions/backlogit.instructions.md`,
-`.github/instructions/backlogit-sql-schema.instructions.md`, and
-`.github/instructions/backlogit-yaml-header-tooling.instructions.md`
-in addition to this generic guide.
+If a tool-specific overlay instruction file is installed (for example,
+`.github/instructions/backlogit.instructions.md`), follow it in addition to this generic guide.
 
 ## Rules
 

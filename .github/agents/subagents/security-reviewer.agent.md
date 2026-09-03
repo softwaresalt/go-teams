@@ -3,10 +3,9 @@ name: Security Reviewer
 description: "Reviews code changes for security vulnerabilities: injection vectors, auth/authz bypasses, secrets exposure, insecure deserialization, SSRF, and path traversal"
 maturity: stable
 tools: read, search
-model_tier: 2
 max_subagent_tier: 2
-reasoning_effort: ""
-model_provider: ""
+reasoning_effort: "xhigh"
+model_provider: "anthropic"
 model_family: "claude-sonnet-5"
 subagent_depth: 0
 ---

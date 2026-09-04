@@ -40,6 +40,15 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          # On push events dorny/paths-filter diffs github.event.before against
+          # the new SHA. With the default shallow fetch that commit is absent, so
+          # the action falls back to `git fetch <sha>` — which cannot authenticate
+          # under persist-credentials: false and aborts the job (exit 128,
+          # "could not read Username"). Full history makes the base commit
+          # present locally so no authenticated fetch is needed, keeping the
+          # credential hardening intact. Pull-request events are unaffected
+          # (the action resolves the base through the API there).
+          fetch-depth: 0
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
         id: filter
         with:

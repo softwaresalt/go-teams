@@ -388,7 +388,7 @@ vscode:
   has_agent_settings: false
   # This workspace does not use VS Code. Agent, skill, and prompt discovery goes
   # through the workspace-local Copilot CLI plugin, so the installer's VS Code
-  # user-settings step (Step 3.2c) is not applicable here. A stale, gitignored
-  # .vscode/mcp.json remains on disk but is superseded by the root .mcp.json.
+  # user-settings step (Step 3.2c) is not applicable here. The workspace carries
+  # no .vscode/ directory; the root .mcp.json is the only MCP configuration.
 
 drift_report: null

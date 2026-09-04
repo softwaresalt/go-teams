@@ -165,8 +165,8 @@ refresh manifest checksums (raw-byte SHA-256) and re-verify.
 | autoharness CLI | `C:\Python\Python314\Scripts\autoharness.exe` v1.5.0 |
 | autoharness home | `C:\Python\Python314\Lib\site-packages\autoharness\data` |
 | Python | 3.14.3 (`C:\Python\Python314\python.exe`) |
-| VS Code | not used |
-| Python 3.12 | not used (a stale autoharness copy remains installed; harmless) |
+| VS Code | not used — no `.vscode/` directory in the workspace |
+| Python 3.12 | not used — autoharness fully removed from that interpreter |
 
 ## Open items / next steps
 
@@ -175,10 +175,24 @@ refresh manifest checksums (raw-byte SHA-256) and re-verify.
    and `scripts/pre-commit-pipeline-topology.*` are written but never wired into
    `.git/hooks` automatically (P-019). Chain both pre-commit hooks from one
    dispatcher if markdownlint is added later.
-3. **Optional cleanup** — a leftover autoharness package remains under Python 3.12
-   (`C:\Python\Python312\python.exe -m pip uninstall autoharness`) and a stale,
-   gitignored `.vscode/mcp.json` remains on disk. Neither is referenced by the
-   harness or the CLI; removing them is cosmetic.
-4. **2 residual warnings + 1 unresolved placeholder are upstream** autoharness 1.5.0
+3. **2 residual warnings + 1 unresolved placeholder are upstream** autoharness 1.5.0
    template text (`~/.autoharness/` fallback documentation flagged by the portability
    scanner; a literal `{{VARIABLE}}` in `_ship.agent.md` prose). Not install defects.
+
+## Environment cleanup performed (2026-09-04, operator-approved)
+
+Both actions were destructive and were executed only after explicit operator
+instruction (Constitution Principle VII).
+
+* **autoharness removed from Python 3.12.** `pip uninstall` reported success but
+  left an empty `site-packages/autoharness/` directory plus two orphaned
+  `~-toharness-1.4.11.dist-info` / `~utoharness-1.4.11.dist-info` metadata
+  directories (residue from earlier interrupted installs — these were the source
+  of the recurring `WARNING: Ignoring invalid distribution ~utoharness` noise on
+  every pip invocation). All three were verified as autoharness 1.4.11 metadata
+  and removed. Python 3.12 now reports no autoharness and emits no pip warnings.
+  Python 3.14 (v1.5.0) verified unaffected afterward.
+* **`.vscode/` deleted.** It contained only a superseded `mcp.json` registering
+  graphtor-docs; the root `.mcp.json` is authoritative and registers all six
+  servers. The directory was untracked and gitignored, so removal produces no
+  git diff. The profile no longer references it.

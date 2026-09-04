@@ -1,79 +1,78 @@
 # go-teams Development Guidelines
 
-Last updated: 2026-07-08
+Last updated: 2026-09-04
 
-go-teams is a standalone Go CLI for autonomous Microsoft Teams live-transcription
-and audio capture via headless browser automation (chromedp).
+go-teams is a standalone Go CLI for autonomous Microsoft Teams live-transcription and audio capture via headless browser automation (chromedp).
 
 ## Technology Stack
 
-| Layer           | Technology                | Notes                                   |
-|-----------------|---------------------------|------------------------------------------|
-| Language        | Go 1.23+                  | module not yet initialized — recommend `go mod init` targeting Go 1.23+ |
-| Build           | go                        | `go build ./...`                         |
-| Test            | go test                   | `go test ./...`                          |
-| Lint            | golangci-lint             | `golangci-lint run`                      |
-| Format          | gofmt                     | `gofmt -l .`                             |
-| CI              | GitHub Actions            | No workflow yet configured; add one once go.mod exists (build, vet, lint, test matrix) |
-| Browser automation | chromedp (planned)     | Pure-Go CDP client — no external driver downloads |
-| CLI framework   | spf13/cobra (planned)     | Command routing: `auth`, `join`, `schedule` |
-| Scheduler       | robfig/cron/v3 (planned)  | Cron-based daemon mode |
+| Layer           | Technology                | Notes                                 |
+|-----------------|---------------------------|---------------------------------------|
+| Language        | Go 1.26 | (Go 1.26; standard library first, minimal third-party dependencies)          |
+| Build           | go            | `go build ./...`                   |
+| Test            | go test           | `go test ./...`                    |
+| Lint            | golangci-lint                | `golangci-lint run`                    |
+| Format          | gofmt             | `gofmt -l .`                  |
+| CI              | GitHub Actions           | GitHub Actions runs go build, go vet (including -tags=integration), golangci-lint, and go test -race with coverage. Formatting is NOT checked in CI — gofmt is enforced only by the local pre-push gate. Release and CLI-reference-drift workflows run separately.                          |
+| Browser automation | chromedp | Pure-Go CDP client — no external driver downloads |
+| CLI framework   | spf13/cobra | Command routing: `auth`, `join`, `schedule` |
+| Scheduler       | robfig/cron/v3 | Cron-based daemon mode |
+| Audio encoding  | braheezy/shine-mp3 | Pure-Go MP3 encoder |
+| Assertions      | stretchr/testify | Unit and integration test assertions |
 
 ## Project Structure
 
 ```text
 go-teams/
 ├── cmd/
-│   └── teams-cli/        # main package (Cobra root command) — not yet created
+│   └── teams-cli/       # main package (Cobra root command)
 ├── internal/
-│   ├── browser/          # chromedp allocation, stealth flags, FSM
-│   ├── auth/              # UserDataDir session persistence, auth command
-│   ├── transcript/        # DOM caption interception, dedup, Markdown writer
-│   ├── audio/              # pure-Go MP3 encoding, audio capture
-│   └── scheduler/          # cron-based daemon mode
-├── docs/
-│   ├── design-docs/
-│   └── product-specs/
-├── .backlogit/            # backlog workflow state
-├── .github/                # agent harness (this install)
-└── go.mod                 # not yet created
+│   ├── audio/           # pure-Go MP3 encoding, audio capture
+│   ├── browser/         # chromedp allocation, stealth flags, FSM
+│   ├── capture/         # capture orchestration
+│   ├── cli/             # command wiring and flag parsing
+│   ├── config/          # configuration loading and validation
+│   ├── scheduler/       # cron-based daemon mode
+│   ├── teams/           # Teams meeting join and auth flows
+│   └── transcript/      # DOM caption interception, dedup, Markdown writer
+├── docs/                # durable knowledge (design-docs, product-specs, plans, ...)
+├── scripts/             # harness helper scripts
+├── .backlogit/          # backlog workflow state
+├── .github/             # agent harness
+└── go.mod
 ```
 
 ## Commands
 
 ```bash
 go build ./...              # Build
-go test ./...                # Run all tests
-golangci-lint run             # Lint
-gofmt -l .                     # Format check
-gofmt -w .                     # Format fix
-go vet ./...                   # Static check
+go test ./...               # Run all tests
+golangci-lint run               # Lint
+gofmt -l .             # Format check
+gofmt -w .                  # Format fix
+go vet ./...                # Static check
+go test -tags=integration ./...   # Integration tests
 ```
 
 ## Code Style and Conventions
 
 ### Error Handling
 
-Errors are returned, never panicked, from library code. Wrap with context
-using `fmt.Errorf("...: %w", err)`. Sentinel errors use `errors.Is`/`errors.As`
-comparisons.
+Errors are returned, never panicked, from library code. Wrap with context using `fmt.Errorf("...: %w", err)`. Sentinel errors use `errors.Is`/`errors.As` comparisons.
 
 ### Naming
 
-PascalCase for exported identifiers, camelCase for unexported identifiers;
-package names are short, lowercase, and free of underscores.
+PascalCase (MixedCaps) for exported identifiers, camelCase for unexported identifiers; package names are short, lowercase, and free of underscores.
 
 ### Documentation
 
-Godoc comments on every exported type, function, and package, starting with
-the identifier name.
+Godoc comments on every exported type, function, and package, starting with the identifier name.
 
 ### Testing
 
 * TDD required: write tests first, verify they fail, then implement
-* Test tiers:
-  * Unit: `go test ./...` — table-driven tests co-located as `*_test.go`
-  * Integration: `go test -tags=integration ./...` — gated behind the `integration` build tag (Teams meeting join, chromedp session flows)
+* Test tiers in `co-located *_test.go files` directory:
+Unit: `go test ./...` with table-driven tests co-located as `*_test.go`; Integration: `go test -tags=integration ./...` gated behind the `integration` build tag (Teams meeting join, chromedp session flows).
 
 ## Search Strategy
 
@@ -85,9 +84,8 @@ tokens proportional to file size.
 **Search tool preference order:**
 
 1. When the `agent-engram` capability pack is enabled and reachable: `unified_search`, `query_memory`, `map_code`, `list_symbols`, `impact_analysis`, `query_graph`
-2. When the `graphtor-docs` capability pack is enabled and reachable: `search_local_docs`, `search_semantic`, `research_topic` for documentation, API references, and concept research
-3. Otherwise use workspace-indexed tools (if available): semantic search, symbol lookup, call graphs
-4. File-based fallback: grep, glob, view — only when indexed results are insufficient
+2. Otherwise use workspace-indexed tools (if available): semantic search, symbol lookup, call graphs
+3. File-based fallback: grep, glob, view — only when indexed results are insufficient
 
 ## Durable Knowledge Layout
 
@@ -132,8 +130,6 @@ When the workspace enabled the `agent-intercom` capability pack:
 * use transmit / standby flows when blocked on operator clarification or when intentionally pausing for instructions
 * if the intercom service is unreachable, warn that remote visibility is degraded and avoid pretending approval or operator awareness exists
 
-> No intercom MCP server is currently configured in this workspace's `.mcp.json`. This overlay is installed proactively (per the `full` preset) and activates automatically once one is added.
-
 ### agent-engram
 
 When the workspace enabled the `agent-engram` capability pack:
@@ -166,18 +162,6 @@ When the workspace enabled the `browser-verification` capability pack:
 * treat OAuth, email, SMS, payments, CAPTCHAs, or other external flows as explicit human checkpoints
 * carry browser findings into runtime verification and operational closure rather than leaving them as informal notes
 
-> This pack verifies the harness's own web-facing surfaces (if any). It is
-> distinct from this project's chromedp automation product code, which is
-> reviewed by the go-reviewer and concurrency-reviewer personas.
-
-### graphtor-docs
-
-When the workspace enabled the `graphtor-docs` capability pack:
-
-* verify the graphtor-docs server is reachable (`get_status`) once per session
-* prefer `search_local_docs`, `search_semantic`, and `research_topic` over broad web or filesystem search for domain concepts and API references
-* fall back to grep/view over `docs/` only when the server is unavailable
-
 ### continuous-learning
 
 When the workspace enabled the `continuous-learning` capability pack:
@@ -196,7 +180,6 @@ When the workspace enabled the `strict-safety` capability pack:
 * express risky work as `ProposedAction` entries with `ActionRisk` and `ActionResult`
 * require explicit approval before destructive actions and prefer approval for high-blast-radius actions
 * keep risky action records visible in plan hardening, review, runtime verification, and operational closure
-* the planned Teams auth flow (interactive login/MFA, persisted `UserDataDir` session state) is security-sensitive — classify changes to it as `ActionRisk: high` by default
 
 ### release-observability
 
@@ -204,7 +187,7 @@ When the workspace enabled the `release-observability` capability pack:
 
 * follow `.github/instructions/release-observability.instructions.md`
 * produce monitoring plans with SLIs, dashboards, baselines, and alert thresholds before merge
-* complete pre-deploy audit checklists for changes with runtime, migration, or rollout risk
+* complete pre-deploy audit checklists for runtime, migration, or rollout-risk changes
 * define explicit post-deploy observation windows with owner and duration
 * declare rollback triggers with named metrics and thresholds
 * carry all release-observability artifacts into operational closure
@@ -220,6 +203,17 @@ When the workspace enabled the `adversarial-review` capability pack:
 * treat HIGH-confidence P0/P1 findings as gate-blocking
 * feed remediation queue entries into backlog
 
+### graphtor-docs
+
+When the workspace enabled the `graphtor-docs` capability pack:
+
+* follow `.github/instructions/graphtor-docs.instructions.md`
+* verify the graphtor-docs server / MCP surface is reachable and sources are indexed before depending on indexed documentation retrieval
+* prefer `search_local_docs`, `search_semantic`, and `research_topic` for conceptual, API-oriented, or documentation questions before broad web search or raw file scans
+* use `traverse_doc_links` to follow related documentation and `list_sources` to confirm indexed coverage
+* if the server is unavailable or sources are not indexed, fall back to grep, glob, or direct file reading and note reduced confidence
+* treat `.graphtor/` generated artifacts as tool-managed state rather than files to hand-edit casually
+
 ## Remote Operator Integration
 
 ### agent-intercom
@@ -230,8 +224,6 @@ When `agent-intercom` is available:
 * Broadcast progress at meaningful phase transitions — do not broadcast every trivial step.
 * Route approval for destructive actions through the intercom approval workflow before executing.
 * If intercom becomes unreachable mid-task, warn that operator visibility is degraded and continue only with safe, non-destructive work.
-
-The `ping-loop.prompt.md` prompt is available in `.github/prompts/` for sustained heartbeat sessions when the pack is installed.
 
 ### agent-engram
 
@@ -249,12 +241,6 @@ When a backlog tool is active in the workspace:
 * use comments, checkpoints, and commit-tracking operations when they add traceability
 * refresh the backlog index or query cache after out-of-band edits before trusting query results
 * avoid inventing parallel markdown trackers outside the configured backlog tool surface
-
-This workspace uses **backlogit** at `.backlogit/`. See
-`.github/instructions/backlogit.instructions.md`,
-`.github/instructions/backlogit-sql-schema.instructions.md`, and
-`.github/instructions/backlogit-yaml-header-tooling.instructions.md` for
-tool-specific query, queue, checkpoint, and frontmatter details.
 
 Generated by autoharness | Template: copilot-instructions.md.tmpl
 

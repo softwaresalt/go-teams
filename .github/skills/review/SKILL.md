@@ -133,21 +133,17 @@ P-017, this local review record is the authoritative merge-readiness signal:
 
 ### Conditional (based on changed files)
 
-Use a different model from the caller when available to force genuine diversity of critique. Cross-model is preferred but not blocking.
+Use a different model from the caller when available to force genuine diversity of critique. Cross-model is preferred but not blocking. For high-risk template, policy, review-surface, or schema/skill diffs, one eligible conditional persona may use the `model_routing.anchor_review` anchor reviewer route when model-specific dispatch is available. If unavailable, record declared degradation and apply the same rubric with the caller's model rather than skipping the persona.
 
 | Persona Subagent | Select when diff touches | Suggested Model |
 |---|---|---|
 | **Architecture Strategist** | Module boundaries, new abstractions, dependency changes | Different from caller |
-| **Concurrency Reviewer** | Concurrent/async patterns (goroutines, channels, sync primitives, context cancellation) | Different from caller |
+| **Concurrency Reviewer** | Concurrent/async patterns | Different from caller |
 | **Scope Boundary Auditor** | Changes spanning multiple domains or exceeding expected scope | Different from caller |
+| **Agent-Native Parity Reviewer** | MCP SDKs, tool handlers, agent-exposed actions, or user/agent parity-critical flows | Different from caller |
 | **Security Reviewer** | Auth middleware, public endpoints, input handling, permission checks, secret management | Different from caller |
-
-> **Note for this workspace**: Agent-Native Parity Reviewer, Template Integrity
-> Reviewer, and Schema-CLI-Docs Coupling Reviewer are not installed — this
-> project is not an MCP server, does not produce template-driven product
-> surfaces, and does not commonly span schema/CLI/docs diffs. If a future
-> chore introduces one of those surfaces, re-run tune-harness to add the
-> relevant persona.
+| **Template Integrity Reviewer** | `.tmpl` files, Markdown workflow assets, generated artifact references, or policy/instruction surfaces | Different from caller |
+| **Schema-CLI-Docs Coupling Reviewer** | Cross-domain diffs spanning schemas, CLI verification logic, install/tune skills, and operator docs | Different from caller |
 
 ## Workflow
 
@@ -161,12 +157,12 @@ Use a different model from the caller when available to force genuine diversity 
 ### Step 2: Route Personas
 
 1. Always-on: spawn Constitution Reviewer, Go Reviewer, Correctness Reviewer, Maintainability Reviewer, Learnings Researcher
-2. Conditional: analyze changed file paths and content patterns to select additional personas:
-   * Select **Architecture Strategist** when the diff touches module boundaries, new abstractions, or dependency changes
-   * Select **Concurrency Reviewer** when the diff touches goroutines, channels, `sync` primitives, or `context.Context` cancellation wiring
-   * Select **Scope Boundary Auditor** when the diff spans multiple domains or appears to exceed the task's declared scope
-   * Select **Security Reviewer** (`security-reviewer.agent.md`) when the diff touches: `internal/auth/*`, `internal/browser/*`, session/config files, or content containing `login`, `token`, `password`, `credential`, `session`, `cookie`, `secret`, `key`, `UserDataDir`, `permission`, `role`
-3. Broadcast the routing decision with persona count
+2. Conditional: analyze changed file paths, content patterns, and workspace agent-native signals to select additional personas:
+   * Select **Security Reviewer** (`security-reviewer.agent.md`) when the diff touches: authentication or authorization code, public endpoint handlers, user input processing, permission or role checks, secret or credential management, or files matching `internal/cli/auth.go, internal/cli/root.go, internal/teams/**, internal/browser/**, internal/config/**, **/session*.go, **/token*.go; content keywords: login, token, password, credential, session, cookie, secret, key, UserDataDir, permission, role, exec.Command`
+   * Select **Template Integrity Reviewer** (`template-integrity-reviewer.agent.md`) when the diff touches template files, Markdown harness artifacts, review/policy/instruction assets, or generated-artifact reference tables
+   * Select **Schema-CLI-Docs Coupling Reviewer** (`schema-cli-docs-coupling-reviewer.agent.md`) when the diff spans schema files, `src/` verification logic, install/tune skills, or operator-facing documentation in the same change set
+3. When `model_routing.anchor_review` is dispatchable and the diff touches high-risk template, policy, review-surface, or schema/skill contracts, assign the anchor reviewer to one triggered conditional persona (Template Integrity Reviewer by default, otherwise Schema-CLI-Docs Coupling Reviewer). If model-specific dispatch is unavailable, record `TOOL_DEGRADED: model-specific-review-routing — declared fallback: same-model rubric pass` and apply the same rubric.
+4. Broadcast the routing decision with persona count, anchor reviewer assignment, and any declared degradation
 
 ### Step 3: Spawn Persona Subagents
 
@@ -230,6 +226,7 @@ validation before blocking the build.
 * All P0 findings are addressed before the review is marked complete
 * P1 findings require explicit acknowledgment (fix or defer with rationale)
 * The review report accurately reflects all findings and their resolution status
+
 
 ## Model Routing
 

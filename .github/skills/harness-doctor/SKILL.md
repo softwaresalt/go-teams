@@ -34,10 +34,10 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 
 ## Variables
 
-| Variable | Value for this workspace |
+| Variable | Purpose |
 |---|---|
-| Harness manifest path | `.autoharness/harness-manifest.yaml` |
-| Install-time autoharness version | `1.4.11` (recorded for reference; current-version drift is resolved live via the `autoharness version` CLI, not from this value) |
+| `.autoharness/harness-manifest.yaml` | Path to the installed harness manifest (default: `.autoharness/harness-manifest.yaml`) |
+| `1.5.0` | Install-time autoharness version baked at install; recorded for reference. Current-version drift is resolved live via the `autoharness version` CLI, not from this value |
 
 ## Workflow
 
@@ -70,7 +70,7 @@ Compare the version that performed the install against the current autoharness v
 
 1. Read `autoharness_version` from the manifest (the version that performed the install).
 2. Resolve the **current** autoharness version live by running the `autoharness version` CLI at diagnostic time (this is the version that would perform upgrades).
-   * If the CLI is unavailable, current-version resolution has **failed** — do NOT substitute the install-time version value as the current version (comparing install-time against install-time would report a false match). Record **WARN — current autoharness version could not be resolved; drift undetectable** and skip the drift classification below.
+   * If the CLI is unavailable, current-version resolution has **failed** — do NOT substitute the install-time `1.5.0` value as the current version (comparing install-time against install-time would report a false match). Record **WARN — current autoharness version could not be resolved; drift undetectable** and skip the drift classification below.
 3. When the current version is resolved, compare it against the manifest version and classify the drift:
 
 | Condition | Signal |
@@ -119,7 +119,7 @@ Verify that internal cross-references within harness artifacts resolve correctly
    * Agent references (e.g., `spawns sub-agent: foo.agent.md`)
 3. For each relative path reference, resolve it relative to the directory of the file that contains the link (not relative to the workspace root), then normalize the result to a workspace-absolute path for existence checking. Flag any normalized path that does not exist on disk.
 4. For skill invocations: check that a corresponding skill directory exists under `.github/skills/`.
-5. For agent references: check that the corresponding `.agent.md` file exists under `.github/agents/` (or `.github/agents/subagents/`).
+5. For agent references: check that the corresponding `.agent.md` file exists under `.github/agents/`.
 
 **Phase 4 health signal**:
 * Zero broken references → **PASS**
@@ -137,7 +137,7 @@ This phase doubles as a pre-flight gate. Running harness-doctor at session start
 1. Read the list of required MCP tool names from the installed harness. Sources (in order):
    * `.github/instructions/` files that list tool names in their frontmatter or body
    * `AGENTS.md` if it enumerates required tools
-   * Known harness defaults for this workspace: `backlogit` (backlogit capability pack), `engram` (agent-engram capability pack), `graphtor-docs` (graphtor-docs capability pack), intercom tools (agent-intercom capability pack — not yet configured)
+   * Known harness defaults: `backlogit` (when backlogit capability pack is installed)
 2. For each declared tool name, attempt a lightweight connectivity check:
    * Invoke a read-only operation (e.g., list or status) using the tool.
    * Record: tool name, reachable (yes/no), response latency (if measurable).

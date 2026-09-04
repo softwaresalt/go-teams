@@ -28,10 +28,10 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 
 ## Variables
 
-| Variable | Value for this workspace |
+| Variable | Purpose |
 |---|---|
-| Experiment branch prefix | `experiment/` |
-| Experiment results directory | `docs/experiments` |
+| `experiment/` | Git branch prefix for experiment branches (default: `experiment/`) |
+| `docs/experiments` | Directory for persisted experiment logs (default: `docs/experiments`). Configurable; not a hardcoded path. |
 
 ## Workflow
 

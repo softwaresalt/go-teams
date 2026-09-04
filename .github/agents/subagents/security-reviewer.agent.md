@@ -3,10 +3,9 @@ name: Security Reviewer
 description: "Reviews code changes for security vulnerabilities: injection vectors, auth/authz bypasses, secrets exposure, insecure deserialization, SSRF, and path traversal"
 maturity: stable
 tools: read, search
-model_tier: 2
 max_subagent_tier: 2
-reasoning_effort: ""
-model_provider: ""
+reasoning_effort: "xhigh"
+model_provider: "anthropic"
 model_family: "claude-sonnet-5"
 subagent_depth: 0
 ---
@@ -28,10 +27,7 @@ You are the Security Reviewer persona. You evaluate code changes for exploitable
 
 This persona is conditionally invoked when the diff touches security-sensitive surfaces:
 
-* File paths matching `internal/auth/*`, `internal/browser/*`, `**/session*.go`, `**/config*.go`
-* Content keywords: `login`, `token`, `password`, `credential`, `session`, `cookie`, `secret`, `key`, `UserDataDir`, `permission`, `role`
-* Any `exec.Command`/`exec.CommandContext` invocation
-* Any file write to a persisted profile/session directory
+internal/cli/auth.go, internal/cli/root.go, internal/teams/**, internal/browser/**, internal/config/**, **/session*.go, **/token*.go; content keywords: login, token, password, credential, session, cookie, secret, key, UserDataDir, permission, role, exec.Command
 
 ## Confidence Threshold
 

@@ -4,7 +4,7 @@ description: "Produce release-readiness, releasability evidence, monitoring, rol
 
 ## Operational Closure
 
-Turn "implemented" into "safely absorbed by the running system". This skill creates the artifacts and decisions that close the loop after code review, CI, and runtime verification.
+Turn “implemented” into “safely absorbed by the running system”. This skill creates the artifacts and decisions that close the loop after code review, CI, and runtime verification.
 
 ## When to Use
 
@@ -22,6 +22,7 @@ Invoke when a feature, fix, or risky change is ready to hand off into merge, dep
 
 * Closure artifact at `docs/closure/{YYYY-MM-DD}-{slug}-closure.md`
 * Structured releasability evidence summarizing whether the change is `READY`, `READY_WITH_CONDITIONS`, or `BLOCKED`
+* A **compaction status** field (`pending` → `done` / `degraded`) recording P-020 post-merge context compaction state
 * Follow-up tasks or compound-learnings triggers when needed
 
 ## Required Protocol
@@ -78,6 +79,7 @@ The closure artifact MUST include:
 * **Rollback procedure** — the actual rollback or mitigation action to take when the trigger fires
 * **Validation window** — how long the change should be watched
 * **Owner** — who is responsible for observing or acting
+* **Compaction status (P-020)** — the post-merge context compaction state, one of `pending`, `done`, or `degraded`. operational-closure initializes this field to `pending` when it creates the closure artifact; the Ship post-merge closure finalizes it to `done` after compact-context completes, or `degraded` if compact-context was invoked but failed (non-blocking). Allowed transitions are `pending` → `done` and `pending` → `degraded` only. The Orchestrator's next-shipment routing (P-001 + P-020) treats `pending`, unset, or missing as an incomplete post-merge closure that blocks routing, and `done` or `degraded` as satisfied.
 * **Releasability evidence** — the final structured record showing which required evidence from `runtime_validation.releasability` is satisfied, conditional, or still blocked
 
 ### Step 3: Record Readiness Status
@@ -92,7 +94,36 @@ The closure artifact is the canonical releasability evidence record. Do not
 collapse validator outcomes back into free-form prose after they have been
 structured.
 
-### Step 4: Feed Back into the Harness
+### Step 4: Source artifact cleanup (backlogit)
+
+**Skip condition**: run this step ONLY when `mode` is `post-merge`. On a
+`pre-merge` or `post-deploy` invocation, skip it entirely. Archiving a source
+artifact before the PR merges would violate P-021 C5, which permits retirement
+of the source stash entry only after a successful merge, and the merge commit
+SHA required below does not exist yet at pre-merge time.
+
+Retire the intake artifacts that produced this release unit so the backlog does
+not accumulate orphaned sources.
+
+1. Read the shipped work item's `custom_fields` for `source_stash_id` and
+   `source_deliberation_id`. Use `backlogit_query_sql` (for example
+   `SELECT id, json_extract(custom_fields, '$.source_stash_id') AS stash_id,
+   json_extract(custom_fields, '$.source_deliberation_id') AS deliberation_id
+   FROM items WHERE id = '<shipped_item_id>'`) rather than scanning markdown.
+2. When `source_stash_id` is present and the stash entry is still `active`,
+   archive it with `backlogit_stash_archive`. Prefer archival over
+   `backlogit_stash_remove` — archiving preserves traceability, removal is
+   destructive and deprecated.
+3. When `source_deliberation_id` is present and the deliberation is fully
+   superseded by shipped work, archive it with `backlogit_archive_item` and pass
+   the merge commit SHA so the decision remains traceable to the release.
+4. Never delete a source artifact. If either ID is missing, unreadable, or points
+   at an item that no longer exists, record the discrepancy as a closure
+   follow-up and continue — cleanup is never a release blocker.
+5. Record which source artifacts were archived in the closure artifact so the
+   stash-to-shipment chain stays auditable.
+
+### Step 5: Feed Back into the Harness
 
 When the closure process reveals durable knowledge:
 
@@ -112,7 +143,9 @@ Operational closure is the compositional bridge from code production to safe abs
 * Risky actions and their outcomes are visible when they affect release safety
 * Rollback triggers and rollback procedures are explicit and actionable
 * Ownership and validation windows are recorded
+* Source stash and deliberation artifacts are archived (never deleted) after the release unit ships
 * Durable runtime learnings are fed back into the harness when appropriate
+
 
 ## Model Routing
 

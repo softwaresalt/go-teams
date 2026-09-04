@@ -9,11 +9,8 @@ applyTo: '**'
 
 ### I. Safety-First Go
 
-All production code MUST be written in Go (1.23+).
-Use of the `unsafe` package is forbidden without an explicit, documented
-justification reviewed by the security-reviewer persona. `golangci-lint run`
-MUST pass with zero issues. All error returns MUST be checked or explicitly
-discarded with `_ =` and a comment explaining why.
+All production code MUST be written in Go (1.26).
+`unsafe` package forbidden without documented, security-reviewed justification. `golangci-lint run` MUST pass with zero issues; all findings are hard errors. Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why.
 
 **Rationale**: Explicit error handling and safety enforcement prevent data corruption,
 silent failures, and state loss during unattended agent operation.
@@ -21,12 +18,11 @@ silent failures, and state loss during unattended agent operation.
 ### II. Test-First Development (NON-NEGOTIABLE)
 
 Every feature or chore MUST have tests written before implementation code. The test
-directory structure (unit tests co-located as `*_test.go` beside implementation
-files; integration tests gated behind the `integration` build tag) MUST be
-maintained. All tests MUST pass via `go test ./...` before any code is merged.
-Steps: write test, confirm it fails (red), implement, confirm it passes
-(green). Never write production code before the corresponding test exists
-and has been observed to fail.
+directory structure (Unit tests co-located as `*_test.go` beside implementation files; integration tests gated behind the `integration` build tag.) MUST be maintained. All tests MUST
+pass via `go test ./...` before any code is merged. Steps: write test,
+confirm it fails (red), implement, confirm it passes (green). Never write
+production code before the corresponding test exists and has been observed
+to fail.
 
 **Rationale**: Agents operating unattended for extended periods cannot
 self-verify correctness without a robust test suite. Regressions caught
@@ -77,10 +73,7 @@ use feature flags or conditional configuration.
 
 **Rationale**: Every additional dependency increases build time, attack
 surface, and maintenance burden. Agents should minimize the changes they
-introduce to the dependency graph. This applies directly to go-teams: chromedp,
-cobra, and cron/v3 are the only planned third-party dependencies; new
-additions must be justified against the zero-dependency, standalone-binary
-mandate in the architecture doc.
+introduce to the dependency graph.
 
 ### VII. Destructive Command Approval (NON-NEGOTIABLE)
 
@@ -145,6 +138,20 @@ creating parallel task state outside the configured backlog workspace.
 ordering, and durable execution traces. Treating it as a thin file store would discard the very
 capabilities that justify enabling the overlay.
 
+### Capability Overlay — graphtor-docs
+
+When the workspace enables the `graphtor-docs` capability pack, agents MUST use the configured
+graphtor-docs workflow for indexed local documentation search, semantic retrieval, doc-link
+traversal, and source-index status checks. Agents MUST prefer graphtor-docs indexed retrieval over
+broad web search or raw filesystem scanning for conceptual, API-oriented, or documentation
+questions, MUST verify server reachability and index freshness before trusting results, and MUST
+not hand-edit tool-managed `.graphtor/` artifacts as a substitute for re-indexing or configuration
+updates.
+
+**Rationale**: graphtor-docs exists to resolve domain concepts and referenced APIs from an indexed
+local documentation corpus. Defaulting immediately to broad web search or raw file scanning wastes
+context budget and discards the retrieval leverage the overlay was meant to provide.
+
 ### IX. Git-Friendly Persistence
 
 All workspace state managed by the agent harness MUST be serializable to
@@ -188,15 +195,15 @@ commit-traceability links and backlog commit associations.
 ## Technical Constraints
 
 | Concern         | Constraint                                                       |
-|-----------------|--------------------------------------------------------------------|
-| Language        | Go 1.23+                                                          |
-| Build           | `go build ./...`                                                  |
-| Test            | `go test ./...`                                                   |
+|-----------------|------------------------------------------------------------------|
+| Language        | Go 1.26                        |
+| Build           | `go build ./...`                                              |
+| Test            | `go test ./...`                                               |
 | Lint            | `golangci-lint run`                                               |
-| Format          | `gofmt -l .`                                                      |
-| CI              | GitHub Actions (not yet configured)                               |
-| Error Handling  | explicit `if err != nil` checks; errors wrapped with `fmt.Errorf("...: %w", err)` |
-| Documentation   | godoc comments (`// Identifier ...`) on all exported identifiers  |
+| Format          | `gofmt -l .`                                             |
+| CI              | GitHub Actions                                                  |
+| Error Handling  | explicit `if err != nil` with `fmt.Errorf("...: %w", err)` wrapping                                                |
+| Documentation   | // Identifier ... godoc comment                                            |
 
 ## Quality Gates
 
@@ -205,7 +212,7 @@ Run in order. Do not skip any gate.
 ```text
 go vet ./...
 golangci-lint run
-gofmt -l .
+test -z "$(gofmt -l .)"
 go test ./...
 ```
 
@@ -226,8 +233,10 @@ go test ./...
    messages follow conventional commits format (`feat:`, `fix:`, `docs:`, `test:`).
 5. **No dead code**: Placeholder modules MUST be replaced or removed before a
    release unit is considered complete.
-6. **Operational closure**: Work is not complete at "green CI" if runtime validation,
-   monitoring setup, or release handoff remains unresolved.
+6. **Operational closure**: Work is not complete at “green CI” if runtime validation,
+   monitoring setup, or release handoff remains unresolved. Required post-merge context
+   compaction (**P-020**) is part of the mandatory closure set: Ship MUST invoke the
+   compact-context skill at every post-merge closure.
 
 ### Task Granularity (NON-NEGOTIABLE)
 
@@ -251,8 +260,8 @@ All agents MUST follow that protocol. The summary table below is a quick
 reference; the instruction file is authoritative.
 
 | Counter                         | Limit | Action                                              |
-|----------------------------------|-------|-------------------------------------------------------|
-| Consecutive operation failures  | 3     | Stop, log to `docs/memory/`, prompt user             |
+|---------------------------------|-------|-----------------------------------------------------|
+| Consecutive operation failures  | 3     | Stop, log to `docs/memory/`, prompt user        |
 | Skill-managed loop (build/fix-ci)| 5    | Skill limit governs inside loop scope               |
 | Same-error recurrence in loop   | 3     | Universal breaker overrides: stop, log, prompt      |
 | Tasks attempted in session      | 20    | Halt, write memory checkpoint, exit                 |
@@ -264,9 +273,9 @@ reference; the instruction file is authoritative.
 ### Model Routing
 
 | Tier                    | Model Class  | Agents                                         | Rationale                       |
-|-------------------------|--------------|--------------------------------------------------|-----------------------------------|
+|-------------------------|--------------|------------------------------------------------|---------------------------------|
 | **Tier 1 (Fast/Cheap)** | Smaller model | prompt-builder, learnings-researcher          | Low-complexity tasks            |
-| **Tier 2 (Standard)**  | Medium model | ship, go-engineer, harness-architect           | Routine code, scaffolding, coordination |
+| **Tier 2 (Standard)**  | Medium model | ship, go-engineer, harness-architect | Routine code, scaffolding, coordination |
 | **Tier 3 (Frontier)**  | Large model  | stage                                          | Deep analysis and architecture  |
 
 ## Governance
@@ -292,7 +301,7 @@ with these principles.
 | II. Test-First Development | NON-NEGOTIABLE | P-002/P-004 policies; harness-architect red phase; build-feature green phase |
 | III. Workspace Isolation | MUST | Agent runtime path resolution within workspace root |
 | IV. CLI Containment | NON-NEGOTIABLE | Agent runtime cwd boundary enforcement |
-| V. Structured Observability | MUST | Broadcasting, commit messages, structured reporting |
+| V. Structured Observability | MUST | Broadcasting, commit messages, structured reporting; P-020 post-merge compaction closure gate |
 | VI. Single Responsibility | SHOULD | Code review persona checks on dependency additions |
 | VII. Destructive Approval | NON-NEGOTIABLE | P-005 violation telemetry; strict-safety enforcement when enabled |
 | VIII. Safety Modes | MUST | safety-modes skill invocation; strict-safety decision gate when enabled |
@@ -316,4 +325,4 @@ than proceeding.
   principle violated, the justification, and the simpler alternative that
   was rejected.
 
-**Version**: 1.0.0 | **Ratified**: 2026-07-08 | **Generated by**: autoharness
+**Version**: 1.0.0 | **Ratified**: 2026-09-04 | **Generated by**: autoharness

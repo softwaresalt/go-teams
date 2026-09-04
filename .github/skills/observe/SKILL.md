@@ -47,6 +47,7 @@ Invoke when:
 * Evidence is preserved through citations or artifact references
 * The record is safe to store in the repository
 
+
 ## Model Routing
 
 This skill operates at **Tier 1 (Fast/Cheap)** — observation capture is low-complexity.

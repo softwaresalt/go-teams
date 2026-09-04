@@ -57,11 +57,12 @@ A findings artifact at `docs/decisions/{YYYY-MM-DD}-{slug}-spike.md` (long-lived
 knowledge) with an optional work item in `.backlogit/queue/` for
 workflow tracking.
 
-When `promote_to` includes `queue` (or `ask` resolves to `queue`), the spike is
-also created as a backlogit work item at conclusion with `artifact_type: spike`,
-`labels: ["spike"]`, and a status of `done`. The work item filename follows the
-configured suffix convention: `{id}-{suffix}-{slug}.md`. If `promote_to` does
-not include `queue`, no backlog work item is created.
+When the `backlogit` capability pack is installed and `promote_to` includes
+`queue` (or `ask` resolves to `queue`), the spike is also created as a backlog
+work item at conclusion with `artifact_type: spike`, `labels: ["spike"]`, and
+a status of `done`. The work item filename follows the configured
+suffix convention: `{id}-{suffix}-{slug}.md`. If `promote_to` does not include
+`queue`, no backlog work item is created regardless of the installed capability pack.
 
 ## Required Protocol
 
@@ -95,8 +96,14 @@ When the `agent-engram` capability pack is installed, prefer indexed search for
 related modules, symbols, and prior context before falling back to broader
 file scans.
 
-Query the backlog for related spike items, deliberation outcomes, or tasks
-that may have already explored this question.
+When the `graphtor-docs` capability pack is installed, prefer graphtor-docs indexed
+documentation retrieval for concept, API, and prior-art documentation lookup before
+broad file or web search — use Engram for code relationships and graphtor-docs for
+documentation.
+
+When the `backlogit` capability pack is installed and search is supported, query
+the backlog for related spike items, deliberation outcomes, or tasks that may
+have already explored this question.
 
 * Search `docs/decisions/` for prior spike artifacts and deliberation outcomes
 * Search `docs/compound/` for relevant institutional learnings
@@ -124,6 +131,12 @@ When the `agent-engram` capability pack is installed, follow
 `.github/instructions/agent-engram.instructions.md`: prefer indexed search for
 related modules, symbols, and prior context before falling back to broader file
 scans.
+
+When the `graphtor-docs` capability pack is installed, follow
+`.github/instructions/graphtor-docs.instructions.md`: prefer graphtor-docs indexed
+documentation retrieval for concept, API, and prior-art documentation lookup before
+broad file or web search — Engram for code relationships, graphtor-docs for
+documentation.
 
 #### Step 2.3: Hands-On Investigation
 
@@ -210,8 +223,8 @@ When `promote_to` includes `plan` (or `ask` resolved to `plan`):
    * Set the implementation scope to the recommendation from Step 3.2
    * Include the spike's success criteria and constraints as planning constraints
 2. The impl-plan skill writes a plan document to `docs/plans/{YYYY-MM-DD}-{slug}-plan.md`
-3. Update the spike findings artifact's `promoted_to` frontmatter field to include `plan`
-   and add a `plan_artifact` field pointing to the generated plan path
+3. Update the spike findings artifact's `docline.promoted_to` frontmatter field to include
+   `plan` and add a `docline.plan_artifact` field pointing to the generated plan path
 4. If `linked_parent_work_item` was provided, the impl-plan output should reference that feature or chore
    so the planning chain is traceable
 
@@ -224,7 +237,7 @@ stage agent will invoke impl-plan internally and return the plan artifact path.
 
 #### Step 4.3: Create Backlog Item (When Applicable)
 
-When promoting to queue, create a spike item using `backlogit_create_item`:
+When the `backlogit` capability pack is installed and `create_task` is available:
 
 1. Create a spike item with `artifact_type: spike`
 2. Set title: the goal question (shortened to 5-10 words)
@@ -235,7 +248,25 @@ When promoting to queue, create a spike item using `backlogit_create_item`:
 6. If `linked_parent_work_item` was provided, set `parent_id` to link the spike to its
   feature or chore
 
-### Phase 4.4: Capture as Compound Learning (When Applicable)
+When `backlog-md` is the installed backlog tool:
+
+* If promoting to queue, create a spike item using `backlogit_create_item` with
+  `title` from the goal question (shortened to 5-10 words),
+  `description` linking to the findings artifact path,
+  `status: "done"`, and `labels: ["spike"]`.
+
+When no backlog tool is available:
+
+* If promoting to queue, append a spike entry to
+  `.backlogit/queue/.stash.md` with the format:
+  ```
+  - [{YYYY-MM-DD}] **Spike**: {goal summary}
+    Conclusion: {proceed|pivot|defer|abandon} (confidence: {high|medium|low})
+    Artifact: `docs/decisions/{YYYY-MM-DD}-{slug}-spike.md`
+    Linked parent work item: {feature/chore reference or "standalone"}
+  ```
+
+#### Step 4.4: Capture as Compound Learning (When Applicable)
 
 If the promotion path includes `learnings` or the spike produced insights that
 would benefit future work, invoke the **compound** skill with the findings
@@ -250,16 +281,20 @@ Write the findings artifact to `docs/decisions/{YYYY-MM-DD}-{slug}-spike.md`:
 ```markdown
 ---
 title: "{Goal question — short form}"
-type: spike
-date: {YYYY-MM-DD}
-time_box: "{time_box value}"
-conclusion: "{proceed|pivot|defer|abandon}"
-confidence: "{high|medium|low}"
-linked_parent_work_item: "{feature or chore path/ID, or null}"
-promoted_to: ["{plan|queue|learnings|none}"]
-tags:
-  - "{domain tag}"
-  - "{technology tag}"
+source: "docs/decisions/{YYYY-MM-DD}-{slug}-spike.md"
+doc_type: decision
+description: "{One-sentence summary of the investigation and its outcome}"
+docline:
+  type: spike
+  date: {YYYY-MM-DD}
+  time_box: "{time_box value}"
+  conclusion: "{proceed|pivot|defer|abandon}"
+  confidence: "{high|medium|low}"
+  linked_parent_work_item: "{feature or chore path/ID, or null}"
+  promoted_to: ["{plan|queue|learnings|none}"]
+  tags:
+    - "{domain tag}"
+    - "{technology tag}"
 ---
 
 ## Goal
@@ -308,6 +343,16 @@ tags:
 {Links to code paths, documentation, prototypes, benchmarks examined}
 ```
 
+Substitute the real `{YYYY-MM-DD}` and `{slug}` used for the artifact's own filename into
+the `source` field above — `source` must resolve to the artifact's own repo-relative path
+(e.g. `docs/decisions/2026-08-16-example-topic-spike.md`), not a literal placeholder. An
+artifact whose `source` still contains an unsubstituted `{YYYY-MM-DD}` or `{slug}` is
+self-inconsistent even though presence-only lint rules would not catch it.
+
+`description` is handoff-required for downstream consumers even though neither the
+`authoring` nor the `ingestion` documentation lint profile currently enforces its
+presence — do not treat it as redundant and remove it.
+
 ## Quality Criteria
 
 * Goal question is specific and answerable, not open-ended
@@ -319,8 +364,23 @@ tags:
 * The artifact has valid YAML frontmatter with all required fields
 * If a backlog item was created, it has the correct `artifact_type: spike` and labels
 
+## Relationship to Other Workflows
+
+* **Deliberate**: Deliberation produces *decisions* through dialogue; spikes produce *findings* through investigation. A deliberation may trigger a spike when unknowns are identified during Phase 2 (Research).
+* **Impl-plan**: Spike findings with a `proceed` or `pivot` conclusion are valid source documents for impl-plan, just like deliberation outcomes.
+* **Compound**: Spike findings can be captured as compound learnings for the institutional knowledge base.
+* **Build-feature**: Spikes do NOT produce implementation code. If a spike creates a prototype, that prototype lives in a branch and is referenced in findings — it is not the deliverable.
+
+## Resumption Protocol
+
+If the skill is interrupted (context overflow, session timeout, or operator
+halt), write a checkpoint to `docs/memory/` capturing: current phase,
+evidence gathered, hypotheses formed, and next step. On re-invocation, check
+for an existing checkpoint. If found, resume from the recorded phase rather
+than restarting from scratch.
+
 ## Model Routing
 
-This skill operates at **Tier 3 (Frontier)** — hands-on investigation, prototyping, and recommendation synthesis require deep reasoning.
+This skill operates at **Tier 3 (Frontier)** — open-ended investigation requires deep analysis.
 
 Generated by autoharness | Template: spike/SKILL.md.tmpl

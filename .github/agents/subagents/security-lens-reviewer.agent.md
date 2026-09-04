@@ -3,10 +3,9 @@ name: Security Lens Reviewer
 description: "Reviews implementation plans for security gaps: attack surface inventory, auth/authz gaps, data exposure, trust boundary violations, and secrets management"
 maturity: stable
 tools: read, search
-model_tier: 2
 max_subagent_tier: 2
-reasoning_effort: ""
-model_provider: ""
+reasoning_effort: "xhigh"
+model_provider: "anthropic"
 model_family: "claude-sonnet-5"
 subagent_depth: 0
 ---
@@ -56,11 +55,6 @@ Activate when the plan touches any of these areas:
 * Data stores containing sensitive, PII, financial, or regulated data
 * External integrations crossing trust boundaries
 * Secrets, credentials, API keys, or key management
-
-For go-teams specifically, this always includes: the `auth` command's Microsoft Teams
-login/MFA flow, the `UserDataDir` session-persistence mechanism (cookies, AAD tokens
-on disk), and any future config surface that stores meeting URLs or scheduling
-credentials.
 
 ## Confidence Thresholds
 

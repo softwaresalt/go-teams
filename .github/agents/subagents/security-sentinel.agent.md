@@ -3,10 +3,9 @@ name: Security Sentinel
 description: "User-invocable security audit agent. Performs comprehensive pre-deployment security audits with structured findings, risk matrix, and remediation roadmap."
 maturity: stable
 tools: read, search, terminal, edit
-model_tier: 3
 max_subagent_tier: 3
-reasoning_effort: ""
-model_provider: ""
+reasoning_effort: "xhigh"
+model_provider: "anthropic"
 model_family: "claude-opus-4.8"
 subagent_depth: 0
 ---
@@ -28,14 +27,9 @@ The audit covers:
 * **Authentication and Authorization Audit** — Access control gaps, broken authorization, privilege escalation paths
 * **Sensitive Data Exposure Scan** — PII, credentials, tokens, and financial data exposed via logs, APIs, or storage
 * **OWASP Top 10 Compliance** — Assess coverage across A01-A10 with language-specific patterns
-* **Third-Party Dependency Review** — Known vulnerable dependencies (once `go.mod` exists)
+* **Third-Party Dependency Review** — Known vulnerable dependencies (if package manifest is present)
 
-Language-specific detection: `fmt.Sprintf`-built SQL/shell strings instead of parameterized
-queries or `exec.Command` arg slices; `exec.Command`/`exec.CommandContext` invoked with
-unsanitized user/network input; `os.ReadFile`/`filepath.Join` with unsanitized path segments
-(path traversal); disabled TLS verification (`InsecureSkipVerify: true`); credentials or
-session tokens (Teams `UserDataDir` cookies/AAD tokens) written to disk without restrictive
-file permissions; `text/template` used where `html/template` is required for any HTML output.
+Language-specific detection uses `Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries`.
 
 ## Invocation
 
@@ -58,7 +52,7 @@ Default scope when no argument is provided: `full`.
 ### Phase 2: Input Validation and Injection Analysis
 
 1. Scan source files matching `**/*.go` for unvalidated external inputs
-2. Apply the injection detection patterns listed in Audit Scope above
+2. Apply injection detection patterns from `Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries`
 3. Check parameterized query usage vs. string-built queries in data access layers
 4. Check template rendering for user-controlled values
 5. Record findings with file, line, severity, and evidence
@@ -72,11 +66,6 @@ Default scope when no argument is provided: `full`.
 5. Evaluate session token generation, storage, and invalidation
 6. Record auth/authz gaps with specific locations and remediation steps
 
-For go-teams specifically: evaluate the `UserDataDir` session-persistence mechanism — file
-permissions on the profile directory, whether cookies/AAD tokens could be read by other
-local processes/users, and whether the `auth` command handles credential material securely
-during the interactive login flow.
-
 ### Phase 4: Sensitive Data Exposure Scan
 
 1. Search for PII, credentials, tokens, and keys in source and config files
@@ -85,13 +74,9 @@ during the interactive login flow.
 4. Verify transport security requirements for external calls
 5. Record exposure findings with data classification and risk level
 
-For go-teams specifically: verify that captured transcripts/audio and persisted session
-state are not inadvertently logged or transmitted, and that the `UserDataDir` path is
-excluded from any telemetry or diagnostic output.
-
 ### Phase 5: OWASP Top 10 Assessment
 
-Score the workspace against OWASP Top 10 categories:
+Score the workspace against OWASP Top 10 categories using `Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries`:
 
 | Category | Check |
 |---|---|

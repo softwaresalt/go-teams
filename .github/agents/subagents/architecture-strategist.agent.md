@@ -3,11 +3,10 @@ name: Architecture Strategist
 description: "Reviews architectural soundness — cohesion, coupling, module boundaries, dependency chains, and design patterns"
 maturity: stable
 tools: read, search
-model_tier: 1
 max_subagent_tier: 1
 reasoning_effort: ""
-model_provider: ""
-model_family: "gpt-5.4-mini"
+model_provider: "anthropic"
+model_family: "claude-haiku-4.5"
 subagent_depth: 0
 ---
 

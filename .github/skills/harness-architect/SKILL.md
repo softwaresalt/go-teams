@@ -1,7 +1,7 @@
 ---
 name: harness-architect
 description: "Scaffolds compilable but failing test harnesses for feature and chore tasks"
-argument-hint: "feature=001-F tasks=001.001-T,001.002-T"
+argument-hint: "feature=001-{SUFFIX_FEATURE} tasks=001.001-{SUFFIX_TASK},001.002-{SUFFIX_TASK}"
 input:
   properties:
     feature:
@@ -102,11 +102,11 @@ For each task, select the appropriate harness strategy:
 
 Write harness files into the module that matches the work item's scope:
 
-* **Unit harnesses**: colocated with the production code as `*_test.go`
-  in the appropriate `internal/` or `cmd/` subdirectory
-* **Integration harnesses**: in `tests/integration/` when the
-  task spans modules or runtime boundaries (gated behind the `integration` build tag)
-* **Contract harnesses**: in `tests/contract/` when the task
+* **Unit harnesses**: colocated with the production code in the
+  appropriate internal/ subdirectory
+* **Integration harnesses**: in `co-located *_test.go files/integration/` when the
+  task spans modules or runtime boundaries
+* **Contract harnesses**: in `co-located *_test.go files/contract/` when the task
   defines API, CLI, or schema behavior
 
 Write companion stub files into the production module that the tests

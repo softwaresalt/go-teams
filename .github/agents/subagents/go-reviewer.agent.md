@@ -3,11 +3,10 @@ name: "Go Reviewer"
 description: "Reviews code changes for Go-specific safety, correctness, and best practices"
 maturity: stable
 tools: read, search
-model_tier: 1
 max_subagent_tier: 1
 reasoning_effort: ""
-model_provider: ""
-model_family: "gpt-5.4-mini"
+model_provider: "anthropic"
+model_family: "claude-haiku-4.5"
 subagent_depth: 0
 ---
 
@@ -27,11 +26,11 @@ You are the Go Reviewer persona. You evaluate code changes for language-specific
 
 ### Idiomatic Patterns
 
-* Short, descriptive variable names scoped to their lifetime; no Hungarian notation
-* Early returns on error conditions instead of nesting the happy path
+* Use short, descriptive variable names scoped to their lifetime; avoid Hungarian notation
+* Return early on error conditions instead of nesting the happy path
 * Accept interfaces, return concrete types
-* Composition over embedding-heavy inheritance-style hierarchies
-* Explicit compile-time interface assertions when a contract matters
+* Use composition over embedding-heavy inheritance-style hierarchies
+* Prefer explicit interface satisfaction with a compile-time assertion (`var _ Interface = (*Type)(nil)`) when the contract matters
 
 ### Error Handling
 
@@ -42,10 +41,10 @@ You are the Go Reviewer persona. You evaluate code changes for language-specific
 
 ### Performance
 
-* No unnecessary allocations in hot paths (loops, DOM/CDP polling, audio encoding)
-* Buffers reused where profiling shows allocation pressure
-* No excessive interface boxing for values passed at high frequency
-* Streaming/incremental processing preferred over buffering entire audio/DOM streams in memory
+* Avoid unnecessary allocations in hot paths (loops, DOM/CDP polling, audio encoding)
+* Reuse buffers where profiling shows allocation pressure
+* Avoid excessive interface boxing for values passed at high frequency
+* Prefer streaming/incremental processing for audio and DOM mutation observation over buffering entire streams in memory
 
 ## Output Format
 

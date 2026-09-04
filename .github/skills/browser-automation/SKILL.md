@@ -26,11 +26,11 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 
 ## Variables
 
-| Variable | Value for this workspace |
+| Variable | Purpose |
 |---|---|
-| Browser CLI | `agent-browser` |
-| Headless flag | `--headless` |
-| Output directory | `docs/closure/browser-automation/` |
+| `agent-browser` | Browser CLI tool to invoke (default: `agent-browser`) |
+| `--headless` | Headless flag passed to the browser CLI (default: `--headless`) |
+| `docs/closure` | Directory for closure artifacts; output records are written under `docs/closure/browser-automation/` |
 
 ## Workflow
 
@@ -138,11 +138,6 @@ Produce a verification record with:
 5. **Failures** — each failure with the selector or element, action attempted, error received, and snapshot at time of failure
 
 Do not persist snapshots to source control. Write them to `docs/closure/browser-automation/` or a workspace-configured temp directory.
-
-> **Note for go-teams**: this skill governs verifying the harness's own web-facing
-> surfaces (if any). It is unrelated to the project's chromedp automation
-> product code (joining Teams meetings), which is reviewed as Go source by the
-> go-reviewer and concurrency-reviewer personas, not exercised through this skill.
 
 ## Model Routing
 

@@ -235,6 +235,7 @@ variables_used:
   COMMIT_SCOPES: cli, browser, auth, transcript, audio, scheduler, config
   CONCURRENCY_PATTERNS: goroutines, `sync.WaitGroup`, `sync.Mutex`/`RWMutex`, channels, `context.Context` cancellation, `errgroup`, `select` loops, `atomic` operations
   COPILOT_EXE_PATH: copilot
+  DATE: '2026-09-04'
   DEFAULT_BRANCH: main
   DOCS_ROOT: docs
   DOCS_SECURITY: docs/security

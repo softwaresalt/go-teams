@@ -16,6 +16,14 @@ WS = Path(".")
 failures: list[str] = []
 
 
+# Extensions pinned to `text eol=lf` in .gitattributes. Staged renders are
+# emitted with CRLF, so they must be normalized on write: the harness manifest
+# records a SHA-256 of each artifact's on-disk bytes, and leaving these files
+# CRLF on Windows would make every checksum platform-dependent and unable to
+# reproduce on a Linux/CI checkout. Only *.ps1 is pinned to CRLF.
+LF_SUFFIXES = {".go", ".mod", ".sum", ".sh", ".yml", ".yaml", ".json", ".md"}
+
+
 def install_staged() -> int:
     copied = 0
     for f in sorted(STAGE.rglob("*")):
@@ -27,7 +35,7 @@ def install_staged() -> int:
         dst = WS / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         data = f.read_bytes()
-        if dst.suffix == ".sh":
+        if dst.suffix in LF_SUFFIXES:
             data = data.replace(b"\r\n", b"\n")
         dst.write_bytes(data)
         copied += 1
@@ -140,12 +148,14 @@ def main() -> int:
         "closure quality-criteria bullet",
     )
 
-    # 5. Pre-push gate composition: only local_gating.pre_push_gates, in order,
-    #    with a format command that actually fails (gofmt -l always exits 0).
+    # 5. Pre-push gate composition: only local_gating.pre_push_gates, in order.
+    #    FORMAT_CHECK_COMMAND now renders the fail-on-output form, which is not
+    #    quote-safe once interpolated into the hook's double-quoted argument, so
+    #    each hook gets a shell-correct equivalent here.
     replace(
         "scripts/pre-push-quality-gates.sh",
         'run_gate "Lint" "golangci-lint" "golangci-lint run"\n'
-        'run_gate "Format" "gofmt" "gofmt -l ."\n'
+        'run_gate "Format" "gofmt" "test -z "$(gofmt -l .)""\n'
         'run_gate "Typecheck" "" ""\n'
         'run_gate "Test" "go" "go test ./..."\n'
         'run_gate "Build" "go" "go vet ./..."\n',
@@ -159,7 +169,7 @@ def main() -> int:
     replace(
         "scripts/pre-push-quality-gates.ps1",
         'Invoke-Gate "Lint" "golangci-lint" "golangci-lint run"\n'
-        'Invoke-Gate "Format" "gofmt" "gofmt -l ."\n'
+        'Invoke-Gate "Format" "gofmt" "test -z "$(gofmt -l .)""\n'
         'Invoke-Gate "Typecheck" "" ""\n'
         'Invoke-Gate "Test" "go" "go test ./..."\n'
         'Invoke-Gate "Build" "go" "go vet ./..."\n',
@@ -172,6 +182,51 @@ def main() -> int:
         'Invoke-Gate "Build" "go" "go vet ./..."\n',
         "pre-push ps1 gate composition",
         binary_nl="\r\n",
+    )
+
+    # 5b. Workspace-specific safety notes. The upstream AGENTS.md template is
+    #     environment-agnostic, so these project-specific qualifications are lost
+    #     on every re-render unless re-applied here.
+    replace(
+        "AGENTS.md",
+        "* require explicit approval for destructive actions and prefer approval for high-blast-radius actions\n"
+        "* carry risky action records into verification and closure when rollout safety depends on them\n",
+        "* require explicit approval for destructive actions and prefer approval for high-blast-radius actions\n"
+        "* carry risky action records into verification and closure when rollout safety depends on them\n"
+        "\n"
+        "> **Applies strongly here**: the Teams authentication flow (interactive login,\n"
+        "> MFA, and persisted `UserDataDir` session cookies/tokens in `internal/browser`\n"
+        "> and `internal/cli/auth.go`) is security-sensitive. Classify auth and\n"
+        "> session-persistence changes as `ProposedAction` with `ActionRisk: high` by\n"
+        "> default.\n",
+        "AGENTS.md strict-safety Teams-auth note",
+    )
+    replace(
+        "AGENTS.md",
+        "* use explicit human checkpoints for OAuth, payment, email, SMS, CAPTCHA, or other external flows\n"
+        "* feed browser findings into runtime verification and operational closure artifacts\n",
+        "* use explicit human checkpoints for OAuth, payment, email, SMS, CAPTCHA, or other external flows\n"
+        "* feed browser findings into runtime verification and operational closure artifacts\n"
+        "\n"
+        "> **Note**: this project's own product surface *is* headless browser automation\n"
+        "> (chromedp against Microsoft Teams). This overlay governs verifying the\n"
+        "> harness's own web-facing surfaces (if any are added later); it is distinct\n"
+        "> from the product's chromedp automation code, which the go-reviewer and\n"
+        "> concurrency-reviewer personas review as ordinary Go source.\n",
+        "AGENTS.md browser-verification scoping note",
+    )
+    replace(
+        "AGENTS.md",
+        "* use transmit / standby flows when blocked on clarification or handoff\n"
+        "* warn clearly when intercom is unavailable\n",
+        "* use transmit / standby flows when blocked on clarification or handoff\n"
+        "* warn clearly when intercom is unavailable\n"
+        "\n"
+        "> **Status in this workspace**: no intercom server is configured — the root\n"
+        "> `.mcp.json` registers backlogit, engram, graphtor-docs, context7, tavily, and\n"
+        "> github. This overlay is installed proactively; behavior activates once an\n"
+        "> intercom surface is added.\n",
+        "AGENTS.md intercom status note",
     )
 
     # 6. The capability-pack enforcement coordinator is checked with an
@@ -198,7 +253,9 @@ def main() -> int:
         print("  ~ skipped: engram block (no saved copy; Engram will re-inject)")
     else:
         block = block_path.read_text(encoding="utf-8")
-        ci.write_text(t.rstrip("\n") + "\n\n" + block.rstrip("\n") + "\n", encoding="utf-8")
+        merged = t.rstrip("\n") + "\n\n" + block.rstrip("\n") + "\n"
+        # write_text would translate to CRLF on Windows; *.md is pinned eol=lf.
+        ci.write_bytes(merged.replace("\r\n", "\n").encode("utf-8"))
         print("  + applied: engram block")
 
     if failures:

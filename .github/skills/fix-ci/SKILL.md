@@ -67,7 +67,7 @@ detail extraction via check-run annotations (§2.5).
 
 **CI Pipeline Order** (fix in this order):
 
-1. Format check (`gofmt -l .`)
+1. Format check (`test -z "$(gofmt -l .)"`)
 2. Lint (`golangci-lint run`)
 3. Test (`go test ./...`)
 
@@ -121,7 +121,7 @@ comment lifecycle.
 
 Run the failing CI steps locally in order:
 
-1. `gofmt -l .` → if fails, run `gofmt -w .`
+1. `test -z "$(gofmt -l .)"` → if fails, run `gofmt -w .`
 2. `golangci-lint run` → fix violations
 3. `go test ./...` → fix failing tests
 

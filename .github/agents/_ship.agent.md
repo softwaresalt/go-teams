@@ -434,7 +434,7 @@ The skill runs a 5-attempt harness loop: execute tests, capture errors, fix, rep
 After the build-feature skill reports success:
 
 1. **Lint**: `golangci-lint run`
-2. **Format**: `gofmt -l .`
+2. **Format**: `test -z "$(gofmt -l .)"`
 3. **Full Test Suite**: `go test ./...`
 
 If any gate fails, return to the build-feature skill for a fix iteration.

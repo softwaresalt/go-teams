@@ -19,8 +19,8 @@ go-teams is a single standalone Go CLI binary (Cobra command routing) that drive
 ### I. Safety-First Go (NON-NEGOTIABLE)
 
 All production code MUST be written in Go (1.26).
-`unsafe` package forbidden without documented, security-reviewed justification. `golangci-lint run` MUST pass with zero issues; all findings are hard errors..
-Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why..
+`unsafe` package forbidden without documented, security-reviewed justification. `golangci-lint run` MUST pass with zero issues; all findings are hard errors.
+Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why.
 
 ### II. Test-First Development (NON-NEGOTIABLE)
 
@@ -87,6 +87,11 @@ When the `agent-intercom` capability pack is installed, agents MUST also follow
 * use transmit / standby flows when blocked on clarification or handoff
 * warn clearly when intercom is unavailable
 
+> **Status in this workspace**: no intercom server is configured — the root
+> `.mcp.json` registers backlogit, engram, graphtor-docs, context7, tavily, and
+> github. This overlay is installed proactively; behavior activates once an
+> intercom surface is added.
+
 ### Capability Overlay — agent-engram
 
 When the `agent-engram` capability pack is installed, agents MUST also follow
@@ -138,6 +143,12 @@ verification as a disciplined workflow rather than an ad hoc manual check:
 * use explicit human checkpoints for OAuth, payment, email, SMS, CAPTCHA, or other external flows
 * feed browser findings into runtime verification and operational closure artifacts
 
+> **Note**: this project's own product surface *is* headless browser automation
+> (chromedp against Microsoft Teams). This overlay governs verifying the
+> harness's own web-facing surfaces (if any are added later); it is distinct
+> from the product's chromedp automation code, which the go-reviewer and
+> concurrency-reviewer personas review as ordinary Go source.
+
 ### Capability Overlay — continuous-learning
 
 When the `continuous-learning` capability pack is installed, agents MUST also follow
@@ -161,6 +172,12 @@ explicit review surface:
 * keep `ActionResult` visible as work moves from planning to review and closure
 * require explicit approval for destructive actions and prefer approval for high-blast-radius actions
 * carry risky action records into verification and closure when rollout safety depends on them
+
+> **Applies strongly here**: the Teams authentication flow (interactive login,
+> MFA, and persisted `UserDataDir` session cookies/tokens in `internal/browser`
+> and `internal/cli/auth.go`) is security-sensitive. Classify auth and
+> session-persistence changes as `ProposedAction` with `ActionRisk: high` by
+> default.
 
 ### Capability Overlay — release-observability
 

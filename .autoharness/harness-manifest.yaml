@@ -3,7 +3,7 @@ installed_at: "2026-07-08T00:00:00Z"
 tuned_at: "2026-09-03T00:00:00Z"
 autoharness_version: "1.5.0"
 autoharness_home: "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data"
-profile_hash: "sha256:f293ea8e2e965dc7254925b5947ceab73e0beb7ddc869033db156eef5f825ccf"
+profile_hash: "sha256:12336d174eb2dc60897bc83d7bc0647cbf22a277093abb2ac19063828ff2e788"
 config_hash: "sha256:45b59a972b24f733d6407d62dd42bf584b11e6a8aa20857d1abff114c5ac9edd"
 install_preset: "full"
 primary_stack_pack: "cli-tool"
@@ -84,86 +84,86 @@ gitignore_updates:
   env_local_ignored: true
   file_lock_patterns_added: true
 artifacts:
-  - { path: "AGENTS.md", primitive: 9, template: "foundation/AGENTS.md.tmpl", checksum: "f6062b966cdfb9569ab1949d5f78124a9c37ef04072db4be5dbf361359aad418" }
-  - { path: ".github/copilot-instructions.md", primitive: 6, template: "foundation/copilot-instructions.md.tmpl", checksum: "d5ee658776e00b165d00618973c6b3b7c76162fb3eca300e21b79e6295f3fd5f" }
-  - { path: ".github/instructions/constitution.instructions.md", primitive: 5, template: "foundation/constitution.instructions.md.tmpl", checksum: "c4e88a778e430afa2dd12a3f81daf23f51e5cca4bf76ffec0af9238774941267" }
-  - { path: ".github/instructions/go.instructions.md", primitive: 6, template: "instructions/technology-go.instructions.md.tmpl", checksum: "172b9eb5f10a5ba1d7ac7cf24224bebb771d64ac8732a2f66804d7cb75d1e49a" }
-  - { path: ".github/instructions/commit-message.instructions.md", primitive: 6, template: "instructions/commit-message.instructions.md.tmpl", checksum: "c479d9207e8623319efbb612bb26fdc6a6dbd2de51eb9cb7d566799d9e5d4e1e" }
-  - { path: ".github/instructions/markdown.instructions.md", primitive: 6, template: "instructions/markdown.instructions.md.tmpl", checksum: "36b9faa412bb9b77adcb9d00b84b90d0adb226a1020d2789c497a72008fd85ae" }
-  - { path: ".github/instructions/writing-style.instructions.md", primitive: 6, template: "instructions/writing-style.instructions.md.tmpl", checksum: "74ede17cd141b15ff4f740d7dd55465fee4876d10b504971e4f874bbf0c6bbe8" }
-  - { path: ".github/instructions/coding-discipline.instructions.md", primitive: 6, template: "instructions/coding-discipline.instructions.md.tmpl", checksum: "6289c00134115f0072b45fa519040b30f3dbe4583b18838964013d2decbe1f0c" }
-  - { path: ".github/instructions/git-merge.instructions.md", primitive: 6, template: "instructions/git-merge.instructions.md.tmpl", checksum: "62e6ca56f90570f1ff895dad31827eed541050fd60fe7ec32559d3c394af2aa3" }
-  - { path: ".github/instructions/pull-request.instructions.md", primitive: 6, template: "instructions/pull-request.instructions.md.tmpl", checksum: "cbaaabb2a07bfb0b5c872773e661c3130880ad8759c8d9507997def9bca40595" }
-  - { path: ".github/instructions/prompt-builder.instructions.md", primitive: 6, template: "instructions/prompt-builder.instructions.md.tmpl", checksum: "0240f417c991c10bec481ee2c60b3290802de341795ddedcfeb9d50036fb401d" }
-  - { path: ".github/instructions/circuit-breaker.instructions.md", primitive: 5, template: "instructions/circuit-breaker.instructions.md.tmpl", checksum: "f94107760b4b203ba46cab2a410b55f378bfb60c9fa221524ffbe28563c6f0c0" }
-  - { path: ".github/instructions/concurrency.instructions.md", primitive: 5, template: "instructions/concurrency.instructions.md.tmpl", checksum: "25ec9c915b64e654b88ab06046f7bf73709229542aa58c1829fa03b040be33fa" }
-  - { path: ".github/instructions/architecture-doc.instructions.md", primitive: 9, template: "instructions/architecture-doc.instructions.md.tmpl", checksum: "40461add600190fb13062ca94f24bf000ba262628b018e3b01f1c8ce9fa18d00" }
-  - { path: ".github/instructions/context-efficiency.instructions.md", primitive: 1, template: "instructions/context-efficiency.instructions.md.tmpl", checksum: "683c2d7dfcdc0d2a29719cab250bf97a052f28a04c70b9c1d429680aff44f768" }
-  - { path: ".github/instructions/output-timestamps.instructions.md", primitive: 7, template: "instructions/output-timestamps.instructions.md.tmpl", checksum: "4d7d0ee274b24acc714e1c29dc0fa90d63aa94a8f6cdba6be3f2cf51be903057" }
-  - { path: ".github/instructions/github-pr-automation.instructions.md", primitive: 10, template: "instructions/github-pr-automation.instructions.md.tmpl", checksum: "fb0ab882a6b5ebe16f3a32ed6b8e1a3e877c57f5281c43be6e6363376e1223f9" }
-  - { path: ".github/instructions/backlog-integration.instructions.md", primitive: 8, template: "instructions/backlog-integration.instructions.md.tmpl", checksum: "4ed18d9c6826e705ddb44f287125fca601a0132a042d069054ac6da312a3dddd" }
-  - { path: ".github/instructions/role-enforcement.instructions.md", primitive: 5, template: "instructions/role-enforcement.instructions.md.tmpl", checksum: "46fd77495ed45b93f1e91b197f8ec3deab529fcd44efb6111344d85f93ebdb4f" }
-  - { path: ".github/instructions/agent-intercom.instructions.md", primitive: 6, template: "instructions/agent-intercom.instructions.md.tmpl", checksum: "1ac2b836b8c773b9a7606b68d02f39f03a4f16b8e2a82ade8c545ea2ebfb258e" }
-  - { path: ".github/instructions/agent-engram.instructions.md", primitive: 6, template: "instructions/agent-engram.instructions.md.tmpl", checksum: "335da661fd78621697ee25d840c0b46f7218bb859f34ed128adbe1ebe8e89fe6" }
-  - { path: ".github/instructions/graphtor-docs.instructions.md", primitive: 6, template: "instructions/graphtor-docs.instructions.md.tmpl", checksum: "df895bec4b897eb23f1889d7c60546bd20132d88e6e17b43bea79454063a7247" }
-  - { path: ".github/instructions/backlogit.instructions.md", primitive: 6, template: "instructions/backlogit.instructions.md.tmpl", checksum: "c936c45691c4a226e1723ffedce1722fb208290f051115e4b407631c6e9956e2" }
-  - { path: ".github/instructions/backlogit-sql-schema.instructions.md", primitive: 6, template: "instructions/backlogit-sql-schema.instructions.md.tmpl", checksum: "39ed2b2cfe2853662c60b50cf0b420b8d42070cef5e2ff7f243e73a402256555" }
-  - { path: ".github/instructions/backlogit-yaml-header-tooling.instructions.md", primitive: 6, template: "instructions/backlogit-yaml-header-tooling.instructions.md.tmpl", checksum: "44724b33c0ad417cd10b2c51f7f9adfb1601d43fff9fd3e96e0fa1a3f7ba6fb3" }
-  - { path: ".github/instructions/browser-verification.instructions.md", primitive: 6, template: "instructions/browser-verification.instructions.md.tmpl", checksum: "9bc4f095911d792ff161193e4e3709782890b26a2b50b1aba478e1623c97e79e" }
-  - { path: ".github/instructions/continuous-learning.instructions.md", primitive: 6, template: "instructions/continuous-learning.instructions.md.tmpl", checksum: "0f879053f26aa34d50191aeed34ccf44e1ca8e690ea16d98ba20e419eba4b39f" }
-  - { path: ".github/instructions/strict-safety.instructions.md", primitive: 5, template: "instructions/strict-safety.instructions.md.tmpl", checksum: "c66779a76080091f84f15fad12198ec662df4ed9c5d16a2f4f75d712a2f18e03" }
-  - { path: ".github/instructions/release-observability.instructions.md", primitive: 10, template: "instructions/release-observability.instructions.md.tmpl", checksum: "0c2cde657e227176cd3ef0003ac5edb37d1c6a3fc2fbb7d6fb71950933828ddf" }
-  - { path: ".github/instructions/adversarial-review.instructions.md", primitive: 7, template: "instructions/adversarial-review.instructions.md.tmpl", checksum: "6f1bd4be73c72bbba9de7b552440ff070f81027070e8e32fee1a7296a5e0ba73" }
-  - { path: ".github/policies/workflow-policies.md", primitive: 8, template: "policies/workflow-policies.md.tmpl", checksum: "1bf8efa5889f63f07310fa44d90d8b2cac2529002a00c6b801d36e25da058529" }
-  - { path: ".github/prompts/feature-flow.prompt.md", primitive: 4, template: "prompts/feature-flow.prompt.md.tmpl", checksum: "aa7729b3e42600b528230e43078f6e1b1b893a5df03695506fec5bacc50d3d94" }
-  - { path: ".github/prompts/feature-flow-parallel.prompt.md", primitive: 4, template: "prompts/feature-flow-parallel.prompt.md.tmpl", checksum: "577f6948d9712ac10c508760476ae5aa8a930fa632bccd1f3f21535f50149efa" }
-  - { path: ".github/prompts/feature-flow-dark.prompt.md", primitive: 4, template: "prompts/feature-flow-dark.prompt.md.tmpl", checksum: "45f0f3a75ba5b9923e0f9e99328ddf9300401893340004792049e24229260b41" }
-  - { path: ".github/prompts/stage-grouping-analysis.prompt.md", primitive: 4, template: "prompts/stage-grouping-analysis.prompt.md.tmpl", checksum: "60c7e9f59607d07c7a7715e64753a4146d00a922b3d736beda50078982dfa41c" }
-  - { path: ".github/agents/_orchestrator.agent.md", primitive: 4, template: "agents/_orchestrator.agent.md.tmpl", checksum: "fe2f146a6e574c33b065c01e6370d82484b2cccb98d3388725b2eed4fab7533c" }
-  - { path: ".github/agents/_stage.agent.md", primitive: 4, template: "agents/_stage.agent.md.tmpl", checksum: "59972a973d0afa7fb92034923cac1707983593332786fc7d2df595c86f8fa1d3" }
-  - { path: ".github/agents/_ship.agent.md", primitive: 4, template: "agents/_ship.agent.md.tmpl", checksum: "37366195e3f1a369a791f14525533a1e9c59d70927eefcb8f93e64ebb7b7b207" }
-  - { path: ".github/agents/subagents/go-engineer.agent.md", primitive: 4, template: "agents/language-engineer.agent.md.tmpl", checksum: "547445d764456001b5f832b99125837afc7c24ec1386726b95b709272770ec00" }
-  - { path: ".github/agents/subagents/prompt-builder.agent.md", primitive: 4, template: "agents/prompt-builder.agent.md.tmpl", checksum: "ca4028abe2b75d6f642fa3f6eb66ee6d466c6a33c5e09b03e02652593fd564ad" }
-  - { path: ".github/agents/subagents/security-sentinel.agent.md", primitive: 5, template: "agents/security-sentinel.agent.md.tmpl", checksum: "692020d208f7e6e4c15af863bdaf9d3ea454dc745e8bf9ddef4f72fbd42c5fb5" }
-  - { path: ".github/agents/subagents/adversarial-review.agent.md", primitive: 7, template: "agents/adversarial-review.agent.md.tmpl", checksum: "237547fb69e562c358aac5aca76e0cb2fa50dab9f94ea0cc131964e4e8548d9a" }
-  - { path: ".github/agents/subagents/learnings-researcher.agent.md", primitive: 1, template: "agents/research/learnings-researcher.agent.md.tmpl", checksum: "48f2df463e2d39e893cf1ca52c8ec6b247d7d833e530016a1247274bf022c88e" }
-  - { path: ".github/agents/subagents/architecture-strategist.agent.md", primitive: 7, template: "agents/review/architecture-strategist.agent.md.tmpl", checksum: "5b036f7ef6c7724845a4e7851fe249076813f277fddebb21b5772dd072d2e251" }
-  - { path: ".github/agents/subagents/constitution-reviewer.agent.md", primitive: 7, template: "agents/review/constitution-reviewer.agent.md.tmpl", checksum: "d9c39411bde4f000ec9e959fd461d6bea479ad8992254e3c8006e2ef274d83ce" }
-  - { path: ".github/agents/subagents/correctness-reviewer.agent.md", primitive: 7, template: "agents/review/correctness-reviewer.agent.md.tmpl", checksum: "3af5c44a96683bb97cc1978ee106850943bb4ec50502dfa4a671a50185f1e86b" }
-  - { path: ".github/agents/subagents/maintainability-reviewer.agent.md", primitive: 7, template: "agents/review/maintainability-reviewer.agent.md.tmpl", checksum: "65d933e468decd101c8e58767fb91cb2ea02970bad899acd8c447a1dbb03764a" }
-  - { path: ".github/agents/subagents/scope-boundary-auditor.agent.md", primitive: 7, template: "agents/review/scope-boundary-auditor.agent.md.tmpl", checksum: "fa5b2661619bf93effa3c640bcd1de1a242985464b1acddadd9bb140efec3e30" }
-  - { path: ".github/agents/subagents/go-reviewer.agent.md", primitive: 7, template: "agents/review/technology-reviewer.agent.md.tmpl", checksum: "0c5a32ab381b5181f75659f0d1949172bb13a930467cd0b29820a52ba5eadef5" }
-  - { path: ".github/agents/subagents/concurrency-reviewer.agent.md", primitive: 7, template: "agents/review/concurrency-reviewer.agent.md.tmpl", checksum: "25ed29680a6ee1fbda162abadee3d26b60688482a4e4404a1504968d9041f6d0" }
-  - { path: ".github/agents/subagents/security-reviewer.agent.md", primitive: 7, template: "agents/review/security-reviewer.agent.md.tmpl", checksum: "da482e1bec1eff8860ce1ce42351f4270beaaf9e103c7bc8b9b4a9c03942c565" }
-  - { path: ".github/agents/subagents/security-lens-reviewer.agent.md", primitive: 7, template: "agents/review/security-lens-reviewer.agent.md.tmpl", checksum: "5e2f143310750a1c2694068629cd616e54025f52e801ba86f9e1a0c62111a491" }
-  - { path: ".github/skills/build-feature/SKILL.md", primitive: 4, template: "skills/build-feature/SKILL.md.tmpl", checksum: "67bdd87de8cc6bc64bfd62d7da93eab3776e3227e2be8edec05957113868cf78" }
-  - { path: ".github/skills/fix-ci/SKILL.md", primitive: 4, template: "skills/fix-ci/SKILL.md.tmpl", checksum: "25a5ebe355d62f01c14dc753d976dffa4386d9e3c5c08cafca38ae3b726790d9" }
-  - { path: ".github/skills/impl-plan/SKILL.md", primitive: 4, template: "skills/impl-plan/SKILL.md.tmpl", checksum: "6c91878411da1f657df14968e18541c4be20db374030ac73db650fc7f71da21f" }
-  - { path: ".github/skills/deliberate/SKILL.md", primitive: 4, template: "skills/deliberate/SKILL.md.tmpl", checksum: "e6958045809e959a447cfe4c74c9f846cd2eb3fd9b574dc43697496b71545f36" }
-  - { path: ".github/skills/spike/SKILL.md", primitive: 4, template: "skills/spike/SKILL.md.tmpl", checksum: "d20aabae31f376e5e520f08b12aaa38774474a0ffa04f2331392c6fe6b285a69" }
-  - { path: ".github/skills/plan-harden/SKILL.md", primitive: 4, template: "skills/plan-harden/SKILL.md.tmpl", checksum: "a966d666cf75679149fbd3aa4246f7fcefd975979d69b9fd2005996a80a67f13" }
-  - { path: ".github/skills/compact-context/SKILL.md", primitive: 1, template: "skills/compact-context/SKILL.md.tmpl", checksum: "b36e5998cd1eab56bc711f8206cb754267bf3972e5c922bee64fceee2ad1b685" }
-  - { path: ".github/skills/compound/SKILL.md", primitive: 1, template: "skills/compound/SKILL.md.tmpl", checksum: "e884aed09eb1ce07497d4217d2d2cc34a4d08a09caffd760bc0799d578c0c297" }
-  - { path: ".github/skills/compound-refresh/SKILL.md", primitive: 1, template: "skills/compound-refresh/SKILL.md.tmpl", checksum: "d21e5d560a4e4f02576fa7b3e010cb76a957145739caf88ffe07d765c3013461" }
-  - { path: ".github/skills/harness-architect/SKILL.md", primitive: 4, template: "skills/harness-architect/SKILL.md.tmpl", checksum: "8909ac7c1252f2e1d39a892c73380cf229dcc0dd3cc09becb35f780c29e60789" }
-  - { path: ".github/skills/harvest/SKILL.md", primitive: 4, template: "skills/harvest/SKILL.md.tmpl", checksum: "4b66ffc1cabcd2335277142b01c44c6868627e845988cfa64c6d4e44468313f8" }
-  - { path: ".github/skills/pr-lifecycle/SKILL.md", primitive: 4, template: "skills/pr-lifecycle/SKILL.md.tmpl", checksum: "53868c23cbd4975b6a019ae2db0b19e700325eba0824ef410aea2398bb146d58" }
-  - { path: ".github/skills/safety-modes/SKILL.md", primitive: 5, template: "skills/safety-modes/SKILL.md.tmpl", checksum: "be46883623aa14341765dddf3990b1a6c8a70ce0e4965ade23531a47c379ed7e" }
-  - { path: ".github/skills/file-lock/SKILL.md", primitive: 5, template: "skills/file-lock/SKILL.md.tmpl", checksum: "624df80c6cee4ceca496a5ee6fb1c9ec7603b1fcef190ef7c9f9198c6b9da74b" }
-  - { path: ".github/skills/skill-search/SKILL.md", primitive: 6, template: "skills/skill-search/SKILL.md.tmpl", checksum: "0fbdc29c4412dc3e152c015cdc982d5e6ddf82634d1d8c18a28d8f1661a50ab6" }
-  - { path: ".github/skills/security-audit/SKILL.md", primitive: 5, template: "skills/security-audit/SKILL.md.tmpl", checksum: "6dd55057974d98370aa61d437e33efbcb251d435d3dc0c6f09e7bec0cbee4f8c" }
-  - { path: ".github/skills/runtime-verification/SKILL.md", primitive: 10, template: "skills/runtime-verification/SKILL.md.tmpl", checksum: "472dfc98d32761e952a9dae3455962e4791181984e09bf017a3300f69080a8de" }
-  - { path: ".github/skills/operational-closure/SKILL.md", primitive: 10, template: "skills/operational-closure/SKILL.md.tmpl", checksum: "217e724449508d559338e06c3548df6449034568bf8d4afad8fa2533ad907143" }
-  - { path: ".github/skills/observe/SKILL.md", primitive: 1, template: "skills/observe/SKILL.md.tmpl", checksum: "4cc91f4bede89425e5c34eec9429a1d0a52549ec89e95baca5d72ce5243c8abe" }
-  - { path: ".github/skills/learn/SKILL.md", primitive: 1, template: "skills/learn/SKILL.md.tmpl", checksum: "97ae0b1f0c77876a1af9763bb551b1ae6bcbfcaa83d2a0dcd48374c451170695" }
-  - { path: ".github/skills/evolve/SKILL.md", primitive: 1, template: "skills/evolve/SKILL.md.tmpl", checksum: "1f7f06d289be1c2ad892d94b49d08f5e2fd49d0f25526be8fbfd7baed01daf80" }
-  - { path: ".github/skills/browser-automation/SKILL.md", primitive: 10, template: "skills/browser-automation/SKILL.md.tmpl", checksum: "b3d5ab47587a023cb569b27cb1a29e1d0bab8f1c384239263f5b48fc91f6e3d6" }
-  - { path: ".github/skills/iterative-experiment/SKILL.md", primitive: 4, template: "skills/iterative-experiment/SKILL.md.tmpl", checksum: "68691be311de5f0ae31f61f2cf2c26ed1c3099b5ba321976d519fafd29c5f8c0" }
-  - { path: ".github/skills/harness-doctor/SKILL.md", primitive: 1, template: "skills/harness-doctor/SKILL.md.tmpl", checksum: "9f6161ac91b2ac2645b8d7d42fcbfd5a0d84f3ca87c5070e33c4f0ace90be734" }
-  - { path: ".github/skills/plan-review/SKILL.md", primitive: 7, template: "skills/plan-review/SKILL.md.tmpl", checksum: "39df82d84b137f3fdbfdb2a0fce0c7666e3ae4b30b9c6156ef1d8c79f2b33176" }
-  - { path: ".github/skills/review/SKILL.md", primitive: 7, template: "skills/review/SKILL.md.tmpl", checksum: "62275c781287bd90573401fe7507b372ff54aef4f4ef7561546ec261b3ac126d" }
-  - { path: ".github/skills/doc-review/SKILL.md", primitive: 7, template: "skills/doc-review/SKILL.md.tmpl", checksum: "6442f094c87a6c13c19bf165a6aba2a738e784bc70bf5eee75e6503ee5a81433" }
-  - { path: ".github/skills/shipment-reconcile/SKILL.md", primitive: 4, template: "skills/shipment-reconcile/SKILL.md.tmpl", checksum: "e5d2ce039cecf55aefcbdf71ccd85a2dd59137d646e4fdad4d48ddddcec3d745" }
+  - { path: "AGENTS.md", primitive: 9, template: "foundation/AGENTS.md.tmpl", checksum: "e67ac86eb1b13085f1d5357cd5f2f515383f07c0356aed864ef1a2aea219f4a0" }
+  - { path: ".github/copilot-instructions.md", primitive: 6, template: "foundation/copilot-instructions.md.tmpl", checksum: "c1a95ee592446eaa85891c10eda3282b191a0248db7a848a0dd956d1011e38b4" }
+  - { path: ".github/instructions/constitution.instructions.md", primitive: 5, template: "foundation/constitution.instructions.md.tmpl", checksum: "1b98c7ea27dc9bccea306af29fa91dd87d353ccefd3a791180e69795d06551e4" }
+  - { path: ".github/instructions/go.instructions.md", primitive: 6, template: "instructions/technology-go.instructions.md.tmpl", checksum: "9c47e77db43cf9d2d469ea698d52d9fcb323cbd7dfb5c7ff5840151bead67f6d" }
+  - { path: ".github/instructions/commit-message.instructions.md", primitive: 6, template: "instructions/commit-message.instructions.md.tmpl", checksum: "fdd4994e00c960651ea49a38dbb4e3ed27108b05157665ebf14b584daf70eb7c" }
+  - { path: ".github/instructions/markdown.instructions.md", primitive: 6, template: "instructions/markdown.instructions.md.tmpl", checksum: "6ac28f56d9d00c13b76362d6058fbc8da42afe6eb96acd34fc53d9bf40868d9c" }
+  - { path: ".github/instructions/writing-style.instructions.md", primitive: 6, template: "instructions/writing-style.instructions.md.tmpl", checksum: "1fc5cdcb661bd09ec47193af6e6a50d8c36b1e2991c2164a4a6a33d2c630af79" }
+  - { path: ".github/instructions/coding-discipline.instructions.md", primitive: 6, template: "instructions/coding-discipline.instructions.md.tmpl", checksum: "067919a1656641d778789eb5fde6880ea0f10f566ab43eebe0ebe5cb0dff823d" }
+  - { path: ".github/instructions/git-merge.instructions.md", primitive: 6, template: "instructions/git-merge.instructions.md.tmpl", checksum: "fa06c7b36ab3ff785ed003342dd52a92d3a8582ee8293d7f3a0a96d22f34b497" }
+  - { path: ".github/instructions/pull-request.instructions.md", primitive: 6, template: "instructions/pull-request.instructions.md.tmpl", checksum: "39f13c4648fce30421002fb9704e6996e116cc9f5ae2cea7cec6ad4df2d9c6e5" }
+  - { path: ".github/instructions/prompt-builder.instructions.md", primitive: 6, template: "instructions/prompt-builder.instructions.md.tmpl", checksum: "306270c592268efbff4386f069afae3ac41e311e0eeab855835acd3fb0303fc5" }
+  - { path: ".github/instructions/circuit-breaker.instructions.md", primitive: 5, template: "instructions/circuit-breaker.instructions.md.tmpl", checksum: "5e0a6a43180edcabd37d7601adaafc04bf40337ddd2732769c9dcf81ac4d655e" }
+  - { path: ".github/instructions/concurrency.instructions.md", primitive: 5, template: "instructions/concurrency.instructions.md.tmpl", checksum: "e3a09c6ed5215be68bdb31344c6b3119147877e4a692349f58a464bb6b34d223" }
+  - { path: ".github/instructions/architecture-doc.instructions.md", primitive: 9, template: "instructions/architecture-doc.instructions.md.tmpl", checksum: "743e6560af474507b795a30d2810f175de04a3be6827a8ad70cc6ab410a86fba" }
+  - { path: ".github/instructions/context-efficiency.instructions.md", primitive: 1, template: "instructions/context-efficiency.instructions.md.tmpl", checksum: "e90a66ebab83ff0b4d6cace14752866be83c26bff88813ef11dbb018e29e9c53" }
+  - { path: ".github/instructions/output-timestamps.instructions.md", primitive: 7, template: "instructions/output-timestamps.instructions.md.tmpl", checksum: "10e6faa0ca0ec29bb34926e6f0374b0eefe600451713d806c6061e0beb227b69" }
+  - { path: ".github/instructions/github-pr-automation.instructions.md", primitive: 10, template: "instructions/github-pr-automation.instructions.md.tmpl", checksum: "d625c9aa4141dbdcb90b469e4262b0a66ea67031037651d94441ef40c0d5016e" }
+  - { path: ".github/instructions/backlog-integration.instructions.md", primitive: 8, template: "instructions/backlog-integration.instructions.md.tmpl", checksum: "dfd11194787d81a6bf208e6f95effbb6dd3cb08e98be721a6c7035965977d3a2" }
+  - { path: ".github/instructions/role-enforcement.instructions.md", primitive: 5, template: "instructions/role-enforcement.instructions.md.tmpl", checksum: "fd3af24626eeecda69699937a395f898017f592546156d45a76edf76013f2a85" }
+  - { path: ".github/instructions/agent-intercom.instructions.md", primitive: 6, template: "instructions/agent-intercom.instructions.md.tmpl", checksum: "376751f7011b16cff2771fe33b301b3c62ba4a9d54961af5391a577fff2b94b5" }
+  - { path: ".github/instructions/agent-engram.instructions.md", primitive: 6, template: "instructions/agent-engram.instructions.md.tmpl", checksum: "a3f0fd41709651834e56edf89b24335ca5f56b8cfa3d798df70babb1380c61f4" }
+  - { path: ".github/instructions/graphtor-docs.instructions.md", primitive: 6, template: "instructions/graphtor-docs.instructions.md.tmpl", checksum: "4ac8ea3d32fabc6a96e875fe3b9afa4bac8e517221d3f2ab2b716481c9318020" }
+  - { path: ".github/instructions/backlogit.instructions.md", primitive: 6, template: "instructions/backlogit.instructions.md.tmpl", checksum: "9e1a157db4d2e9d2ac2c501d13eeffc5586f9f097a4bdfe5ffc275c7192d2ce0" }
+  - { path: ".github/instructions/backlogit-sql-schema.instructions.md", primitive: 6, template: "instructions/backlogit-sql-schema.instructions.md.tmpl", checksum: "44bfab6aba8391dc12cc0c1d759aab58739972892d8eb5d3bcbb8a63a198609d" }
+  - { path: ".github/instructions/backlogit-yaml-header-tooling.instructions.md", primitive: 6, template: "instructions/backlogit-yaml-header-tooling.instructions.md.tmpl", checksum: "d25b8a19e84b3fac44f0de7b5fb2939edcd6b7258484eee65ed303e968f25441" }
+  - { path: ".github/instructions/browser-verification.instructions.md", primitive: 6, template: "instructions/browser-verification.instructions.md.tmpl", checksum: "8a7d476cfd236e763ebe293fc42ad5d77d706be60dfbfa66545d56f47b9e3a94" }
+  - { path: ".github/instructions/continuous-learning.instructions.md", primitive: 6, template: "instructions/continuous-learning.instructions.md.tmpl", checksum: "42f5dde5d2a6ec9446e8c8f965b472b3e697d2743d593ac954f6384d3644b55b" }
+  - { path: ".github/instructions/strict-safety.instructions.md", primitive: 5, template: "instructions/strict-safety.instructions.md.tmpl", checksum: "9f70e1c9978d1071a3460dd91f5b057401e26892b97a93b2d5c94eaaf4c0f790" }
+  - { path: ".github/instructions/release-observability.instructions.md", primitive: 10, template: "instructions/release-observability.instructions.md.tmpl", checksum: "2f8c77791341b66821711b4303de283e8bc83b5a0c33bd4e156235a84dd360f7" }
+  - { path: ".github/instructions/adversarial-review.instructions.md", primitive: 7, template: "instructions/adversarial-review.instructions.md.tmpl", checksum: "d062dc9a6c3e9e7870a77cebb3accf36f222b6a1ebb4fb163aaab412f29dbedf" }
+  - { path: ".github/policies/workflow-policies.md", primitive: 8, template: "policies/workflow-policies.md.tmpl", checksum: "2c899f2591f478194b7d028209007c0220fe9d7d379323413cbb2d339c3d339d" }
+  - { path: ".github/prompts/feature-flow.prompt.md", primitive: 4, template: "prompts/feature-flow.prompt.md.tmpl", checksum: "63495503b706477da14fc49555e25c04b1224859704771fc27d7e08bba597380" }
+  - { path: ".github/prompts/feature-flow-parallel.prompt.md", primitive: 4, template: "prompts/feature-flow-parallel.prompt.md.tmpl", checksum: "a70969a86d95320d6dabe46fa4a40fac989997ce57b0eff8913c1f9a598cf193" }
+  - { path: ".github/prompts/feature-flow-dark.prompt.md", primitive: 4, template: "prompts/feature-flow-dark.prompt.md.tmpl", checksum: "5dc67d3ad19127993568a5015b099fbd7fb94eb524fcdaf28afb5371248cf597" }
+  - { path: ".github/prompts/stage-grouping-analysis.prompt.md", primitive: 4, template: "prompts/stage-grouping-analysis.prompt.md.tmpl", checksum: "d9cdc97d07fde6f09a0b3bfaac6252f46ca2c7ebca42503ceb4c0a99835be78e" }
+  - { path: ".github/agents/_orchestrator.agent.md", primitive: 4, template: "agents/_orchestrator.agent.md.tmpl", checksum: "fb0493464dc359e6d4dda09407239abc05d3ebdfccf568a193e2ccb373d9a515" }
+  - { path: ".github/agents/_stage.agent.md", primitive: 4, template: "agents/_stage.agent.md.tmpl", checksum: "fdbf2ff7bc824eaa7bf006e7f2acf6c2b2f9e71a8e6529d70a67776b321380bf" }
+  - { path: ".github/agents/_ship.agent.md", primitive: 4, template: "agents/_ship.agent.md.tmpl", checksum: "fff79b5cfe2e2ab718a111e655eeee357680670b72f5fa3dada45d3e284b3139" }
+  - { path: ".github/agents/subagents/go-engineer.agent.md", primitive: 4, template: "agents/language-engineer.agent.md.tmpl", checksum: "66964f0be5c10b071cecaca1d708cc6d9e37008c027128e5cc7b5ea7a55c4655" }
+  - { path: ".github/agents/subagents/prompt-builder.agent.md", primitive: 4, template: "agents/prompt-builder.agent.md.tmpl", checksum: "381d970102252cb776da97c5d6fe798e5e6e14f9a630f7ccf09ee0205b3b7fbe" }
+  - { path: ".github/agents/subagents/security-sentinel.agent.md", primitive: 5, template: "agents/security-sentinel.agent.md.tmpl", checksum: "537b6100650f0679d2fc5a31a2f12004275342f439406dec3ef47604270c3bbb" }
+  - { path: ".github/agents/subagents/adversarial-review.agent.md", primitive: 7, template: "agents/adversarial-review.agent.md.tmpl", checksum: "cc639fc51938ef016fb66edc3d68005fa178151518e054e529d9b9caeb640b01" }
+  - { path: ".github/agents/subagents/learnings-researcher.agent.md", primitive: 1, template: "agents/research/learnings-researcher.agent.md.tmpl", checksum: "7af39df5a28d5dcf72aab57be4841c3d6f5bc19fa9de9a13ce720034d63f579d" }
+  - { path: ".github/agents/subagents/architecture-strategist.agent.md", primitive: 7, template: "agents/review/architecture-strategist.agent.md.tmpl", checksum: "5306653b329bfa3b0ff1ed3656be39dee18e58c92b439da1a02dbc07f8fc2a18" }
+  - { path: ".github/agents/subagents/constitution-reviewer.agent.md", primitive: 7, template: "agents/review/constitution-reviewer.agent.md.tmpl", checksum: "f39f6d65a4cb69ca480dce466b8f3c1ff90811d5015397cfd88e58290b1e4f6a" }
+  - { path: ".github/agents/subagents/correctness-reviewer.agent.md", primitive: 7, template: "agents/review/correctness-reviewer.agent.md.tmpl", checksum: "3b97742a39225ec97f9a7d19cb61621358aab39d9149d5e8f37c055b46b8ce1f" }
+  - { path: ".github/agents/subagents/maintainability-reviewer.agent.md", primitive: 7, template: "agents/review/maintainability-reviewer.agent.md.tmpl", checksum: "9f4c7aa2d4e15b83f39cb5b0e7b9615d427f8cd18a2f658e629bc100bc283f35" }
+  - { path: ".github/agents/subagents/scope-boundary-auditor.agent.md", primitive: 7, template: "agents/review/scope-boundary-auditor.agent.md.tmpl", checksum: "09f0b8e4bc52fa2211a0d4ef6463d96e0e5643f84165ecceb990f6c884c7211e" }
+  - { path: ".github/agents/subagents/go-reviewer.agent.md", primitive: 7, template: "agents/review/technology-reviewer.agent.md.tmpl", checksum: "cc7fa44369cc6c0200e1fdff952ffae11cfc9e17d8dfd83adcc98d66e2b087fc" }
+  - { path: ".github/agents/subagents/concurrency-reviewer.agent.md", primitive: 7, template: "agents/review/concurrency-reviewer.agent.md.tmpl", checksum: "b7e2ac6d17fd5810a71408ae8035229a98a9b1b2c4b5c01c29791642b0246103" }
+  - { path: ".github/agents/subagents/security-reviewer.agent.md", primitive: 7, template: "agents/review/security-reviewer.agent.md.tmpl", checksum: "76b66d571269b94549b0625f419fe2f4a1871339daa554b698e48c64a664a37c" }
+  - { path: ".github/agents/subagents/security-lens-reviewer.agent.md", primitive: 7, template: "agents/review/security-lens-reviewer.agent.md.tmpl", checksum: "32fda27b51a6361d91615e4db704f00be80266d5c844ff3da05ab17297550dce" }
+  - { path: ".github/skills/build-feature/SKILL.md", primitive: 4, template: "skills/build-feature/SKILL.md.tmpl", checksum: "247a1eb8e66751157811be90db9e17e9743c7aaa822d9eaac0c5707c894a5962" }
+  - { path: ".github/skills/fix-ci/SKILL.md", primitive: 4, template: "skills/fix-ci/SKILL.md.tmpl", checksum: "4842cbb76bcbf2f383a7116eceb5552824b459723da1b85cd8cd8852788ddd57" }
+  - { path: ".github/skills/impl-plan/SKILL.md", primitive: 4, template: "skills/impl-plan/SKILL.md.tmpl", checksum: "06853c07d8bb445bb82d487da1742b4acda0b72c261bb3f9ca71e92771f950c6" }
+  - { path: ".github/skills/deliberate/SKILL.md", primitive: 4, template: "skills/deliberate/SKILL.md.tmpl", checksum: "2f12d7d823bd3ec4e5960a764eed9e282637961d8ed7cabe1360378b82cbf4f9" }
+  - { path: ".github/skills/spike/SKILL.md", primitive: 4, template: "skills/spike/SKILL.md.tmpl", checksum: "ca273f662a770d222fd7f0792bae6010c14ba581a8f9ab5bd7c93ea76b1da972" }
+  - { path: ".github/skills/plan-harden/SKILL.md", primitive: 4, template: "skills/plan-harden/SKILL.md.tmpl", checksum: "5e0b5d81c4c0a5216c6369e14d36f83e0fb1e98447967b1f82187febc7988c2d" }
+  - { path: ".github/skills/compact-context/SKILL.md", primitive: 1, template: "skills/compact-context/SKILL.md.tmpl", checksum: "9f6c1fe9ade0ad1c39fc962f156cfe128f254bb79c1975c1c9cf3d1e639884a2" }
+  - { path: ".github/skills/compound/SKILL.md", primitive: 1, template: "skills/compound/SKILL.md.tmpl", checksum: "0b6d0587fddddde91fdea085c1dc2bb4cc5c48130f7cf1a6659670b90c47639e" }
+  - { path: ".github/skills/compound-refresh/SKILL.md", primitive: 1, template: "skills/compound-refresh/SKILL.md.tmpl", checksum: "99f849184442886817ffd58f0060428e62c510fb516c85e546b6cfbfd4f28e11" }
+  - { path: ".github/skills/harness-architect/SKILL.md", primitive: 4, template: "skills/harness-architect/SKILL.md.tmpl", checksum: "9505bdfbf13fcc31dff0f94cebefcacd7240080645401d616fa0816427ef0212" }
+  - { path: ".github/skills/harvest/SKILL.md", primitive: 4, template: "skills/harvest/SKILL.md.tmpl", checksum: "3b0c44ef13cc0755b1ac774475b0512cf4d0da4508389c058229abf8c5197d95" }
+  - { path: ".github/skills/pr-lifecycle/SKILL.md", primitive: 4, template: "skills/pr-lifecycle/SKILL.md.tmpl", checksum: "e98eaeb657161ff6e9596b5f4c82ad89b636af8e2c456091ec5e51f9764a2d66" }
+  - { path: ".github/skills/safety-modes/SKILL.md", primitive: 5, template: "skills/safety-modes/SKILL.md.tmpl", checksum: "12cff288698ddd5b2365ba5939eae148fe56240cf09af74d470402517a510942" }
+  - { path: ".github/skills/file-lock/SKILL.md", primitive: 5, template: "skills/file-lock/SKILL.md.tmpl", checksum: "92f9ab1fd3de3a5e2967e9aa9c4dea2f49c58589c892df04c47c892be3a0a563" }
+  - { path: ".github/skills/skill-search/SKILL.md", primitive: 6, template: "skills/skill-search/SKILL.md.tmpl", checksum: "4b5b4423eef36132a30108880409010fb25d1d3b2bbb5869eaa706955604b578" }
+  - { path: ".github/skills/security-audit/SKILL.md", primitive: 5, template: "skills/security-audit/SKILL.md.tmpl", checksum: "90a0a609b2b6b82d1fa30c02b923e2b001c2cc2bc73633da74203e3011b2cdb7" }
+  - { path: ".github/skills/runtime-verification/SKILL.md", primitive: 10, template: "skills/runtime-verification/SKILL.md.tmpl", checksum: "b9f724368fc435b7bcc9ca57dd9263fda5d1116b014e77ade7cdc5b4aaec61e8" }
+  - { path: ".github/skills/operational-closure/SKILL.md", primitive: 10, template: "skills/operational-closure/SKILL.md.tmpl", checksum: "6decc95acb128562c9654991ec69958d52d38f19ddc60696e0c45863aacc4dc8" }
+  - { path: ".github/skills/observe/SKILL.md", primitive: 1, template: "skills/observe/SKILL.md.tmpl", checksum: "763b621f5098004bcdbeeb04e553b2cd4716171e24a4c57e92e984ca0a902c1c" }
+  - { path: ".github/skills/learn/SKILL.md", primitive: 1, template: "skills/learn/SKILL.md.tmpl", checksum: "211a3808294ad1584a51ce403939590f19121621776c66c516c8623acf9524ab" }
+  - { path: ".github/skills/evolve/SKILL.md", primitive: 1, template: "skills/evolve/SKILL.md.tmpl", checksum: "cfc0ad402117c288651e10a9b4a34ed1a38da1c5a51e4c1865974cd243ef6928" }
+  - { path: ".github/skills/browser-automation/SKILL.md", primitive: 10, template: "skills/browser-automation/SKILL.md.tmpl", checksum: "c4da5af8d5465a246142bd2f7d5b7d897748371e5cf85cc51b028831d5fcb213" }
+  - { path: ".github/skills/iterative-experiment/SKILL.md", primitive: 4, template: "skills/iterative-experiment/SKILL.md.tmpl", checksum: "d16ee90bdc02c2425f3bdf27ee9d9cd65d71abb7225ef0ff6edff4c98cdc4c86" }
+  - { path: ".github/skills/harness-doctor/SKILL.md", primitive: 1, template: "skills/harness-doctor/SKILL.md.tmpl", checksum: "849f5059a9ed77fc405c73c6330fb06bebeb58dab5045482a89174c67dca4964" }
+  - { path: ".github/skills/plan-review/SKILL.md", primitive: 7, template: "skills/plan-review/SKILL.md.tmpl", checksum: "407514f1223ec8f24f0dfd43e7a22032db04bce58841359e1210d004636f69ff" }
+  - { path: ".github/skills/review/SKILL.md", primitive: 7, template: "skills/review/SKILL.md.tmpl", checksum: "9c0a383e1ff0889748529ffb5be416e942e5143f3e0fe5cdd54b6f544530e609" }
+  - { path: ".github/skills/doc-review/SKILL.md", primitive: 7, template: "skills/doc-review/SKILL.md.tmpl", checksum: "af1623e2faa1055efdb42f4c6040356a4c95df3805c01fae1ffecaffa1ef50a4" }
+  - { path: ".github/skills/shipment-reconcile/SKILL.md", primitive: 4, template: "skills/shipment-reconcile/SKILL.md.tmpl", checksum: "6e8d6c5273a0c525ecf64150de215a123f317546f4bc6184f6140aad970e5efd" }
   - { path: "scripts/acquire_lock.ps1", primitive: 5, template: "skills/file-lock/scripts/acquire_lock.ps1", checksum: "d61a4760c49302d2c8c425d23552ded5e9fd51bf13c76362f1cf41ea3e3115f6" }
   - { path: "scripts/acquire_lock.sh", primitive: 5, template: "skills/file-lock/scripts/acquire_lock.sh", checksum: "65c543969c5014f5c91623be6087986acaa57ef6e98eb5ea15b944962d8886e7" }
   - { path: "scripts/release_lock.ps1", primitive: 5, template: "skills/file-lock/scripts/release_lock.ps1", checksum: "ec6ae8faddbe2dd11bf539b582154d77dc5b592406e3962522e1b216e283399d" }
@@ -173,15 +173,15 @@ artifacts:
   - { path: "start.ps1", primitive: 6, template: "scripts/start.ps1.tmpl", checksum: "2bf44383240a23e2576f01cdeb28fb7800e7a6652d4c4d75ac1ca8e9a69e7082" }
   - { path: "start.sh", primitive: 6, template: "scripts/start.sh.tmpl", checksum: "a9c60f4a93d4f0685a43604f26cafa4c9fd485cec8034b4463690885097b21bb" }
   - { path: ".env.local", primitive: 6, template: "scripts/.env.local.tmpl", checksum: "0b6726937d4403e8dd87339d47fbd4a9ab5e595bbe9676f65f319bacda43866e" }
-  - { path: ".autoharness/backlog-registry.yaml", primitive: 8, template: "backlog/registries/backlogit.registry.yaml", checksum: "8bd0e4903513bd2ec9cc6ba2b3e089f82c06b0582eefb69991aeed8462c863c8" }
+  - { path: ".autoharness/backlog-registry.yaml", primitive: 8, template: "backlog/registries/backlogit.registry.yaml", checksum: "f15ac617c6c3d4727a40003ae2167a4871b4d340ab1c52bf63d5b33b9267e919" }
   - { path: ".github/instructions/capability-pack-enforcement.instructions.md", primitive: 6, template: "instructions/capability-pack-enforcement.instructions.md.tmpl", checksum: "57ee627109e698d9fb3117606dcdab2b1c85b546599d8fd889aa8a2c7984ccdc" }
-  - { path: ".github/instructions/escalation-protocol.instructions.md", primitive: 3, template: "instructions/escalation-protocol.instructions.md.tmpl", checksum: "da506bc1bed1f6aa324014bb14648aeed9813919bc053c914e9271b494271bdc" }
-  - { path: ".github/instructions/copilot-code-review.instructions.md", primitive: 7, template: "instructions/copilot-code-review.instructions.md.tmpl", checksum: "e2333605584269ce54cef5984d61bce6fa504d94ab01486447ac3a9d8e1ae629" }
-  - { path: ".github/instructions/ci-security.instructions.md", primitive: 6, template: "instructions/ci-security.instructions.md.tmpl", checksum: "4e9e508bd9f3f69e0ab3ead6bc76abbe208b5370c10aeeaf82a2203e3a8434ed" }
-  - { path: ".github/instructions/workflows.instructions.md", primitive: 6, template: "instructions/workflows.instructions.md.tmpl", checksum: "fa39184192e6a42805ad2a457aba5d50a9f3e5263617037fe689ee15dc1f725a" }
-  - { path: ".github/agents/subagents/template-integrity-reviewer.agent.md", primitive: 7, template: "agents/review/template-integrity-reviewer.agent.md.tmpl", checksum: "e82630883f1ffd36ad8c58bd9742c6f5449d68e9472e8d778d3d5084ee360d5c" }
-  - { path: ".github/agents/subagents/schema-cli-docs-coupling-reviewer.agent.md", primitive: 7, template: "agents/review/schema-cli-docs-coupling-reviewer.agent.md.tmpl", checksum: "986c1a169a48d9c26434bc9437c98a821ae73a6350e94d94667c61f294695b41" }
-  - { path: ".github/skills/brainstorm/SKILL.md", primitive: 4, template: "skills/brainstorm/SKILL.md.tmpl", checksum: "26bf026a2a9034e240df04b8898260e1a8345147e54db5442ee2943e2823de21" }
+  - { path: ".github/instructions/escalation-protocol.instructions.md", primitive: 3, template: "instructions/escalation-protocol.instructions.md.tmpl", checksum: "d7a910cabde93dff4d0812e9d8db52842a4e2f2e4b6d0550c9cd11c01438bcb6" }
+  - { path: ".github/instructions/copilot-code-review.instructions.md", primitive: 7, template: "instructions/copilot-code-review.instructions.md.tmpl", checksum: "8260672028a8b0d7e933690993674c39ea22db4dea3128192f1ecfd2a40f4b62" }
+  - { path: ".github/instructions/ci-security.instructions.md", primitive: 6, template: "instructions/ci-security.instructions.md.tmpl", checksum: "5a1342489bcb5663dfd2d5a8b2fb56a428be9b8eef2d73a378507313ce2eda06" }
+  - { path: ".github/instructions/workflows.instructions.md", primitive: 6, template: "instructions/workflows.instructions.md.tmpl", checksum: "a821b82483d642647cc6f4fe41990345181014d9c76763c951db453e12e4e1e9" }
+  - { path: ".github/agents/subagents/template-integrity-reviewer.agent.md", primitive: 7, template: "agents/review/template-integrity-reviewer.agent.md.tmpl", checksum: "ae3336fd9365552850325525bcf1aafb2668e660530a977d6d2181dd4f07499f" }
+  - { path: ".github/agents/subagents/schema-cli-docs-coupling-reviewer.agent.md", primitive: 7, template: "agents/review/schema-cli-docs-coupling-reviewer.agent.md.tmpl", checksum: "373841d647777540796d655f9ae9579c55e36d8f66e899dacb5a5ff72d8f2883" }
+  - { path: ".github/skills/brainstorm/SKILL.md", primitive: 4, template: "skills/brainstorm/SKILL.md.tmpl", checksum: "a406cd1f059fd1a6b15af9b7c4f4d814c6ec4724aa9f89fa3a339ffd111efa4b" }
   - { path: "scripts/pre-push-quality-gates.ps1", primitive: 5, template: "scripts/pre-push-quality-gates.ps1.tmpl", checksum: "bb0f2669502481772ea774f9d532e74bd02434de6e1265a47fab464217a87c8e" }
   - { path: "scripts/pre-push-quality-gates.sh", primitive: 5, template: "scripts/pre-push-quality-gates.sh.tmpl", checksum: "85c4f2625128a52de758d0059190f1d8683195460b3732b23e214834f541901e" }
   - { path: "scripts/pre-commit-pipeline-topology.ps1", primitive: 5, template: "scripts/pre-commit-pipeline-topology.ps1.tmpl", checksum: "56ad98af28e371d626203fc16877b5a1dfd63d558d121cec8dc8f40fbb576341" }
@@ -242,12 +242,12 @@ variables_used:
   DOCUMENTATION_CONVENTIONS: Godoc comments on every exported type, function, and package, starting with the identifier name.
   DOC_COMMENT_STYLE: // Identifier ... godoc comment
   ERROR_HANDLING_CONVENTIONS: 'Errors are returned, never panicked, from library code. Wrap with context using `fmt.Errorf("...: %w", err)`. Sentinel errors use `errors.Is`/`errors.As` comparisons.'
-  ERROR_HANDLING_POLICY: Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why.
+  ERROR_HANDLING_POLICY: Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why
   ERROR_PATTERN: 'explicit `if err != nil` with `fmt.Errorf("...: %w", err)` wrapping'
   EXAMPLE_SCOPE: cli
   FILE_EXT: go
   FORMATTER: gofmt
-  FORMAT_CHECK_COMMAND: gofmt -l .
+  FORMAT_CHECK_COMMAND: test -z "$(gofmt -l .)"
   FORMAT_COMMAND: gofmt -l .
   FORMAT_FIX_COMMAND: gofmt -w .
   FORMAT_TOOL: gofmt
@@ -307,7 +307,7 @@ variables_used:
   LANGUAGE_VERSION_DETAIL: Go 1.26 (module github.com/softwaresalt/go-teams)
   LINTER: golangci-lint
   LINT_COMMAND: golangci-lint run
-  LINT_POLICY: '`golangci-lint run` MUST pass with zero issues; all findings are hard errors.'
+  LINT_POLICY: '`golangci-lint run` MUST pass with zero issues; all findings are hard errors'
   LINT_TOOL: golangci-lint
   MAX_WAIT: '600'
   NAMING_CONVENTIONS: PascalCase (MixedCaps) for exported identifiers, camelCase for unexported identifiers; package names are short, lowercase, and free of underscores.

@@ -10,7 +10,7 @@ applyTo: '**'
 ### I. Safety-First Go
 
 All production code MUST be written in Go (1.26).
-`unsafe` package forbidden without documented, security-reviewed justification. `golangci-lint run` MUST pass with zero issues; all findings are hard errors.. Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why..
+`unsafe` package forbidden without documented, security-reviewed justification. `golangci-lint run` MUST pass with zero issues; all findings are hard errors. Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why.
 
 **Rationale**: Explicit error handling and safety enforcement prevent data corruption,
 silent failures, and state loss during unattended agent operation.

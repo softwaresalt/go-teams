@@ -120,7 +120,7 @@ Run `go vet ./...` to confirm the fix compiles. If compilation fails, fix compil
 After the harness passes:
 
 1. **Lint**: `golangci-lint run`
-2. **Format**: `gofmt -l .`
+2. **Format**: `test -z "$(gofmt -l .)"`
    * If violations found: `gofmt -w .` and re-check
 3. **Full test suite**: `go test ./...`
 

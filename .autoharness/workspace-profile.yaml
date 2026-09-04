@@ -204,8 +204,15 @@ conventions:
 # distribution: omitted — this is a normal target workspace, not a global tool distribution.
 
 ai_environments:
-  detected: ["vscode", "copilot-cli"]
+  detected: ["copilot-cli"]
   register_default: "copilot-cli"
+  # Copilot CLI (C:\Tools\copilot.exe, resolved from PATH) launched with this
+  # workspace as CWD. start.ps1 redirects COPILOT_HOME to the workspace-local
+  # .copilot/ directory, so agent state, session store, and installed plugins are
+  # project-scoped and git-visible rather than shared across workspaces.
+  # The autoharness elective agents and skills are discovered through the
+  # workspace-local plugin at .copilot/installed-plugins/autoharness/ (v1.5.0),
+  # not through any editor settings file.
 
 tools:
   markdownlint: false
@@ -376,8 +383,12 @@ backlog_tool:
   #   defaults for types the project does not yet define (chore, epic, spike).
 
 vscode:
-  detected: true
-  user_settings_path: "c:\\Users\\dewilliams\\AppData\\Roaming\\Code\\User\\settings.json"
+  detected: false
+  user_settings_path: null
   has_agent_settings: false
+  # This workspace does not use VS Code. Agent, skill, and prompt discovery goes
+  # through the workspace-local Copilot CLI plugin, so the installer's VS Code
+  # user-settings step (Step 3.2c) is not applicable here. A stale, gitignored
+  # .vscode/mcp.json remains on disk but is superseded by the root .mcp.json.
 
 drift_report: null

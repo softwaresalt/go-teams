@@ -78,19 +78,27 @@ and all 8 test packages pass.
    (`:4316`). Both are satisfied only by writing
    `capability-pack-enforcement.instructions.md` with **LF** endings.
 
-6. **VS Code user settings were deliberately NOT written.** The install skill's
-   Step 3.2c instructs writing `%APPDATA%\Code\User\settings.json`, but that path
-   is outside the workspace tree and Constitution Principle IV (CLI Workspace
-   Containment) is NON-NEGOTIABLE. The manifest's `vscode_settings` block records
-   `applied: false` plus the target Python 3.14 entries, and an operator-run
-   helper was generated at
-   `.copilot/session-state/<session>/files/set-autoharness-vscode-paths.ps1`
-   (session workspace, not committed). It resolves `autoharness home` live, backs
-   up `settings.json`, adds the resolved entries, removes only autoharness entries
-   pointing at a *different* autoharness home, and is idempotent. Verified by
-   dry-run on Windows PowerShell 5.1 and PowerShell 7.
+6. **VS Code is not used in this workspace, so the installer's VS Code step is
+   not applicable.** The environment is the **Copilot CLI** (`C:\Tools\copilot.exe`,
+   resolved from PATH) launched with this workspace as CWD; `start.ps1` redirects
+   `COPILOT_HOME` to the workspace-local `.copilot/`, so agent state, the session
+   store, and installed plugins are project-scoped. The autoharness elective agents
+   and skills are discovered through the workspace-local plugin at
+   `.copilot/installed-plugins/autoharness/` (v1.5.0, matching the CLI) — not
+   through any editor settings file. The profile records `vscode.detected: false`
+   and `ai_environments.detected: ["copilot-cli"]`; the manifest records
+   `vscode_settings.applied: false` with `skipped_because: not applicable`.
+   Constitution Principle IV (CLI Workspace Containment) is therefore not even
+   engaged — there is no out-of-workspace target to write.
 
-7. **Stage escalation route made distinct.** Stage's role route falls back to
+7. **Agentic config surfaces retargeted to the real environment.**
+   `AGENTIC_CONFIG_GLOB` and `SECURITY_CONFIG_RULES` previously named `.vscode/**`,
+   `.claude/**`, and `.cursor/**`. They now name what this workspace actually runs:
+   `.github/**`, `.copilot/config.json`, `.copilot/settings.json`,
+   `.copilot/installed-plugins/**`, `.mcp.json`, and `AGENTS.md`, so the
+   security-audit skill scans live surfaces instead of dead ones.
+
+8. **Stage escalation route made distinct.** Stage's role route falls back to
    `tier3` (claude-opus-4.8/anthropic/xhigh) and its escalation route did too,
    which fires the P-013.6 same-route no-op guard (`ESCALATION_DEGRADED`).
    Declared `model_routing.stage.escalation` = claude-opus-5/anthropic/max.
@@ -147,22 +155,30 @@ normalization, and Engram block are silently lost. It is idempotent and
 newline-aware (matches each file's dominant line ending). After running it,
 refresh manifest checksums (raw-byte SHA-256) and re-verify.
 
+## Confirmed operating environment
+
+| Component | Value |
+|---|---|
+| AI environment | GitHub Copilot CLI (`C:\Tools\copilot.exe`, from PATH), CWD = workspace |
+| Copilot state | workspace-local `.copilot/` (`COPILOT_HOME` set by `start.ps1`) |
+| autoharness plugin | `.copilot/installed-plugins/autoharness/` v1.5.0 |
+| autoharness CLI | `C:\Python\Python314\Scripts\autoharness.exe` v1.5.0 |
+| autoharness home | `C:\Python\Python314\Lib\site-packages\autoharness\data` |
+| Python | 3.14.3 (`C:\Python\Python314\python.exe`) |
+| VS Code | not used |
+| Python 3.12 | not used (a stale autoharness copy remains installed; harmless) |
+
 ## Open items / next steps
 
-1. **VS Code user settings** still point at the superseded Python 3.12 autoharness
-   home. `autoharness home` resolves to the **Python 3.14** install
-   (`C:\Python\Python314\Lib\site-packages\autoharness\data`, v1.5.0), which is what
-   performed this install. Run the generated helper
-   (`.copilot/session-state/<session>/files/set-autoharness-vscode-paths.ps1`) to
-   swap the three `chat.*` discovery entries, then reload VS Code. A leftover
-   autoharness copy also remains under Python 3.12; removing it
-   (`C:\Python\Python312\python.exe -m pip uninstall autoharness`) is optional and
-   was not performed — it is a system-level package removal.
-2. **Open a PR** from `chore/autoharness-install-2026-09-03`; merge commit only (P-009).
-3. **Opt-in hooks are installed but not activated** — `scripts/pre-push-quality-gates.*`
+1. **Open a PR** from `chore/autoharness-install-2026-09-03`; merge commit only (P-009).
+2. **Opt-in hooks are installed but not activated** — `scripts/pre-push-quality-gates.*`
    and `scripts/pre-commit-pipeline-topology.*` are written but never wired into
    `.git/hooks` automatically (P-019). Chain both pre-commit hooks from one
    dispatcher if markdownlint is added later.
+3. **Optional cleanup** — a leftover autoharness package remains under Python 3.12
+   (`C:\Python\Python312\python.exe -m pip uninstall autoharness`) and a stale,
+   gitignored `.vscode/mcp.json` remains on disk. Neither is referenced by the
+   harness or the CLI; removing them is cosmetic.
 4. **2 residual warnings + 1 unresolved placeholder are upstream** autoharness 1.5.0
    template text (`~/.autoharness/` fallback documentation flagged by the portability
    scanner; a literal `{{VARIABLE}}` in `_ship.agent.md` prose). Not install defects.

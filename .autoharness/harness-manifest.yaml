@@ -3,7 +3,7 @@ installed_at: "2026-07-08T00:00:00Z"
 tuned_at: "2026-09-03T00:00:00Z"
 autoharness_version: "1.5.0"
 autoharness_home: "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data"
-profile_hash: "sha256:11a1c1321d02acee46f4cf5f6056ad18fe72c0e62354f1ad19ffffe08d860732"
+profile_hash: "sha256:2cd42805681d6092ef624842b6e93c39e13c10a9fbfb8a530fb5894c8feb8514"
 config_hash: "sha256:45b59a972b24f733d6407d62dd42bf584b11e6a8aa20857d1abff114c5ac9edd"
 install_preset: "full"
 primary_stack_pack: "cli-tool"
@@ -77,25 +77,16 @@ capability_pack_overlays:
 primitives_installed: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 vscode_settings:
   applied: false
-  user_settings_path: "C:\\Users\\dewilliams\\AppData\\Roaming\\Code\\User\\settings.json"
+  user_settings_path: null
   entries_added: []
-  skipped_because: "workspace-containment: VS Code user settings live outside the workspace tree (Constitution Principle IV, NON-NEGOTIABLE), so this install did not write them"
-  # TARGET (autoharness 1.5.0 resolves `autoharness home` to the Python 3.14 install):
-  #   "chat.agentFilesLocations":  { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/agents":  true }
-  #   "chat.agentSkillsLocations": { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/skills": true }
-  #   "chat.promptFilesLocations": { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/prompts": true }
-  #
-  # The settings file currently still carries the superseded Python 3.12 entries
-  # from the 1.4.11 install. Apply the target entries and drop the Python312 ones
-  # with the operator-run helper generated for this session
-  # (see docs/memory/2026-09-03/autoharness-1.5.0-install-memory.md).
+  skipped_because: "not applicable — this workspace uses the Copilot CLI (workspace CWD, COPILOT_HOME -> .copilot/), not VS Code. Agent, skill, and prompt discovery goes through the workspace-local plugin at .copilot/installed-plugins/autoharness/ (v1.5.0), so the installer's VS Code user-settings step has no target here."
 gitignore_updates:
   env_local_ignored: true
   file_lock_patterns_added: true
 artifacts:
   - { path: "AGENTS.md", primitive: 9, template: "foundation/AGENTS.md.tmpl", checksum: "f6062b966cdfb9569ab1949d5f78124a9c37ef04072db4be5dbf361359aad418" }
-  - { path: ".github/copilot-instructions.md", primitive: 6, template: "foundation/copilot-instructions.md.tmpl", checksum: "2fcbbc2470ebab10838c59b8abcb8f001fd0ff04a0b22967047b2dbfc3c60213" }
-  - { path: ".github/instructions/constitution.instructions.md", primitive: 5, template: "foundation/constitution.instructions.md.tmpl", checksum: "cd00798067f1f3a60f6c7e42332ceb2c02d00783ec0512db2754c2adb4947719" }
+  - { path: ".github/copilot-instructions.md", primitive: 6, template: "foundation/copilot-instructions.md.tmpl", checksum: "d5ee658776e00b165d00618973c6b3b7c76162fb3eca300e21b79e6295f3fd5f" }
+  - { path: ".github/instructions/constitution.instructions.md", primitive: 5, template: "foundation/constitution.instructions.md.tmpl", checksum: "c4e88a778e430afa2dd12a3f81daf23f51e5cca4bf76ffec0af9238774941267" }
   - { path: ".github/instructions/go.instructions.md", primitive: 6, template: "instructions/technology-go.instructions.md.tmpl", checksum: "172b9eb5f10a5ba1d7ac7cf24224bebb771d64ac8732a2f66804d7cb75d1e49a" }
   - { path: ".github/instructions/commit-message.instructions.md", primitive: 6, template: "instructions/commit-message.instructions.md.tmpl", checksum: "c479d9207e8623319efbb612bb26fdc6a6dbd2de51eb9cb7d566799d9e5d4e1e" }
   - { path: ".github/instructions/markdown.instructions.md", primitive: 6, template: "instructions/markdown.instructions.md.tmpl", checksum: "36b9faa412bb9b77adcb9d00b84b90d0adb226a1020d2789c497a72008fd85ae" }
@@ -123,7 +114,7 @@ artifacts:
   - { path: ".github/instructions/strict-safety.instructions.md", primitive: 5, template: "instructions/strict-safety.instructions.md.tmpl", checksum: "c66779a76080091f84f15fad12198ec662df4ed9c5d16a2f4f75d712a2f18e03" }
   - { path: ".github/instructions/release-observability.instructions.md", primitive: 10, template: "instructions/release-observability.instructions.md.tmpl", checksum: "0c2cde657e227176cd3ef0003ac5edb37d1c6a3fc2fbb7d6fb71950933828ddf" }
   - { path: ".github/instructions/adversarial-review.instructions.md", primitive: 7, template: "instructions/adversarial-review.instructions.md.tmpl", checksum: "6f1bd4be73c72bbba9de7b552440ff070f81027070e8e32fee1a7296a5e0ba73" }
-  - { path: ".github/policies/workflow-policies.md", primitive: 8, template: "policies/workflow-policies.md.tmpl", checksum: "fdfba982c6e1fac80764f7555de3f46e66f0d34a048f0a6a794e893e988733f8" }
+  - { path: ".github/policies/workflow-policies.md", primitive: 8, template: "policies/workflow-policies.md.tmpl", checksum: "1bf8efa5889f63f07310fa44d90d8b2cac2529002a00c6b801d36e25da058529" }
   - { path: ".github/prompts/feature-flow.prompt.md", primitive: 4, template: "prompts/feature-flow.prompt.md.tmpl", checksum: "aa7729b3e42600b528230e43078f6e1b1b893a5df03695506fec5bacc50d3d94" }
   - { path: ".github/prompts/feature-flow-parallel.prompt.md", primitive: 4, template: "prompts/feature-flow-parallel.prompt.md.tmpl", checksum: "577f6948d9712ac10c508760476ae5aa8a930fa632bccd1f3f21535f50149efa" }
   - { path: ".github/prompts/feature-flow-dark.prompt.md", primitive: 4, template: "prompts/feature-flow-dark.prompt.md.tmpl", checksum: "45f0f3a75ba5b9923e0f9e99328ddf9300401893340004792049e24229260b41" }
@@ -160,7 +151,7 @@ artifacts:
   - { path: ".github/skills/safety-modes/SKILL.md", primitive: 5, template: "skills/safety-modes/SKILL.md.tmpl", checksum: "be46883623aa14341765dddf3990b1a6c8a70ce0e4965ade23531a47c379ed7e" }
   - { path: ".github/skills/file-lock/SKILL.md", primitive: 5, template: "skills/file-lock/SKILL.md.tmpl", checksum: "624df80c6cee4ceca496a5ee6fb1c9ec7603b1fcef190ef7c9f9198c6b9da74b" }
   - { path: ".github/skills/skill-search/SKILL.md", primitive: 6, template: "skills/skill-search/SKILL.md.tmpl", checksum: "0fbdc29c4412dc3e152c015cdc982d5e6ddf82634d1d8c18a28d8f1661a50ab6" }
-  - { path: ".github/skills/security-audit/SKILL.md", primitive: 5, template: "skills/security-audit/SKILL.md.tmpl", checksum: "8cf8f5748324ad5d67301328742db58ce11476654b0019bea43a7c4f4ab31479" }
+  - { path: ".github/skills/security-audit/SKILL.md", primitive: 5, template: "skills/security-audit/SKILL.md.tmpl", checksum: "6dd55057974d98370aa61d437e33efbcb251d435d3dc0c6f09e7bec0cbee4f8c" }
   - { path: ".github/skills/runtime-verification/SKILL.md", primitive: 10, template: "skills/runtime-verification/SKILL.md.tmpl", checksum: "472dfc98d32761e952a9dae3455962e4791181984e09bf017a3300f69080a8de" }
   - { path: ".github/skills/operational-closure/SKILL.md", primitive: 10, template: "skills/operational-closure/SKILL.md.tmpl", checksum: "217e724449508d559338e06c3548df6449034568bf8d4afad8fa2533ad907143" }
   - { path: ".github/skills/observe/SKILL.md", primitive: 1, template: "skills/observe/SKILL.md.tmpl", checksum: "4cc91f4bede89425e5c34eec9429a1d0a52549ec89e95baca5d72ce5243c8abe" }
@@ -211,7 +202,7 @@ variables_used:
     | Audio encoding  | braheezy/shine-mp3 | Pure-Go MP3 encoder |
 
     | Assertions      | stretchr/testify | Unit and integration test assertions |'
-  AGENTIC_CONFIG_GLOB: .github/**`, `.vscode/**`, `.claude/**`, `.cursor/**`, `.mcp.json
+  AGENTIC_CONFIG_GLOB: .github/**`, `.copilot/config.json`, `.copilot/settings.json`, `.copilot/installed-plugins/**`, `.mcp.json`, `AGENTS.md
   ALT_DOC_REVIEW_FAMILY: ''
   ALT_DOC_REVIEW_PROVIDER: ''
   ALT_REVIEW_FAMILY: ''
@@ -368,7 +359,7 @@ variables_used:
   REPOSITORY_OPERATING_MODEL: go-teams is a single standalone Go CLI binary (Cobra command routing) that drives a headless Chromium browser via chromedp to join Microsoft Teams meetings, capture live captions and audio, and persist transcripts and recordings locally. Work flows through the Stage -> Ship release-unit pipeline with backlogit-managed work items.
   REPO_NAME: go-teams
   REPO_OWNER: softwaresalt
-  SECURITY_CONFIG_RULES: GitHub Copilot CLI and VS Code agentic config rules for a Go workspace (permissive tool allow-lists, unvalidated instruction inputs, hardcoded credentials, exposed env defaults, missing CI security gates)
+  SECURITY_CONFIG_RULES: GitHub Copilot CLI agentic config rules for a Go workspace (permissive tool allow-lists in .copilot/settings.json, unvalidated instruction inputs under .github/, untrusted MCP servers in .mcp.json, hardcoded credentials, exposed env defaults in .env.local, missing CI security gates)
   SECURITY_OWASP_PATTERNS: 'Go OWASP patterns: fmt.Sprintf interpolation into SQL or shell strings; exec.Command and exec.CommandContext with user-controlled arguments; text/template rendering of untrusted values; encoding/gob and gopkg.in/yaml.v3 decoding of untrusted input; os.WriteFile and os.MkdirAll outside the workspace root; unvalidated filepath.Join path traversal; and chromedp.Evaluate with interpolated page data'
   SECURITY_REVIEW_PATTERNS: 'internal/cli/auth.go, internal/cli/root.go, internal/teams/**, internal/browser/**, internal/config/**, **/session*.go, **/token*.go; content keywords: login, token, password, credential, session, cookie, secret, key, UserDataDir, permission, role, exec.Command'
   SECURITY_SCAN_PATTERNS: 'Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries'

@@ -1,6 +1,6 @@
 # go-teams Development Guidelines
 
-Last updated: 2026-09-03
+Last updated: 2026-09-04
 
 go-teams is a standalone Go CLI for autonomous Microsoft Teams live-transcription and audio capture via headless browser automation (chromedp).
 

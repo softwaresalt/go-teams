@@ -33,11 +33,11 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 
 | Variable | Purpose |
 |---|---|
-| `.github/**`, `.vscode/**`, `.claude/**`, `.cursor/**`, `.mcp.json` | Glob patterns for agentic config files (e.g., `.github/**`, `.vscode/**`) |
+| `.github/**`, `.copilot/config.json`, `.copilot/settings.json`, `.copilot/installed-plugins/**`, `.mcp.json`, `AGENTS.md` | Glob patterns for agentic config files (e.g., `.github/**`, `.vscode/**`) |
 | `**/*.go` | Application source file patterns (e.g., `src/**/*.go`) |
 | `Go` | Primary language for pattern selection |
 | `docs/security` | Output directory for persisted reports (default: `docs/security`) |
-| `GitHub Copilot CLI and VS Code agentic config rules for a Go workspace (permissive tool allow-lists, unvalidated instruction inputs, hardcoded credentials, exposed env defaults, missing CI security gates)` | Per-environment config rule table |
+| `GitHub Copilot CLI agentic config rules for a Go workspace (permissive tool allow-lists in .copilot/settings.json, unvalidated instruction inputs under .github/, untrusted MCP servers in .mcp.json, hardcoded credentials, exposed env defaults in .env.local, missing CI security gates)` | Per-environment config rule table |
 | `Go OWASP patterns: fmt.Sprintf interpolation into SQL or shell strings; exec.Command and exec.CommandContext with user-controlled arguments; text/template rendering of untrusted values; encoding/gob and gopkg.in/yaml.v3 decoding of untrusted input; os.WriteFile and os.MkdirAll outside the workspace root; unvalidated filepath.Join path traversal; and chromedp.Evaluate with interpolated page data` | Language-specific OWASP detection patterns |
 
 ## Workflow
@@ -50,7 +50,7 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 - `scope:<path>` — enumerate only files under the specified path
 - `scope:full` — enumerate all surfaces
 
-1. Enumerate agentic config surfaces matching `.github/**`, `.vscode/**`, `.claude/**`, `.cursor/**`, `.mcp.json`
+1. Enumerate agentic config surfaces matching `.github/**`, `.copilot/config.json`, `.copilot/settings.json`, `.copilot/installed-plugins/**`, `.mcp.json`, `AGENTS.md`
 2. Enumerate application source files matching `**/*.go`
 3. Identify the primary language (`Go`) and select corresponding OWASP patterns
 4. Record the audit scope, file counts, and entry points found
@@ -61,7 +61,7 @@ This is a leaf executor. No subagent spawning. Maximum depth: 0.
 
 Apply deterministic regex checks to config surfaces found in Phase 1. Findings in this tier are eligible for `mode:fix` auto-remediation.
 
-Rules from `GitHub Copilot CLI and VS Code agentic config rules for a Go workspace (permissive tool allow-lists, unvalidated instruction inputs, hardcoded credentials, exposed env defaults, missing CI security gates)`:
+Rules from `GitHub Copilot CLI agentic config rules for a Go workspace (permissive tool allow-lists in .copilot/settings.json, unvalidated instruction inputs under .github/, untrusted MCP servers in .mcp.json, hardcoded credentials, exposed env defaults in .env.local, missing CI security gates)`:
 
 * Hardcoded credential patterns (passwords, tokens, keys) in config files
 * Overly permissive tool allow-lists (e.g., `always: true` on destructive terminal commands)

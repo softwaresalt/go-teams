@@ -81,8 +81,14 @@ and all 8 test packages pass.
 6. **VS Code user settings were deliberately NOT written.** The install skill's
    Step 3.2c instructs writing `%APPDATA%\Code\User\settings.json`, but that path
    is outside the workspace tree and Constitution Principle IV (CLI Workspace
-   Containment) is NON-NEGOTIABLE. The required keys are recorded as a comment in
-   `.autoharness/harness-manifest.yaml` under `vscode_settings`.
+   Containment) is NON-NEGOTIABLE. The manifest's `vscode_settings` block records
+   `applied: false` plus the target Python 3.14 entries, and an operator-run
+   helper was generated at
+   `.copilot/session-state/<session>/files/set-autoharness-vscode-paths.ps1`
+   (session workspace, not committed). It resolves `autoharness home` live, backs
+   up `settings.json`, adds the resolved entries, removes only autoharness entries
+   pointing at a *different* autoharness home, and is idempotent. Verified by
+   dry-run on Windows PowerShell 5.1 and PowerShell 7.
 
 7. **Stage escalation route made distinct.** Stage's role route falls back to
    `tier3` (claude-opus-4.8/anthropic/xhigh) and its escalation route did too,
@@ -143,9 +149,15 @@ refresh manifest checksums (raw-byte SHA-256) and re-verify.
 
 ## Open items / next steps
 
-1. **VS Code user settings** still point at the stale Python312 autoharness home;
-   add the Python314 `chat.agentFilesLocations`, `chat.agentSkillsLocations`, and
-   `chat.promptFilesLocations` keys manually (exact JSON in the manifest comment).
+1. **VS Code user settings** still point at the superseded Python 3.12 autoharness
+   home. `autoharness home` resolves to the **Python 3.14** install
+   (`C:\Python\Python314\Lib\site-packages\autoharness\data`, v1.5.0), which is what
+   performed this install. Run the generated helper
+   (`.copilot/session-state/<session>/files/set-autoharness-vscode-paths.ps1`) to
+   swap the three `chat.*` discovery entries, then reload VS Code. A leftover
+   autoharness copy also remains under Python 3.12; removing it
+   (`C:\Python\Python312\python.exe -m pip uninstall autoharness`) is optional and
+   was not performed — it is a system-level package removal.
 2. **Open a PR** from `chore/autoharness-install-2026-09-03`; merge commit only (P-009).
 3. **Opt-in hooks are installed but not activated** — `scripts/pre-push-quality-gates.*`
    and `scripts/pre-commit-pipeline-topology.*` are written but never wired into

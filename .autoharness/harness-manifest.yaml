@@ -76,24 +76,19 @@ capability_pack_overlays:
       - "capability-pack-enforcement.instructions.md installed at .github/instructions/"
 primitives_installed: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 vscode_settings:
-  applied: true
+  applied: false
   user_settings_path: "C:\\Users\\dewilliams\\AppData\\Roaming\\Code\\User\\settings.json"
-  entries_added:
-    - "chat.agentFilesLocations[\"C:\\Python\\Python312\\Lib\\site-packages\\autoharness\\data/.github/agents\"]"
-    - "chat.agentSkillsLocations[\"C:\\Python\\Python312\\Lib\\site-packages\\autoharness\\data/.github/skills\"]"
-    - "chat.promptFilesLocations[\"C:\\Python\\Python312\\Lib\\site-packages\\autoharness\\data/.github/prompts\"]"
-  skipped_because: null
-  # PENDING OPERATOR ACTION (2026-09-03 merge install):
-  # `autoharness home` now resolves to
-  # C:\Python\Python314\Lib\site-packages\autoharness\data (autoharness 1.5.0),
-  # but the recorded user-settings entries still point at the Python312 install.
-  # This install did NOT modify the VS Code user settings file because it lives
-  # outside the workspace tree (Constitution Principle IV — CLI Workspace
-  # Containment, NON-NEGOTIABLE). Add these keys manually to pick up the 1.5.0
-  # agents, skills, and prompts:
-  #   "chat.agentFilesLocations":   { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/agents":   true }
-  #   "chat.agentSkillsLocations":  { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/skills":  true }
-  #   "chat.promptFilesLocations":  { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/prompts": true }
+  entries_added: []
+  skipped_because: "workspace-containment: VS Code user settings live outside the workspace tree (Constitution Principle IV, NON-NEGOTIABLE), so this install did not write them"
+  # TARGET (autoharness 1.5.0 resolves `autoharness home` to the Python 3.14 install):
+  #   "chat.agentFilesLocations":  { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/agents":  true }
+  #   "chat.agentSkillsLocations": { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/skills": true }
+  #   "chat.promptFilesLocations": { "C:\\Python\\Python314\\Lib\\site-packages\\autoharness\\data/.github/prompts": true }
+  #
+  # The settings file currently still carries the superseded Python 3.12 entries
+  # from the 1.4.11 install. Apply the target entries and drop the Python312 ones
+  # with the operator-run helper generated for this session
+  # (see docs/memory/2026-09-03/autoharness-1.5.0-install-memory.md).
 gitignore_updates:
   env_local_ignored: true
   file_lock_patterns_added: true

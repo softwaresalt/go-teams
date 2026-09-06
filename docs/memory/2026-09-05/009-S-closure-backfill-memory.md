@@ -55,17 +55,22 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    HEAD, rather than "not requested".
 7. A 4th Copilot-review fix/reply/resolve round (round 4 overall; extension
    round 1 of the operator-authorized 3 additional rounds for this recovery
-   continuation) addressed 3 further findings at HEAD `aec923e`: (a) the
-   rollback runbook's checkout commands lacked an explicit clean-worktree
-   check and operator-approval precondition before the destructive restore;
-   (b) the PR body's stale `Shadow review: not requested` claim (corrected
-   in item 6 above); (c) the Remaining follow-ups list omitted active stash
-   entry `D3EFD224` (CI `paths-ignore` tuning, low priority), which was
-   carried forward by the original 009-S review and the compacted memory but
+   continuation) addressed 3 further findings that Copilot's review of HEAD
+   `aec923e` (round 3's fix commit) had surfaced: (a) the rollback
+   runbook's checkout commands lacked an explicit clean-worktree check and
+   operator-approval precondition before the destructive restore; (b) the
+   PR body's stale `Shadow review: not requested` claim (corrected in item
+   6 above); (c) the Remaining follow-ups list omitted active stash entry
+   `D3EFD224` (CI `paths-ignore` tuning, low priority), which was carried
+   forward by the original 009-S review and the compacted memory but
    dropped from this backfill artifact's first revision by oversight. All
    three are same-contract-surface corrections to Ship's own authored
    closure artifact / PR body (P-021 C1 in scope) — no new P-021 capture was
-   required for this round.
+   required for this round. This round's own fix itself landed in commit
+   `f735dc8` (the PR description's round-4 entry), not `aec923e` — the
+   HEAD named above is the reviewed commit that surfaced these findings,
+   per Copilot review `5124405427`. (Correction: Copilot review
+   `5126233189`, line 59.)
 8. A 5th Copilot-review round (round 5 overall; extension round 2 of the
    operator-authorized 3 additional rounds) at HEAD `f735dc8` surfaced 1
    further finding: the compacted memory

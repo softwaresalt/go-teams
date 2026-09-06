@@ -1,0 +1,214 @@
+---
+title: "Stage session — CC0A7034 → shipment 010-S (live Teams selector/path hardening)"
+date: 2026-09-05
+agent: stage
+status: complete
+stash_processed: [CC0A7034]
+stash_deferred: [D3EFD224]
+feature: 010-F
+tasks: [010.001-T, 010.002-T, 010.003-T, 010.004-T, 010.005-T, 010.006-T]
+shipment: 010-S
+deliberation: 001-DL
+plan: docs/plans/2026-09-05-teams-live-selector-path-hardening-plan.md
+decision: docs/decisions/2026-09-05-teams-live-selector-path-hardening-deliberation.md
+---
+
+# Stage session: CC0A7034 → queued shipment 010-S
+
+## Outcome
+
+Staged the single operator-targeted stash entry **CC0A7034** (high, task-shaped,
+no `DEFERRED SCOPE EXPANSION` marker) into a reviewed backlog hierarchy and a
+**queued shipment `010-S`**, ready for Ship to claim. Stage did not modify
+production/test source, run any build/harness, claim the shipment, or open a
+product PR (P-010 boundary held).
+
+## Pipeline trace
+
+- **Step 0.0 tool gate:** backlogit CLI v1.10.1 (CLI-fallback mode; MCP tools not
+  exposed as callable functions). Registry `features.sizing:true`,
+  `features.shipments:true`.
+- **Step 0.1 index sync:** OK (45 artifacts at start).
+- **Step 1 triage:** CC0A7034 (target, high, task-shaped) + D3EFD224 (low, CI
+  config — OUT OF SCOPE, deferred). No deferred-scope-expansion marker → normal route.
+- **Step 1.5 grouping:** single-entry fallback (operator targeted CC0A7034) →
+  synthesized covering feature.
+- **Step 1.8 learnings:** `docs/compound/` has 5 entries (NOT empty — initial
+  shallow check was wrong, corrected in deliberation + plan + 001-DL notes).
+  shine-mp3-frame-alignment.md / shine-mp3-race-checkptr.md govern U5;
+  amend-breaks-shipment-gate.md / copilot-rereview-timing.md govern U6.
+- **Step 2 deliberation:** Option B (diagnostic-first per-surface decomposition).
+  Decision doc + backlogit deliberation `001-DL` linked to CC0A7034.
+- **Step 3 planning + hardening:** plan written; `Requires plan hardening: yes` →
+  `## Plan Hardening` appended (strict-safety; live-auth run classified High).
+- **Step 4 plan review (3 attempts):**
+  - Attempt 1 — 6 personas, 4 ADVISORY + 2 FAIL → **FAIL**.
+  - Attempt 2 (re-entry 1) — Constitution PASS, Go PASS, Security Lens ADVISORY,
+    Architecture FAIL (2 P1s) → **FAIL**.
+  - Attempt 3 (re-entry 2, final) — Architecture **ADVISORY** (both P1s + the P2
+    resolved/folded), Security Lens **PASS** → **gate ADVISORY**, no P0/P1 open.
+    Operator directive to autonomously produce the shipment = authorization to
+    proceed past ADVISORY (recorded in the plan's `## Plan Review`).
+- **Step 5 harvest:** feature `010-F` + 6 tasks (U1–U6), each with acceptance
+  criteria, structured `size`, prose `complexity` (see degradation note), and
+  dependency edges.
+- **Step 5.5 shipment assembly:** `010-S` (queued), covering feature first, 6
+  tasks parent-first in dependency order. Verified: 7 items, size histogram
+  M:2/S:4, 0 unsized, 0 skipped.
+- **Step 5.6 archive:** CC0A7034 text annotated with promotion target then
+  archived. D3EFD224 left active (deferred).
+
+## Backlog shape
+
+Feature **010-F** — "Live Teams DOM selector and join-path hardening for browser
+FSM/caption/audio verification"
+
+| Task | Unit | Domain | Size | Complexity | Depends on |
+|---|---|---|---|---|---|
+| 010.001-T | U1 live-DOM diagnostic (build-tagged probe, Ship-executed) | test-infra/spike | M | medium | — |
+| 010.002-T | U2 `/meet/` URL mutation hardening | code (test-first) | S | low | U1 |
+| 010.003-T | U3 pre-join/lobby selectors → green TestMeetingJoin | code (char-first) | M | medium | U1, U2 |
+| 010.004-T | U4 caption selectors → green TestMeetingEnableCaptions | code (char-first) | S | medium | U3 |
+| 010.005-T | U5 audio path → green TestMeetingCaptureAudio | code (char-first) | S | low | U3 |
+| 010.006-T | U6 runbook + closure evidence | docs | S | low | U3, U4, U5 |
+
+DAG: U1 → U2 → U3 → (U4 ∥ U5) → U6. Estimated effort ≈ 6 tasks × ≤2h.
+
+## Degradation note (capability gate)
+
+This workspace's backlogit task type defines a structured `size` field but **not**
+a structured `complexity` field (`backlogit update --complexity` → validation
+error "artifact type task does not define a complexity field"). Per the Stage
+structured-emission capability gate, both axes were still assigned: `size`
+written structurally; `complexity` preserved as clearly-labeled prose in each
+task's `implementation-notes` section. Ship should read complexity from the
+task's implementation-notes, not from a structured field.
+
+## Hard constraints threaded into every artifact
+
+- Private join link stays ONLY in the out-of-tree session-state file; downstream
+  references `TEAMS_MEETING_URL` only. Redaction rules bind U1/U2/U6 (selector
+  inventory + redacted route class only; no HTML/HAR/screenshots/cookies/
+  localStorage/profile paths).
+- Do NOT terminate/alter the manually-launched Edge organizer (CDP 9223);
+  teardown targets only the bot's own launched PID (no image-wide kill).
+- Bot uses a separate git-ignored, workspace-contained profile; Chrome-for-Testing
+  must be on PATH (root cause of the first-run `google-chrome` abort).
+- Parent evidence docs (circuit-break + blocked-closure) must not be overwritten.
+- Bot-side login/MFA is an explicit, never-automated U1/U6 operator checkpoint.
+
+## Handoff
+
+- **Shipment ID (handoff token to Ship): `010-S`** (status: queued).
+- Ship claims `010-S`, executes U1 first (live diagnostic feeds U2/U3), then the
+  DAG. U1 is a Ship-pipeline diagnostic, not a Stage spike.
+
+## Addendum — post-gate live selector evidence folded in (2026-09-05)
+
+After harvest + shipment assembly, the operator supplied concrete live DOM
+evidence from a real authenticated meeting. Folded into the plan (new **Live
+Selector Evidence (2026-09-05)** section as the selector oracle) and into the
+queued backlog tasks in place. Treated as **de-risking sharpening, not scope
+expansion** → ADVISORY gate verdict stands, no fourth review cycle (recorded in
+the plan's Plan Review as a post-gate fold-in).
+
+Key confirmed facts and where they landed:
+
+- **Root cause confirmed:** `/meet/<id>?p=<passcode>` on a fresh guest profile
+  redirects to `/dl/launcher/launcher.html`; `chromeMeeting.Join` waits for
+  `[data-tid="prejoin-join-button"]` immediately after `Navigate` and never
+  clicks `button[data-tid="joinOnWeb"]`, so it times out (`pre-join not visible`).
+  → **U3 (010.003-T)** gained launcher handling as the primary fix.
+- **Identity confirmed guest** (manual guest join + admission succeeded; no-invite
+  two-session topology proven). Collapsed the guest-vs-authenticated branch across
+  the plan/topology/U1/U6.
+- **Selector deltas → U3 (010.003-T):** `meetingToolbarSel` `[data-tid="hangup-button"]`
+  → `#hangup-button`; mic state read changed from `aria-checked` (no longer
+  present) to the `checked` DOM property (bot was being left unmuted); already-valid
+  (no churn): `prejoin-join-button`, `prejoin-display-name-input`, `toggle-mute`,
+  lobby text.
+- **Caption deltas → U4 (010.004-T):** `more-button`→`#callingButtons-showMoreBtn`;
+  `language-speech-button`→`#LanguageSpeechMenuControl-id` (full client only);
+  `closed-captions-button`→`#closed-captions-button` (bind to id; live data-tid
+  varies); wrapper `[data-tid="closed-caption-renderer-wrapper"]` still valid;
+  two-variant activation (guest-direct vs full-nested, no broad silent fallback);
+  inner JS literals `closed-caption-text`/`author`/`.fui-ChatMessageCompact` still
+  VERIFY LIVE. U4 file scope now includes `meeting_chrome.go` (activateCaptions).
+- **U6 (010.006-T):** runbook records the confirmed redacted selector inventory +
+  launcher note; docstring aligned to guest.
+- **U1/U2 annotated:** U1 narrowed to the still-open URL-mutation question +
+  caption-variant confirmation; U2 clarified as pure URL-string mutation (launcher
+  handling is U3's, not U2's).
+
+**Defect found and fixed during this addendum:** the create-time
+`add --type task --section acceptance-criteria=...` **silently dropped** the
+acceptance-criteria section for U1/U2/U5/U6 (only U3/U4, updated via
+`update --section`, had it). Re-applied acceptance criteria to all four via
+`backlogit update --section acceptance-criteria` — all six tasks now carry ≥1
+acceptance criterion (P-003 restored). Lesson for future harvests on this
+backlogit build: set `acceptance-criteria` with a follow-up `update --section`
+call, not at `add` time, and verify the section persisted.
+
+Sizes/DAG unchanged after the fold-in; shipment `010-S` re-verified: 7 items,
+histogram M:2/S:4, 0 unsized, 0 skipped.
+
+## Addendum 2 — U7 harness exec-path enabler + production follow-up (2026-09-05T17:06)
+
+A fourth round of live evidence arrived. Sorted into three buckets:
+
+**(a) Confirmations (no re-gate)** — a second live cycle reproduced the launcher
+gap (`TestMeetingJoin` red again at ~123s `pre-join not visible`) and walked the
+full happy path (`/meet/` → launcher → `joinOnWeb` → guest pre-join → join → lobby
+→ admit), re-confirming `#hangup-button` admission and guest-direct
+`#closed-captions-button`. Recorded as a "Confirmation run" note in the plan's
+Live Selector Evidence section; status promoted from single-observation to
+reproduced.
+
+**(b) Audio sharpening (no re-gate)** — live evidence confirmed the capture
+**prerequisites** (`getDisplayMedia` + `AudioContext`) are present; streaming
+still unverified. U5 (`010.005-T`) plan text + acceptance criteria updated to
+separate "prereqs present" (confirmed, NOT a pass) from verified end-to-end
+streaming (non-zero MP3 bytes). Within U5's existing boundary.
+
+**(c) NEW SCOPE — U7 (independently scope-audited, then added)** — chromedp
+auto-discovery aborts `exec: "google-chrome": executable file not found in %PATH%`
+on the Edge-only Windows host; live workaround was an ad-hoc PATH prepend. Because
+this ADDS a unit (not sharpening), it was routed through an independent **Scope
+Boundary Auditor** pass → **ADVISORY (lean PASS)**. Actions taken, all auditor
+advisories applied:
+- Added **U7** to the plan (units, Dependency Graph sequenced ahead of U1, Risks,
+  Decisions, and a dedicated post-gate `## Plan Review` note recording the
+  ADVISORY scope-audit).
+- Harvested task **`010.007-T`** (size XS, complexity trivial-as-prose, AC +
+  notes present), dependency edge **`010.001-T` (U1) → `010.007-T` (U7)**, added
+  to shipment **`010-S`**. Shipment now **8 items** (`010-F` + 7 tasks),
+  histogram **M:2 / S:4 / XS:1**, 0 unsized, 0 skipped.
+- U7 kept **test-only** (`internal/browser/meeting_integration_test.go` only, ~5
+  lines, `TEAMS_BROWSER_PATH` → `chromedp.ExecPath`, pure superset). The
+  **production-runtime** portability gap (`runner.go`/`meeting.go` share the same
+  broken allocator call — confirmed by the auditor) was **split out as a separate
+  follow-up stash entry `87CDB97A`** (kind: feature, medium) rather than bundled
+  into 010-F.
+- Secrets: `TEAMS_BROWSER_PATH` bound by Protected Invariant 5 (never
+  echoed/committed into redacted `docs/` evidence).
+
+**Repeat of the create-time section-drop quirk:** `--section
+implementation-notes=...` AND `--section acceptance-criteria=...` are BOTH
+silently dropped at `add` time — only a follow-up `update --section` persists
+them. Confirmed and fixed for `010.007-T`; all 7 tasks re-verified to carry
+size + acceptance-criteria + implementation-notes.
+
+Gate verdict for 010-F stands **ADVISORY**. Shipment `010-S` remains **queued**
+and unclaimed. Deferred/active stash: `D3EFD224` (CI config, prior) and new
+`87CDB97A` (production exec-path portability).
+
+## Blocking conditions / open items
+
+- None blocking harvest or shipment. Residual advisory (folded into U1): per-param
+  ablation of all five legacy bypass params under run-budget with a
+  trim-and-record fallback.
+- Live execution risk (owned by Ship): the harness is currently RED
+  (`pre-join not visible`); greening depends on live Teams DOM + operator
+  checkpoints (lobby admission, possible bot-side login/MFA).
+- Deferred: D3EFD224 (CI paths-ignore; latent, non-blocking while
+  required_status_checks=[]).

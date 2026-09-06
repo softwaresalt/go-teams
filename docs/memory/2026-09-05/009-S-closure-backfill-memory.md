@@ -111,9 +111,10 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
   (001-S…008-S) older memory files were left as-is to avoid scope creep.
 
 9. A 6th Copilot-review round (round 6 overall; extension round 3 of 3 —
-   the final operator-authorized additional round) at HEAD `0644f82`
-   surfaced 1 further finding, delivered as a review-body "Suppressed
-   comments" entry (review `5124607493`, no dedicated inline review thread
+   the final operator-authorized additional round) — triggered by
+   Copilot's review of HEAD `0644f82` (round 5's fix commit) — surfaced
+   1 further finding, delivered as a review-body "Suppressed comments"
+   entry (review `5124607493`, no dedicated inline review thread
    was created — `Comments generated: 0 new`) anchored to
    `docs/closure/009-S-009-F-post-merge-closure.md:266`: the rollback
    runbook's copy/pasteable `git commit -m "revert(audio): restore
@@ -127,7 +128,10 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    placeholder, so the command is genuinely ready-to-run with no
    fill-in-the-blank text. Same-contract-surface correction to Ship's own
    authored closure artifact (P-021 C1 in scope); no new P-021 capture
-   required.
+   required. This round's own fix landed in commit `2a0d8bd` (the PR
+   description's round-6 entry), not `0644f82` — the HEAD named above
+   is the reviewed commit that surfaced this finding. (Correction:
+   Copilot review `5126233189`, line 106.)
 
 ## Next steps
 

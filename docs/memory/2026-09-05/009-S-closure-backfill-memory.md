@@ -341,3 +341,35 @@ in the PR body's Local Review Readiness block and PR comments, and in a
 following session memory update, not duplicated here. PR #28 remains
 unmerged as of this commit; 010-S remains unclaimed and untouched; no
 merge attempted; no admin fallback used.
+
+**Post-push reconciliation for commit `65a41d2` (2026-09-06)**: confirmed via
+a live GraphQL `reviewThreads` query (full pagination, `hasNextPage: false`,
+`totalCount: 22`) that all 3 threads named above -- `PRRT_kwDOTStvas6fuZf3`,
+`PRRT_kwDOTStvas6fuj_F`, `PRRT_kwDOTStvas6fuyHQ` -- carry `isResolved: true`
+at this HEAD, and that the body-only PR comment for review `5126488219` was
+posted (issue comment `5562079729`). A follow-up Copilot review then ran at
+this same HEAD (`65a41d2`): review `5126582453` (submitted
+2026-09-06T20:51:31Z), which found exactly 2 new, distinct findings -- an
+inline thread, `PRRT_kwDOTStvas6fu8ka` (`:369`, this document's own P-020
+compaction-evidence paragraph read as leaving compaction incomplete while
+`compaction_status: done`), and a review-body-only finding at *this file's*
+then-current line 340 (this checkpoint's closing paragraph promised a
+following update recording the actual post-push outcome and refreshed
+readiness evidence, but had not yet been written -- this paragraph and the
+one below are that promised update).
+
+**Current remediation round (2026-09-06, in progress as of this commit)**: a
+separately operator-authorized Ship continuation (same PR #28, no new
+shipment claim, 010-S still untouched) is fixing both of the above findings
+in this same commit: the closure artifact's P-020 compaction-evidence
+paragraph is corrected to cite P-020's explicit "active checkpoints are
+never compacted" rule (`workflow-policies.md:663`) rather than framing the
+exclusion as deferred/incomplete work, and this checkpoint is updated with
+this actual-outcome entry. Per the mandatory execution contract, the inline
+reply plus GraphQL resolution for `PRRT_kwDOTStvas6fu8ka`, the body-only PR
+comment for review `5126582453`, the PR body's Local Review Readiness
+refresh to this commit's HEAD, and the single permitted follow-up
+Copilot-review poll all happen after this commit is pushed -- recorded in
+the PR body and PR comments, and in a following session memory update, not
+duplicated here. PR #28 remains unmerged as of this commit; 010-S remains
+unclaimed and untouched; no merge attempted; no admin fallback used.

@@ -363,10 +363,23 @@ one intended candidate is 009-S's own memory, and it was already compacted
 as recorded above -- confirmed still current at this HEAD.
 
 No other file was compacted as part of *this* closure, and that is the
-policy-correct outcome, not a narrowed invocation: `docs/memory/2026-09-05/009-S-closure-backfill-memory.md`
-is this session's own **active** checkpoint (still being appended to as
-this remediation round proceeds) -- it is the guaranteed next candidate
-once this session concludes, not now. `docs/memory/2026-07-09/cli-foundation-memory.md`
+policy-correct outcome, not a narrowed or incomplete invocation:
+`docs/memory/2026-09-05/009-S-closure-backfill-memory.md` is this
+session's own **active** checkpoint (still being appended to as this
+remediation round proceeds), and P-020 states explicitly that "active
+checkpoints are never compacted" (`workflow-policies.md:663`) -- this is
+a correct, policy-mandated exclusion from this round's candidate
+selection, not deferred incomplete work. P-020 decouples invocation from
+candidate selection (`workflow-policies.md:659-669`): this round's
+`target: all` invocation ran to completion and its candidate selection
+correctly excluded this still-active file, so `compaction_status: done`
+is fully earned by this invocation alone and is not contingent on a
+future rerun against this same file. Once this checkpoint is no longer
+active and, if it still exceeds the skill's own `threshold_days`/
+`max_files`/`max_size_kb` thresholds, it becomes eligible for an
+ordinary later threshold-triggered compaction pass -- a separate,
+generic maintenance event, not a reopening of this already-satisfied
+P-020 gate. `docs/memory/2026-07-09/cli-foundation-memory.md`
 (001-S), `docs/memory/2026-07-10/007-S-capture-wiring-memory.md` (007-S),
 `docs/memory/2026-07-10/008-S-and-darkmode-completion-memory.md` (008-S),
 and `docs/memory/2026-07-10/autonomous-pipeline-run-memory.md`
@@ -393,7 +406,7 @@ Verified via `git grep -n --fixed-strings <old-path> -- ':!docs/archive/*'
 ':!docs/closure/009-S-009-F-post-merge-closure.md'` for each of the four
 other-unit memory paths above. The second exclusion is this artifact
 itself: it quotes all four paths verbatim in the paragraph above (lines
-369-372), so without excluding it, the command self-matches this document
+382-385), so without excluding it, the command self-matches this document
 and cannot support a "no cross-references" claim as originally written.
 With both exclusions applied, the command reproducibly returns no matches
 for any of the four paths -- no cross-references exist outside

@@ -323,6 +323,62 @@ cleanup remained outstanding at backfill time. Re-verified clean at backfill:
 no `.backlogit/queue/009*` entries, `git status -- ".backlogit/archive/"`
 reports no deletions.
 
+## P-020 compaction evidence
+
+**Corrected (Copilot finding, 2026-09-06)**: the compaction recorded in
+`compaction_status: done` above (frontmatter, present since the original
+backfill) was produced by a single, hand-scoped `compact-context` pass
+limited to 009-S's own pre-existing memory artifact
+(`docs/memory/2026-07-11/009-S-mp3-race-safety-memory.md`). Manually
+narrowing the invocation to one file does not satisfy the repository
+policy, which requires invoking `compact-context` with `target: all` at
+every post-merge closure (candidate selection, not a hand-picked file list,
+is what is supposed to decide what gets touched).
+
+Ran the corrected pass this round (2026-09-06): `compact-context`,
+`target: all`, assessing `docs/memory/`, `docs/plans/`, and
+`docs/closure/` without pre-restricting the input set. Candidate selection
+(age > 14 days, completed-work rule, not referenced by active/incomplete
+work) resolved as follows:
+
+- **Compacted** (old, non-active, completed-shipment memory): `docs/memory/2026-07-09/cli-foundation-memory.md`
+  (001-S) -> `docs/memory/compacted/2026-07-09-001-S-cli-foundation-compacted.md`;
+  `docs/memory/2026-07-10/007-S-capture-wiring-memory.md` (007-S) ->
+  `docs/memory/compacted/2026-07-10-007-S-capture-wiring-compacted.md`;
+  `docs/memory/2026-07-10/008-S-and-darkmode-completion-memory.md` (008-S) ->
+  `docs/memory/compacted/2026-07-10-008-S-darkmode-completion-compacted.md`;
+  `docs/memory/2026-07-10/autonomous-pipeline-run-memory.md`
+  (004-S/005-S/006-S) -> `docs/memory/compacted/2026-07-10-004-005-006-S-autonomous-pipeline-compacted.md`.
+  Verbose originals moved to `docs/archive/memory/` (same relative path).
+  No cross-references to the moved paths exist elsewhere in the repository
+  (verified via `git grep`).
+- **Not compacted, and why** (candidate-selection exclusions, not a
+  re-narrowed invocation): `docs/memory/2026-09-05/009-S-closure-backfill-memory.md`
+  is this session's own **active** checkpoint (still being appended to as
+  this remediation round proceeds) — compacting an in-progress session's
+  memory mid-session would violate the skill's "never compact checkpoints
+  for active work items" constraint; it is the guaranteed next-post-merge
+  compaction candidate once this session concludes. `docs/memory/2026-09-03/autoharness-1.5.0-install-memory.md`,
+  `docs/memory/2026-09-05/circuit-break-agent-browser-chrome-launch.md`,
+  and `docs/memory/2026-09-05/stage-cc0a7034-live-selector-hardening-shipment.md`
+  are all under the 14-day age threshold and/or tied to the still-`queued`
+  (incomplete) shipment `010-S`. `docs/plans/2026-09-05-teams-live-selector-path-hardening-plan.md`
+  is likewise 010-S-scoped and 010-S is not complete. `docs/closure/`'s
+  pre-existing per-shipment records (001-S through 009-S closures/reviews)
+  were assessed but excluded from this pass: `docs/closure/2026-07-11-009-S-review.md`
+  is actively cross-referenced as evidence by *this same* closure artifact's
+  Releasability evidence table below, so archiving/renaming it here would
+  break this artifact's own evidence trail; the remaining older
+  closure/review records are reference material other artifacts may cite
+  by exact path, which is a materially higher breakage risk than a memory
+  checkpoint, and their consolidation is a separate, independently-scoped
+  action from this 009-S closure backfill (out of scope per P-021 C1 --
+  same reasoning already applied to the `FE245033` deferred-scope-expansion
+  capture elsewhere in this document).
+
+`go vet ./...` and `gofmt -l .` re-run clean after this docs-only pass (no
+source touched).
+
 ## Releasability evidence
 
 | Requirement | Status | Evidence |
@@ -334,7 +390,7 @@ reports no deletions.
 | Backlog archival | Satisfied | PR #24, commit `12f0dc5`; re-verified intact at backfill |
 | Monitoring plan | Satisfied (manual/CI checklist) | See corrected Monitoring plan above (CI-run table) |
 | Rollback plan | Satisfied | Source-only targeted procedure above (not a raw merge-commit revert) |
-| P-020 compaction | Satisfied | `compaction_status: done`; `docs/memory/compacted/2026-07-11-009-S-mp3-race-safety-compacted.md` |
+| P-020 compaction | Satisfied | `compaction_status: done`; genuine `target: all` pass completed 2026-09-06 (see P-020 compaction evidence above) -- `docs/memory/compacted/2026-07-11-009-S-mp3-race-safety-compacted.md` plus 4 further completed-shipment memory files compacted this round |
 
 **Readiness: `READY`.** The five items above were factually corrected on
 2026-09-06 following Copilot review; none of the corrections change the

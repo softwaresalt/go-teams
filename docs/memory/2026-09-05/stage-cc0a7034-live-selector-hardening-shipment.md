@@ -6,7 +6,7 @@ status: complete
 stash_processed: [CC0A7034]
 stash_deferred: [D3EFD224, 87CDB97A, D2023898, EEA7F685, A99EEABD, 3084A83E]
 feature: 010-F
-tasks: [010.007-T, 010.001-T, 010.002-T, 010.003-T, 010.004-T, 010.005-T, 010.006-T]
+tasks: [010.007-T, 010.001-T, 010.002-T, 010.003-T, 010.004-T, 010.005-T, 010.006-T, 010.008-T, 010.009-T]
 shipment: 010-S
 deliberation: 001-DL
 plan: docs/plans/2026-09-05-teams-live-selector-path-hardening-plan.md
@@ -70,12 +70,14 @@ FSM/caption/audio verification"
 | 010.002-T | U2 `/meet/` URL mutation hardening | code (test-first) | S | low | U1 |
 | 010.003-T | U3 pre-join/lobby selectors → green TestMeetingJoin | code (char-first) | M | medium | U1, U2 |
 | 010.004-T | U4 caption selectors → green TestMeetingEnableCaptions | code (char-first) | S | medium | U3 |
-| 010.005-T | U5 audio path → green TestMeetingCaptureAudio | code (char-first) | S | medium | U3 |
-| 010.006-T | U6 runbook + closure evidence | docs | S | low | U3, U4, U5 |
+| 010.005-T | U5 audio path → green TestMeetingCaptureAudio | code (char-first) | M | medium | U3 |
+| 010.006-T | U6 runbook + closure evidence (docs/closure only) | docs | S | low | U3, U4, U5 |
+| 010.008-T | U8 browserContext docstring → confirmed guest (comment-only; split from U6) | docs/comment | XS | trivial | U1 |
+| 010.009-T | U9 promote both root-cause learnings to docs/compound (split from U6) | docs | S | low | U6 |
 
-DAG: U7 → U1 → U2 → U3 → (U4 ∥ U5) → U6. Shipment `010-S` = **8 items**
-(feature `010-F` + 7 tasks); task-size histogram **M:2 / S:4 / XS:1**, 0 unsized.
-Estimated effort ≈ 7 tasks × ≤2h.
+DAG: U7 → U1 → U2 → U3 → (U4 ∥ U5) → U6 → U9; U1 → U8. Shipment `010-S` = **10 items**
+(feature `010-F` + 9 tasks); task-size histogram **M:3 / S:4 / XS:2**, 0 unsized.
+Estimated effort ≈ 9 tasks × ≤2h.
 
 ## Degradation note (capability gate)
 
@@ -282,3 +284,50 @@ screening now fits the 2h budget), U2/U4/U5 stay **S**, U7 **XS**. Shipment
 `U7→U1→U2→U3→(U4∥U5)→U6`, status **queued/unclaimed**. Requirements Trace rows
 unchanged (within-unit refinements only). Secret-scan of all touched artifacts:
 CLEAN (no live URL / `p=` token / account / calendar / cookie / profile path).
+
+## Post-gate review-fix cycle 2 (2026-09-06) — PR #27 current-HEAD Copilot review: U5 scope, U6 split, U2 policy
+
+Scope: Stage-owned planning/backlog/doc artifacts ONLY (no Go/source, no build,
+no commit/push, no PR reply/thread-resolve, no shipment claim). Applied the
+current-HEAD PR #27 Copilot review items.
+
+- **U5 (`010.005-T`) file scope + size S -> M.** Added
+  `internal/browser/meeting_chrome.go` to U5 file scope: decoded PCM `samples`
+  reach `enc.WritePCM` there (encoder built at meeting_chrome.go:305, WritePCM at
+  :315), so the PCM-before-encode observer tap is wired at that point. Because
+  `meeting_integration_test.go` is `package browser_test` (external), the seam MUST
+  be an EXPORTED / accessible nil-by-default hook (or the AnalyserNode decision is
+  transported over the `sendAudioToGo` binding). 3 core files (`meeting_chrome.go`
+  + `audio.go` + external `browser_test`) exceed the S `<3 files` guidance -> size
+  raised to **M** via `backlogit update --size M`.
+- **U6 (`010.006-T`) width split -> U8 + U9.** U6 exceeded width. It now owns ONLY
+  the runbook + closure evidence under `docs/closure/browser-automation/`. Created:
+  - **U8 `010.008-T`** (XS, trivial; dep U1) — comment-only `browserContext`
+    docstring aligned to the confirmed guest topology in
+    `internal/browser/meeting_integration_test.go`.
+  - **U9 `010.009-T`** (S, low; dep U6) — promote BOTH distinct root-cause
+    learnings (agent-browser managed-launch DevToolsActivePort failure; chromedp
+    harness `google-chrome` PATH-discovery failure + `TEAMS_BROWSER_PATH` remedy)
+    into `docs/compound/` as SEPARATE learnings (never conflated), cross-referencing
+    (not overwriting) the parent blocked-closure + circuit-break records.
+  Both added to shipment `010-S` in dependency order (appended after U6; U8's dep
+  U1 and U9's dep U6 both precede). New DAG: `U7 → U1 → U2 → U3 → (U4 ∥ U5) → U6 →
+  U9`, with `U1 → U8` branch.
+- **U2 (`010.002-T`) deterministic conflict policy.** Replaced the
+  "do-not-clobber pre-existing `type`" ambiguity with ONE deterministic rule for
+  `/meet/` inputs: STRIP the `type` query key ENTIRELY (including an incoming
+  `type=meetup-join`; stripped key not preserved), while PRESERVING `u.Path`, the
+  `p` token, all unrelated query keys, and the URL fragment. Legacy
+  `/l/meetup-join/` stays byte-for-byte compatible. Acceptance assertions/fixtures
+  aligned: conflict case asserts `type` ABSENT; new case asserts unrelated keys +
+  fragment preserved.
+- **Shipment `010-S` wording.** "Live verification" now describes the organizer as
+  a **manually launched Microsoft Edge connected through native CDP** and keeps the
+  **managed agent-browser Chrome launch identified as the BLOCKED path**.
+
+**Sizes / histogram / trace.** U5 S -> M; U8 XS; U9 S. New shipment size histogram
+**M:3 / S:4 / XS:2** (9 tasks), **10 items** total (feature + 9 tasks), status
+**queued / unclaimed**. Requirements Trace gained U8 + U9 rows; DAG, Constitution
+Check width-isolation note, and Runtime Verification updated. PR body (current HEAD
+`d5a6d77`) NOT altered. Secret-scan of all touched artifacts: CLEAN (no live URL /
+`p=` token / account / calendar / cookie / profile path).

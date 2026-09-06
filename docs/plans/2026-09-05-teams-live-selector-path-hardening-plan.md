@@ -70,6 +70,8 @@ full-nested) the bot lands in per run — these are U1's residual scope.
 | Make tab audio capture/encode → green `TestMeetingCaptureAudio` | U5 (dep U3) |
 | Resolve the `VERIFY LIVE` markers in prejoin/captions/audio | U3, U4, U5 |
 | Reproducible live-harness invocation + closure evidence | U6 (dep U3, U4, U5) |
+| Align the `browserContext` test docstring to the confirmed guest topology (comment-only) | U8 (dep U1; split from U6) |
+| Promote BOTH distinct root-cause learnings (managed-launch DevToolsActivePort vs. chromedp `google-chrome` PATH-discovery) into `docs/compound/` | U9 (dep U6; split from U6) |
 
 ## Canonical Verification Topology (resolves identity/topology ambiguity)
 
@@ -294,12 +296,14 @@ trick with an explicit, version-controlled harness executable-path option.
   preserved because it is not in the loop):
   * `/l/meetup-join/...` → keep the current behavior **byte-identical** (still
     set the legacy param set) so all three existing tests stay green.
-  * `/meet/...` → do NOT set `type=meetup-join`; apply only the params that U1's
-    **per-param experiments** showed help the `/meet/` web pre-join SPA (state the
-    exact kept/dropped set from U1). If a `/meet/` input **already carries** a
-    legacy param (e.g. `type=meetup-join`), do not clobber or depend on it —
-    treat the input as authoritative and document the conflict handling. Preserve
-    `u.Path` and the `p` token unchanged.
+  * `/meet/...` → apply ONE **deterministic conflict policy**: **strip the
+    `type` query key entirely** (including an incoming `type=meetup-join` — the
+    stripped key is NOT preserved), while **preserving `u.Path`, the `p` token,
+    all unrelated query keys, and the URL fragment**, and applying only the
+    additional params that U1's **per-param experiments** showed help the `/meet/`
+    web pre-join SPA (state the exact kept set from U1). This replaces the earlier
+    "do-not-clobber the pre-existing `type`" ambiguity with a single testable
+    rule: for `/meet/`, `type` is always **absent** in the output.
   * Any other `ValidateMeetingURL`-accepted path → documented fallback
     (default to the conservative no-legacy-force behavior).
   * Do NOT mutate the shared package-level `bypassParams` map; select the param
@@ -312,12 +316,17 @@ trick with an explicit, version-controlled harness executable-path option.
   messages.
 * **Concrete assertions:** for a `/meet/<id>?p=<token>` input, parse the result
   with `url.Parse` and assert `u.Path` unchanged, `u.Query().Get("p")` equals the
-  exact (decoded) token, and `u.Query().Get("type") != "meetup-join"`; add a
+  exact (decoded) token, and the `type` key is **absent**
+  (`u.Query().Has("type") == false`, i.e. `Get("type") == ""`); add a
   `/meet/<id>` (no `p`) case; add a `/meet/<id>?type=meetup-join` **conflict**
-  case asserting the pre-existing param is not clobbered; and assert the legacy
-  `/l/meetup-join` branch output is unchanged via a **golden/equality** check
-  (full mutated-string equality against the pre-change output), making the
-  "byte-identical" claim verifiable rather than only param-presence.
+  case asserting the `type` key is **stripped entirely** (absent) — NOT preserved
+  and NOT clobbered-into-something-else; add an **unrelated-keys-and-fragment**
+  case (e.g. `/meet/<id>?p=<token>&foo=bar#frag`) asserting `foo=bar` and the
+  `#frag` fragment are **preserved** while `type` (if present) is stripped and
+  `p`/`u.Path` are unchanged; and assert the legacy `/l/meetup-join` branch output
+  is unchanged via a **golden/equality** check (full mutated-string equality
+  against the pre-change output), making the "byte-identical" claim verifiable
+  rather than only param-presence.
 * **Verify:** `go test ./internal/teams/...` green; full gates
   (`go vet ./...`, `golangci-lint run`, `gofmt -l .`) clean.
 * **Exit gate (feeds U3):** after U2, a live re-navigation confirms the mutated
@@ -514,8 +523,13 @@ trick with an explicit, version-controlled harness executable-path option.
   * **Primary — PCM-before-encode tap:** the capture path already forwards
     **non-zero PCM over the `sendAudioToGo` binding before** shine encodes it. U5
     adds a **narrow, test-only PCM observer seam** (an optional hook that is nil in
-    production and set only by the test) exposing those raw PCM frames, and the
-    test runs the signal check — a single-frequency Goertzel/energy estimate at the
+    production and set only by the test; because `meeting_integration_test.go` is
+    `package browser_test` (external), this hook MUST be **EXPORTED / accessible
+    from an external package** — an exported package-level observer var/setter in
+    package `browser`, no-op in production — and is wired in
+    `internal/browser/meeting_chrome.go` where the decoded PCM `samples` reach
+    `enc.WritePCM`) exposing those raw PCM frames, and the test runs the signal
+    check — a single-frequency Goertzel/energy estimate at the
     known stimulus tone, or non-silence correlated to the known stimulus window —
     on the **PCM**, not the MP3. The tap only *observes* PCM; it MUST NOT alter the
     buffer handed to the encoder and MUST NOT re-break `shine-mp3` frame alignment
@@ -532,16 +546,24 @@ trick with an explicit, version-controlled harness executable-path option.
 * **Bounded-cycle stop condition (2-hour rule):** if the capture path is not green
   within a bounded number of live cycles (e.g. 3), stop and file a follow-up task
   rather than exceeding the 2-hour budget.
-* **Files:** `internal/browser/audio.go` (the capture path + the narrow test-only
-  **PCM-before-encode observer seam**; `+ allocator.go` only if the capture-source
-  match string must change) **and `internal/browser/meeting_integration_test.go`**
+* **Files (3 core files → size M):** `internal/browser/meeting_chrome.go`
+  (`CaptureAudio` builds the encoder and forwards decoded PCM `samples` to
+  `enc.WritePCM` — the PCM-before-encode observer tap is wired **here**, at the
+  point PCM reaches the encoder), `internal/browser/audio.go` (the capture JS /
+  `audioCaptureJS` + the capture-source match string; `+ allocator.go` only if
+  that match string must change), **and `internal/browser/meeting_integration_test.go`**
   — U5 OWNS the `TestMeetingCaptureAudio` known-stimulus assertion, the
   PCM/analyser signal check, and the fake-media-vs-real-audio discrimination in
-  that test file. This stays within **<3 files** and the 2-hour budget: the seam is
-  a nil-by-default optional PCM hook plus a single-frequency Goertzel/energy check.
-  If it grows past the budget (e.g. a general analyser abstraction is attempted),
-  **split** the browser-side analyser variant into its own follow-up task rather
-  than exceeding 2h.
+  that test file. **External-package seam:** the test file is `package
+  browser_test`, so the PCM observer must be an **exported, nil-by-default hook**
+  reachable from an external package (or, for the analyser variant, the
+  matched/not-matched decision is carried over the `sendAudioToGo` binding — a
+  public capture output — so no internal access is needed); an unexported
+  field/hook would be invisible to `browser_test`. Because this spans **3 core
+  files** (exceeding the S `<3 files` guidance), U5 is sized **M** (raised from S
+  in the PR #27 review). If the seam still grows past the 2-hour budget (e.g. a
+  general analyser abstraction is attempted), **split** the browser-side analyser
+  variant into its own follow-up task rather than exceeding 2h.
 * **Verify:** `TestMeetingCaptureAudio` passes green with a **stimulus-verified**
   assertion taken at the **PCM-before-encode tap** (or the browser-side analyser) —
   **not** by decoding the MP3 (no decoder exists) and **not** merely from non-zero
@@ -580,10 +602,15 @@ trick with an explicit, version-controlled harness executable-path option.
   `#LanguageSpeechMenuControl-id` → `#closed-captions-button` →
   `[data-tid="closed-caption-renderer-wrapper"]`. Note the guest-direct vs.
   full-nested caption variants. **Do not** include any live URL/token.
-* **Docstring alignment (in scope):** update the stale `meeting_integration_test.go`
-  `browserContext` docstring that says the profile is "already authenticated" to
-  match the **confirmed guest** topology (a docs/comment-only edit). This is a
-  comment-only change, preserving U6's docs domain.
+* **Split out of U6 (PR #27 review width fix):** two sub-scopes were removed from
+  U6 to keep it within width isolation and the 2-hour rule and focused on
+  runbook/closure evidence: (1) the comment-only `browserContext` docstring
+  alignment is now **U8 (`010.008-T`, XS)**, and (2) the two `docs/compound/`
+  root-cause promotions are now **U9 (`010.009-T`, S)**. U6 no longer edits the
+  test file or `docs/compound/`; it owns **only** the runbook + closure entry
+  under `docs/closure/browser-automation/`. (The runbook still *documents* the
+  two failure signatures as reproducibility content; U9 is the separate act of
+  promoting them into `docs/compound/` as durable learnings.)
 * **Secrets discipline (NON-NEGOTIABLE):** examples reference `TEAMS_MEETING_URL`
   only; record a **redacted route class** (`https://teams.microsoft.com/meet/{id}`,
   `p` stripped) — the closure template's `URL:` field takes the redacted class,
@@ -599,15 +626,15 @@ trick with an explicit, version-controlled harness executable-path option.
   `amend-breaks-shipment-gate.md` (no `git commit --amend`/rebase after items are
   marked done) and `copilot-rereview-timing.md` (don't merge on a false-clean
   thread count; wait for Copilot review at current HEAD).
-* **Compound-refresh follow-up:** after U6, promote BOTH distinct root causes —
-  the agent-browser managed-launch DevToolsActivePort failure and the chromedp
+* **Compound-refresh (moved to U9):** the promotion of BOTH distinct root causes
+  — the agent-browser managed-launch DevToolsActivePort failure and the chromedp
   harness `google-chrome` PATH-discovery failure (remedied by `TEAMS_BROWSER_PATH`)
-  — into `docs/compound/` as separate learnings so future compound
-  searches surface them (today they live only in `docs/memory/`).
-* **Files:** `docs/closure/browser-automation/` (net-new runbook + closure entry;
-  do not overwrite the parent blocked-closure record) + a comment-only docstring
-  fix in `internal/browser/meeting_integration_test.go` (<3 files; docs/comment
-  domain only — no executable code change).
+  — into `docs/compound/` as separate learnings is now **U9 (`010.009-T`)**, a
+  follow-up that depends on U6. It is no longer part of U6.
+* **Files:** `docs/closure/browser-automation/` **only** (net-new runbook +
+  closure entry; do not overwrite the parent blocked-closure record). No test-file
+  edit and no `docs/compound/` write remain in U6 — those moved to U8 and U9
+  respectively (docs domain, single surface).
 * **Verify:** runbook reproduces the green run from a clean shell without
   embedding the private URL; closure entry records the three passing flows and
   any residual blocked/partial flow as a follow-up condition.
@@ -660,11 +687,61 @@ trick with an explicit, version-controlled harness executable-path option.
   compile without a live meeting).
 * **Depends on:** none (root enabler).
 
+### U8 — `browserContext` docstring alignment (split from U6; test-file comment)
+
+* **Domain:** docs / comment-only (test file). **Posture:** documentation.
+* **Split from U6 (PR #27 review width fix):** moved out of U6 so U6 stays a
+  single docs/closure surface within width isolation and the 2-hour rule.
+* **What:** update the stale `browserContext(t)` docstring in
+  `internal/browser/meeting_integration_test.go` that says the profile is
+  "already authenticated" so it states the **confirmed guest** topology (an
+  authenticated-identity landing is an operator checkpoint), aligned to the
+  U1-selected identity mode. Comment-only — no executable code, selector, or
+  logic change.
+* **Scope note:** this test file is `package browser_test` and is also touched by
+  U7 (`TEAMS_BROWSER_PATH`) and U5 (audio assertion); U8 changes ONLY the
+  `browserContext` docstring comment. Sequenced after U1 (identity confirmation),
+  therefore transitively after U7.
+* **Secrets:** no live URL/token/account/profile path in the comment; env-var
+  identifiers only.
+* **Files:** `internal/browser/meeting_integration_test.go` (1 file, comment-only).
+* **Verify:** `git diff` for that file shows only comment lines (no statement /
+  selector / logic change); `gofmt -l .` clean; default `go test ./...` and the
+  integration-tagged compile are unaffected by a comment-only edit.
+* **Depends on:** U1 (`010.001-T`).
+* **Size:** XS. **Complexity:** trivial.
+
+### U9 — Compound promotion of both root-cause learnings (split from U6; docs)
+
+* **Domain:** docs (`docs/compound/`). **Posture:** knowledge capture / follow-up.
+* **Split from U6 (PR #27 review width fix):** the compound-refresh follow-up
+  moved out of U6; U9 is the separate durable-learning promotion.
+* **What:** after U6 closure evidence is recorded, promote BOTH distinct root
+  causes into `docs/compound/` as **separate** learnings so future compound
+  searches surface them (today they live only in `docs/memory/`): (a) the
+  agent-browser **managed-launch DevToolsActivePort** failure (Chrome exited
+  before writing DevToolsActivePort under the managed agent-browser 0.31.1 adapter
+  — NOT a PATH problem), and (b) the chromedp **harness `google-chrome`
+  PATH-discovery** failure (`exec: "google-chrome": executable file not found in
+  %PATH%` on an Edge-only host) with the `TEAMS_BROWSER_PATH` remedy (U7). Keep
+  the two learnings **separate** — two root causes at two layers, never conflated.
+* **Scope note:** do NOT overwrite the parent blocked-closure record or the U6
+  closure entry; cross-reference them. Net-new `docs/compound/` files only.
+* **Secrets:** no live URL/token/account/calendar/cookie/profile path;
+  `TEAMS_BROWSER_PATH` named as an identifier only.
+* **Files:** two net-new files under `docs/compound/` (docs domain).
+* **Verify:** both learning files exist, are discoverable by the workspace
+  skill/learning search, do not conflate the two signatures, and cross-reference
+  (not overwrite) the parent records; docs-only, default gates unaffected.
+* **Depends on:** U6 (`010.006-T`).
+* **Size:** S. **Complexity:** low.
+
 ## Dependency Graph
 
 ```text
-U7 ──▶ U1 ──▶ U2 ──▶ U3 ──┬──▶ U4 ──┐
-                          └──▶ U5 ──┴──▶ U6
+U7 ──▶ U1 ──┬─▶ U2 ──▶ U3 ──┬──▶ U4 ──┐
+            │                └──▶ U5 ──┴──▶ U6 ──▶ U9
+            └─▶ U8
 ```
 
 * U7 (test-infra enabler) has no upstream; it makes the live harness launchable
@@ -677,6 +754,11 @@ U7 ──▶ U1 ──▶ U2 ──▶ U3 ──┬──▶ U4 ──┐
   parallel, but their **live validation** is serialized (shared profile/meeting —
   see U6) or uses distinct profile dirs.
 * U6 depends on U3 + U4 + U5 (captures final verified state).
+* **U8** (comment-only docstring, split from U6) depends on U1 (the confirmed
+  identity mode); it branches from U1 and is transitively sequenced after U7
+  (same test file).
+* **U9** (compound promotion, split from U6) depends on U6 (root causes are
+  finalized in U6's closure evidence before promotion).
 * Acyclic.
 
 ## Decisions and Rationale
@@ -696,7 +778,9 @@ U7 ──▶ U1 ──▶ U2 ──▶ U3 ──┬──▶ U4 ──┐
 * **Feature (not chore) as the covering release unit** — backlogit has no `chore`
   type configured; `feature` is the top-level type.
 * **Runbook as a docs-only unit (U6)** — keeps closure documentation single-
-  domain and satisfies browser-verification closure-handoff.
+  domain and satisfies browser-verification closure-handoff. **PR #27 split:** the
+  comment-only docstring edit became **U8** and the `docs/compound/` promotions
+  became **U9**, so U6 is now strictly docs/closure (single surface).
 * **Harness executable-path option (U7) is test-only; production portability
   deferred** — the Edge-only `google-chrome not found` abort is fixed in the
   integration harness (U7) via an explicit `TEAMS_BROWSER_PATH` /
@@ -734,7 +818,7 @@ U7 ──▶ U1 ──▶ U2 ──▶ U3 ──┬──▶ U4 ──┐
 
 ## Constitution Check
 
-Principle-by-principle mapping of U1–U7 against the workspace constitution and
+Principle-by-principle mapping of U1–U9 against the workspace constitution and
 workflow policies:
 
 * **Test-first / red-green (Principle II, P-002/P-004):** U2 is test-first
@@ -755,8 +839,8 @@ workflow policies:
   to resolve to a git-ignored path inside the workspace (U1 precheck, U6
   runbook).
 * **Decomposition integrity (P-003):** source → deliberation `001-DL` → this plan
-  → feature → tasks; acyclic DAG (U7 is the root enabler; U1–U6 depend
-  transitively on it); every unit has a verifiable exit and ≥1 acceptance
+  → feature → tasks; acyclic DAG (U7 is the root enabler; U1–U6 plus U8/U9
+  depend transitively on it); every unit has a verifiable exit and ≥1 acceptance
   criterion.
 * **Hardening (P-006):** `Requires plan hardening: yes`; `## Plan Hardening`
   present with strict-safety ProposedAction/ActionRisk classification.
@@ -767,8 +851,12 @@ workflow policies:
 * **Dependency hygiene / width isolation (Principle VI):** no new dependencies;
   one skill domain per unit. **Width-isolation note:** U1 is test-infra +
   redacted note (single diagnostic domain); U3 keeps production selector edits
-  separate from any test-infra budget-knob change via the micro-split option; U6
-  is docs/comment-only (runbook + a comment-only docstring fix); **U7 is
+  separate from any test-infra budget-knob change via the micro-split option;
+  **U6 is now docs-only** (runbook + closure entry) after the PR #27 review split
+  moved its comment-only docstring edit to **U8** and its `docs/compound/`
+  promotions to **U9** — each a single-domain unit, improving width isolation;
+  **U5 is sized M** (a 3-file seam: `meeting_chrome.go` PCM-before-encode tap +
+  `audio.go` capture + the external `browser_test` assertion); **U7 is
   test-infra only** — deliberately NOT folded into the production-Go units
   U3/U4/U5, preserving width isolation.
 * **Simplicity / YAGNI (scope value — not a numbered constitution principle):** no speculative abstraction — U2 changes
@@ -788,7 +876,7 @@ workflow policies:
 * **Safety (Principle VII, strict-safety):** destructive/broad process kills
   forbidden; live-auth run classified `high`; approval/checkpoint path recorded.
 * **Secrets (Principle III):** private URL, tokens, cookies, and profiles are
-  secret material; redaction and synthetic-fixture rules bind U1/U2/U6, and
+  secret material; redaction and synthetic-fixture rules bind U1/U2/U6/U8/U9, and
   `TEAMS_BROWSER_PATH` (U7) is bound by Protected Invariant 5 — its value is never
   echoed or committed into redacted `docs/` evidence.
 * **Artifacts (Principle IX):** markdown + frontmatter; parent-owned evidence
@@ -829,6 +917,13 @@ workflow policies:
     the stimulus window), distinguishing real meeting/tab audio from Chrome
     fake-media, with a clean cancel. Non-zero MP3 bytes alone are NOT a sufficient
     pass.
+  * U8 — comment-only `browserContext` docstring aligned to the confirmed guest
+    topology; `git diff` shows only comment lines; default `go test ./...` and the
+    integration-tagged compile are unaffected.
+  * U9 — BOTH root-cause learnings promoted to `docs/compound/` as **separate**
+    entries (managed-launch DevToolsActivePort vs. chromedp `google-chrome`
+    PATH-discovery, not conflated), cross-referencing (not overwriting) the parent
+    blocked-closure/circuit-break records; docs-only.
 * **Operational closure:** U6 runbook + browser-verification closure entry
   recording routes, headed/headless mode, human checkpoints, and per-flow
   verdicts. Blocked/partial flows (if any remain) become explicit follow-up
@@ -1348,3 +1443,44 @@ URL, `p=` token, account/UPN, calendar, cookie, or profile/session-state path
 appears in any artifact. The ADVISORY gate verdict stands.
 
 <!-- plan-review-attempt: 3 (local-review remediation of artifacts only, no source change, no re-gate) -->
+
+### Post-gate review-fix cycle (2026-09-06) — PR #27 Copilot review (current HEAD): U5 scope, U6 split, U2 policy
+
+decision: ADVISORY (unchanged — artifact-only remediation; no source edit, no
+build, no shipment claim, no PR action; P-010 boundary preserved). The
+current-HEAD PR #27 Copilot review surfaced four artifact corrections, all
+applied here:
+
+* **U5 file scope + size (M).** Added `internal/browser/meeting_chrome.go` to U5's
+  file scope because the decoded PCM `samples` reach `enc.WritePCM` there — that is
+  where the **PCM-before-encode observer tap** is wired. Because
+  `meeting_integration_test.go` is `package browser_test` (external), the observer
+  MUST be an **exported, nil-by-default hook** accessible from an external package
+  (or the browser-side AnalyserNode's matched/not-matched decision is transported
+  over the `sendAudioToGo` binding). The seam now spans **3 core files**
+  (`meeting_chrome.go` + `audio.go` + external `browser_test`), so U5 is **raised
+  S → M**; the shipment size histogram becomes **M:3 / S:4 / XS:2**.
+* **U6 width split → U8 + U9.** U6 exceeded width (docs/closure + a test-file
+  comment + `docs/compound/` promotions). U6 now owns **only** the runbook +
+  closure evidence under `docs/closure/browser-automation/`. The comment-only
+  `browserContext` docstring alignment became **U8 (`010.008-T`, XS, dep U1)** and
+  the two `docs/compound/` root-cause promotions became **U9 (`010.009-T`, S, dep
+  U6)**. DAG, Requirements Trace, and Constitution Check updated; shipment `010-S`
+  grows to **10 items** (feature + 9 tasks).
+* **U2 deterministic conflict policy.** Replaced the "do-not-clobber the
+  pre-existing `type`" ambiguity with ONE deterministic rule for `/meet/` inputs:
+  **strip the `type` query key entirely** (including an incoming
+  `type=meetup-join`), while **preserving `u.Path`, the `p` token, all unrelated
+  query keys, and the URL fragment**. Legacy `/l/meetup-join/` stays
+  **byte-for-byte** compatible. Every acceptance assertion/fixture was aligned:
+  the conflict case now asserts `type` is **absent**, and a new case asserts
+  unrelated keys + fragment are preserved.
+* **Shipment wording.** `010-S` "Live verification" now describes the organizer as
+  **manually launched Microsoft Edge connected through native CDP**, and keeps the
+  **managed agent-browser Chrome launch identified as the BLOCKED path**.
+
+Redaction rules unchanged and re-verified: no live URL, `p=` token, account/UPN,
+calendar, cookie, or profile/session-state path appears in any artifact. The PR
+body (current HEAD `d5a6d77`) was **not** altered. The ADVISORY gate verdict stands.
+
+<!-- plan-review-attempt: 3 (PR #27 current-HEAD review-fix; artifacts only, no source change, no re-gate) -->

@@ -211,7 +211,9 @@ size + acceptance-criteria + implementation-notes.
 
 Gate verdict for 010-F stands **ADVISORY**. Shipment `010-S` remains **queued**
 and unclaimed. Deferred/active stash: `D3EFD224` (CI config, prior) and new
-`87CDB97A` (production exec-path portability).
+`87CDB97A` — the explicit **residual-risk record (P-021 C3)** for the unresolved
+production-runtime browser executable-path portability gap, deferred out of
+010-F scope and not implemented in this shipment.
 
 ## Blocking conditions / open items
 

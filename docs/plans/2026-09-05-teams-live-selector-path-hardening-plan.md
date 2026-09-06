@@ -93,7 +93,7 @@ One and only one verification topology is used, matching deployment:
   explicit operator checkpoint (never automated) and the affected selectors
   switch to their full-client variants recorded in the Live Selector Evidence
   table; the `meeting_integration_test.go` `browserContext` docstring
-  ("already authenticated") is stale for the guest topology and is aligned in U6
+  ("already authenticated") is stale for the guest topology and is aligned in U8
   scope.
 * The **Edge organizer** session (CDP port 9223) is a **separate trust
   boundary**, left running and unaltered. Attaching the bot to CDP 9223 (or any
@@ -279,17 +279,16 @@ trick with an explicit, version-controlled harness executable-path option.
 ### U2 — Join-path URL mutation hardening for the `/meet/` flow
 
 * **Domain:** code (Go). **Posture:** test-first.
-* **Gated on U1:** only edit `MutateJoinURL` if U1's verdict marks the URL
-  mutation as implicated. If U1 shows the mutated `/meet/` URL reaches the same
-  `/dl/launcher/launcher.html` landing as the raw URL (i.e. mutation is not the
-  blocker — the launcher handling in U3 is), collapse U2 to a recorded no-op
-  (documented) rather than a speculative change.
+* **Gated on U1 evidence:** U1 supplies the per-parameter keep/drop evidence for
+  `/meet/`, but U2 always implements the deterministic `type`-strip policy.
+  Finding that mutation was not the launcher blocker does not make U2 optional;
+  it only prevents speculative retention of unrelated legacy bypass parameters.
 * **Scope boundary vs. U3:** U2 is **pure URL-string mutation only**. The
   `/meet/<id>?p=<passcode>` → `/dl/launcher/launcher.html` redirect and the
   `joinOnWeb` click are **runtime navigation** handled by U3, not by U2. U2 never
   touches the launcher; it only decides which query params `MutateJoinURL`
   emits for a `/meet/` path.
-* **What (when implicated):** In `internal/teams/url.go`, branch on the URL path
+* **What:** In `internal/teams/url.go`, branch on the URL path
   family and suppress the **legacy** bypass params for `/meet/` links. Precise
   mechanism (the real defect is that the fixed `bypassParams` loop
   *unconditionally forces* `type=meetup-join` and four peers — `p` is already
@@ -479,13 +478,16 @@ trick with an explicit, version-controlled harness executable-path option.
   within a bounded number of live cycles (e.g. 3), stop and file a follow-up task
   rather than exceeding the 2-hour budget.
 * **Files:** `internal/browser/captions.go` (selector consts + `captionObserverJS`
-  literals) and `internal/browser/meeting_chrome.go` (`activateCaptions`
-  two-variant branch) — 2 files, within the <3 bound.
+  literals), `internal/browser/meeting_chrome.go` (`activateCaptions`
+  two-variant branch), and `internal/browser/meeting_integration_test.go`
+  (`TestMeetingEnableCaptions` empty/stale extraction assertion) — 3 tightly
+  coupled files.
 * **Verify:** `TestMeetingEnableCaptions` passes green **only** when a *finalized*
   caption with a **non-empty speaker AND text** is delivered to the sink — an empty
   or stale speaker/text/block extraction **FAILS** the test; unit tests green; full
   gates clean.
 * **Depends on:** U3.
+* **Size:** M. **Complexity:** medium.
 
 ### U5 — Audio capture path verification → green `TestMeetingCaptureAudio`
 
@@ -663,6 +665,12 @@ trick with an explicit, version-controlled harness executable-path option.
   fall back to the current auto-discovery (PATH) behavior. Pure superset — no
   behavior change when the var is absent; `chromedp.ExecPath` is appended after
   `DefaultExecAllocatorOptions`, so it correctly overrides auto-discovery.
+  The same integration-test boundary also validates `TEAMS_PROFILE_DIR` before
+  every live launch without logging its value: resolve the workspace and profile
+  paths, reject a profile outside the workspace, and require
+  `git check-ignore --quiet -- <path>` to succeed. Missing profile configuration,
+  workspace-resolution failure, containment failure, and tracked/unignored
+  profiles fail setup explicitly.
 * **Scope boundary (do NOT widen — audited):** the production runtime
   (`internal/browser/runner.go`, `meeting.go`) shares the identical allocator
   call and is *also* broken on Edge-only hosts, but adding an `ExecPath` field to
@@ -673,7 +681,7 @@ trick with an explicit, version-controlled harness executable-path option.
 * **Secrets:** `TEAMS_BROWSER_PATH` can embed a user home path — treat it like
   `TEAMS_PROFILE_DIR` (Protected Invariant 5): never echo or commit its value
   into redacted evidence under `docs/`.
-* **Files:** `internal/browser/meeting_integration_test.go` (1 file, ~5 lines).
+* **Files:** `internal/browser/meeting_integration_test.go` (1 file).
 * **Verify:** with `TEAMS_BROWSER_PATH` pointing at the Chrome-for-Testing binary
   and the CfT dir NOT on PATH, the live harness launches the browser (no
   `google-chrome not found` abort); with the var unset, behavior is byte-identical
@@ -684,8 +692,11 @@ trick with an explicit, version-controlled harness executable-path option.
   compile-verified **under the tag**: e.g. `go vet -tags integration
   ./internal/browser/...` and a tagged no-run compile such as `go test -tags
   integration -run '^$' ./internal/browser/...` (forces the tagged file to
-  compile without a live meeting).
+  compile without a live meeting). Tests also cover rejection of absent,
+  outside-workspace, and tracked/unignored profile paths plus acceptance of an
+  ignored workspace-contained profile.
 * **Depends on:** none (root enabler).
+* **Size:** S. **Complexity:** low.
 
 ### U8 — `browserContext` docstring alignment (split from U6; test-file comment)
 
@@ -836,8 +847,8 @@ workflow policies:
 * **Quality gates (Principle I):** every code unit's Verify names
   `go vet ./...`, `golangci-lint run`, `gofmt -l .`, and `go test`.
 * **CLI/workspace containment (Principle IV):** `TEAMS_PROFILE_DIR` is asserted
-  to resolve to a git-ignored path inside the workspace (U1 precheck, U6
-  runbook).
+  by the U7 integration-test helper to resolve to a git-ignored path inside the
+  workspace; U6 documents the same enforced precondition.
 * **Decomposition integrity (P-003):** source → deliberation `001-DL` → this plan
   → feature → tasks; acyclic DAG (U7 is the root enabler; U1–U6 plus U8/U9
   depend transitively on it); every unit has a verifiable exit and ≥1 acceptance
@@ -983,7 +994,8 @@ capacity-slack — do not re-break), and `amend-breaks-shipment-gate.md` /
   to PATH is only a historical fallback for the first-run `google-chrome` abort);
   confirm the Edge
   organizer/meeting is live and caption controls are visible; confirm
-  `TEAMS_PROFILE_DIR` points to the separate empty bot profile and
+  the U7 harness precheck accepts `TEAMS_PROFILE_DIR` as a git-ignored,
+  workspace-contained separate empty bot profile, and confirm
   `TEAMS_MEETING_URL` resolves from the out-of-tree file.
 * **Target scenarios:** join admitted; finalized caption delivered with a
   non-empty speaker+text (empty or stale extraction FAILS); the
@@ -1459,7 +1471,8 @@ applied here:
   (or the browser-side AnalyserNode's matched/not-matched decision is transported
   over the `sendAudioToGo` binding). The seam now spans **3 core files**
   (`meeting_chrome.go` + `audio.go` + external `browser_test`), so U5 is **raised
-  S → M**; the shipment size histogram becomes **M:3 / S:4 / XS:2**.
+  S → M**; the shipment size histogram at that review point became
+  **M:3 / S:4 / XS:2**.
 * **U6 width split → U8 + U9.** U6 exceeded width (docs/closure + a test-file
   comment + `docs/compound/` promotions). U6 now owns **only** the runbook +
   closure evidence under `docs/closure/browser-automation/`. The comment-only
@@ -1484,3 +1497,27 @@ calendar, cookie, or profile/session-state path appears in any artifact. The PR
 body (current HEAD `d5a6d77`) was **not** altered. The ADVISORY gate verdict stands.
 
 <!-- plan-review-attempt: 3 (PR #27 current-HEAD review-fix; artifacts only, no source change, no re-gate) -->
+
+### Post-gate review-fix cycle (2026-09-06) — final current-HEAD Copilot consistency pass
+
+decision: ADVISORY (unchanged — artifact-only remediation; no source edit,
+build, shipment claim, or Ship invocation). Six current-HEAD comments were
+resolved as follows:
+
+* U2 now always implements the deterministic `/meet/` `type`-strip policy; U1
+  controls only the evidence-based keep/drop set for other legacy parameters
+* U4 owns the live integration-test assertion needed to reject empty or stale
+  caption extraction and is sized M across three coupled files
+* U6 must record all five deferred P-021 entries in closure residual risk:
+  `87CDB97A`, `D2023898`, `EEA7F685`, `A99EEABD`, and `3084A83E`
+* U7 owns fail-closed workspace-containment and git-ignore validation for
+  `TEAMS_PROFILE_DIR`, remains confined to the integration-test file, and is
+  sized S
+* The canonical topology assigns the stale `browserContext` docstring to U8
+* The PR summary already states nine tasks and ten shipment items; that comment
+  required no artifact change
+
+The final task-size histogram is **M:4 / S:4 / XS:1**. Shipment `010-S`
+remains queued and unclaimed.
+
+<!-- plan-review-attempt: 3 (final current-HEAD Copilot artifact remediation, no source change, no re-gate) -->

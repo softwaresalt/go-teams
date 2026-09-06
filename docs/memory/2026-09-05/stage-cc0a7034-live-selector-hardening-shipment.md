@@ -331,3 +331,25 @@ current-HEAD PR #27 Copilot review items.
 Check width-isolation note, and Runtime Verification updated. PR body (current HEAD
 `d5a6d77`) NOT altered. Secret-scan of all touched artifacts: CLEAN (no live URL /
 `p=` token / account / calendar / cookie / profile path).
+
+## Final staging review remediation and safe-stop handoff
+
+The final current-HEAD Copilot pass found six consistency issues. Stage artifacts
+were corrected without source changes or shipment claim:
+
+* U2 always implements the deterministic `/meet/` `type`-strip contract; U1
+  controls only the evidence-based keep/drop choice for other legacy parameters
+* U4 owns the integration-test assertion that rejects empty or stale caption
+  extraction; its scope is three coupled files and size M
+* U6 closure must cite all five deferred residual entries: `87CDB97A`,
+  `D2023898`, `EEA7F685`, `A99EEABD`, and `3084A83E`
+* U7 owns fail-closed `TEAMS_PROFILE_DIR` workspace-containment and git-ignore
+  validation in the integration-test helper; size S
+* The canonical topology correctly assigns the `browserContext` docstring to U8
+* The PR body already reflects nine tasks and ten shipment items
+
+Final shipment size histogram: **M:4 / S:4 / XS:1**. The DAG is unchanged:
+`U7 -> U1 -> U2 -> U3 -> (U4 || U5) -> U6 -> U9`, with `U1 -> U8`.
+Shipment `010-S` remains queued and unclaimed. The requested safe stop is after
+staging PR #27 merges and local `main` is clean; Ship implementation must not
+start in this session.

@@ -48,7 +48,7 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    Readiness block stated `Shadow review: not requested`. That was
    inaccurate — GitHub's Copilot automated review is engine-triggered per
    push, not manually "requested", and by this point had already completed
-   three review cycles (HEADs `83342f6`, `c4dd319`, `aec923e`), each fully
+   three review cycles (HEADs `83342f6`, `00dc602`, `c4dd319`), each fully
    reviewed and its threads resolved before the next commit. The PR body's
    Shadow review field has been corrected to describe Copilot review as
    engaged (automated, per-push) with its completion tied to the reviewed

@@ -33,17 +33,37 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    --phase pre_claim --json` — now exit 0 / PASS (`shipment_readiness` check
    passed, predecessor `009-S` closure satisfied).
 5. Branch: `post-merge/009-S-closure-backfill` off `main`
-   (`0e16838a61c957d12d6f9938444c98d71ae548f0`). PR opened, awaiting operator
-   approval — never merged automatically (P-014, normal sequential mode, no
-   dark-mode pre-authorization in effect this session).
+   (`0e16838a61c957d12d6f9938444c98d71ae548f0`). PR #28 opened, awaiting
+   operator approval — never merged automatically (P-014, normal sequential
+   mode, no dark-mode pre-authorization in effect this session).
+6. PR #28 went through 3 Copilot-review fix/reply/resolve cycles (13
+   findings total across 3 HEADs) covering: closure_status support,
+   invalid/unsafe rollback command, oversold byte-identity claim, inaccurate
+   deployment statement, incomplete CI baseline, stale PR readiness record,
+   incomplete rollback validation, a missed P-021 C2 capture, and PR
+   description/memory-checkpoint accuracy (this file). One of the findings
+   required a P-021 C2 capture-only stash entry (`FE245033`, see below).
 
 ## Explicitly NOT done (scope boundary held)
 
 - 010-S was not claimed, implemented, or modified in any way.
-- No stash triage, backlog creation, or re-prioritization was performed.
-- The pre-existing unrelated working-tree modification to
-  `.backlogit/stash.jsonl` was left completely untouched — not staged, not
-  committed, not discarded.
+- No stash **triage** (re-classification, prioritization, harvest, or
+  deliberation) was performed, and no backlog **items** (features/tasks)
+  were created. One **capture-only** stash entry (`FE245033`) was created
+  under the explicit P-021 C5/C2 carve-out — a deferred-scope-expansion
+  finding (a missing byte-for-byte MP3 regression test) surfaced during
+  Copilot review, out of scope for this closure PR. Per P-021 C5, this is
+  the only write Ship is permitted to make to that entry; it was not
+  edited, re-prioritized, or re-classified afterward, even after Copilot
+  flagged its `requires deliberation` field as needing correction — that
+  correction is Stage's to make.
+- `.backlogit/stash.jsonl` **was** modified by this session (the single
+  `FE245033` append above). The pre-existing uncommitted working-tree state
+  noted at session start (a line-ending-only artifact, rigorously verified
+  content-for-content identical to `HEAD` before any change was made) was
+  fully preserved — nothing from it was discarded, rewritten, or altered;
+  only the new line was added, confirmed by `git diff --stat` showing
+  exactly `1 insertion(+)` before staging.
 - Only 009-S's own memory artifact was compacted; other shipments'
   (001-S…008-S) older memory files were left as-is to avoid scope creep.
 

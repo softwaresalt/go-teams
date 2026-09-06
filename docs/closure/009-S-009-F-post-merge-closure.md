@@ -302,11 +302,13 @@ reports no deletions.
 2026-09-06 following Copilot review; none of the corrections change the
 underlying disposition — the code has been on `main` since 2026-07-12,
 CI-verified `-race`-clean both before merge and continuously since
-2026-09-04, and now has an accurate, executable rollback procedure. The one
-open follow-up (`CC0A7034`, live Teams DOM/audio verification) is
-intentionally NOT a condition of *this* shipment's releasability — it was
-scoped out of 009-S at plan time and is tracked under its own shipment
-(`010-S`, queued, untouched by this backfill).
+2026-09-04, and now has an accurate, executable rollback procedure. Of the
+three items tracked under Remaining follow-ups below, the live-verification
+follow-up (`CC0A7034`) is intentionally NOT a condition of *this* shipment's
+releasability — it was scoped out of 009-S at plan time and is tracked under
+its own shipment (`010-S`, queued, untouched by this backfill). The other
+two (shine-mp3 upstream fix; `FE245033`) are likewise non-blocking residual
+items, not conditions of this READY disposition.
 
 ## Remaining follow-ups (not blocking)
 
@@ -325,5 +327,18 @@ scoped out of 009-S at plan time and is tracked under its own shipment
   deferred-scope-expansion stash entry **`FE245033`** (six-field payload:
   expansion statement, C1 out-of-scope rationale, source refs — PR #28,
   review-thread `PRRT_kwDOTStvas6fpj0Y`, task `009.001-T`, feature `009-F`,
-  shipment `009-S` — `requires deliberation: NO`, kind `task`, provisional
-  priority `low`) rather than merely noted in prose, per P-021 C2/C3.
+  shipment `009-S`, kind `task`, provisional priority `low`) rather than
+  merely noted in prose, per P-021 C2/C3.
+  **Known data-quality residual (Copilot finding, 2026-09-06, not fixed by
+  Ship)**: the captured entry's `requires deliberation` field reads `NO`.
+  Per P-021 C6, every `DEFERRED SCOPE EXPANSION` entry must route through
+  the `deliberate` skill before planning regardless of apparent triviality,
+  so this field should read `YES`. Ship cannot correct it: P-021 C5 grants
+  Ship entry **creation only** for these captures — "Ship MUST NOT ...
+  edit ... a captured entry afterwards" — so amending the field would
+  itself be a P-021/P-010 violation. In practice this does not create a
+  bypass risk: C6's routing requirement is unconditional and does not
+  defer to this self-reported flag, so Stage's intake still routes
+  `FE245033` through `deliberate` regardless of its stated value. Flagged
+  here so Stage's intake triage corrects the field (Stage, unlike Ship, may
+  edit stash entries) when it processes `FE245033`.

@@ -4,7 +4,7 @@ date: 2026-09-05
 agent: stage
 status: complete
 stash_processed: [CC0A7034]
-stash_deferred: [D3EFD224, 87CDB97A]
+stash_deferred: [D3EFD224, 87CDB97A, D2023898, EEA7F685, A99EEABD, 3084A83E]
 feature: 010-F
 tasks: [010.007-T, 010.001-T, 010.002-T, 010.003-T, 010.004-T, 010.005-T, 010.006-T]
 shipment: 010-S
@@ -217,11 +217,68 @@ production-runtime browser executable-path portability gap, deferred out of
 
 ## Blocking conditions / open items
 
-- None blocking harvest or shipment. Residual advisory (folded into U1): per-param
-  ablation of all five legacy bypass params under run-budget with a
-  trim-and-record fallback.
+- None blocking harvest or shipment. Residual advisory (folded into U1): the
+  `/meet/` param question is now handled by **bounded adaptive screening** (start
+  with the smallest decisive raw-vs-mutated comparison, expand only along an
+  implicated dimension, hard cap ≤8 launches / ≤3 live cycles) rather than a full
+  five-param Cartesian ablation.
 - Live execution risk (owned by Ship): the harness is currently RED
   (`pre-join not visible`); greening depends on live Teams DOM + operator
   checkpoints (lobby admission, possible bot-side login/MFA).
 - Deferred: D3EFD224 (CI paths-ignore; latent, non-blocking while
   required_status_checks=[]).
+
+## Post-gate review-fix cycle (2026-09-06) — PR #27 Copilot review: capture-first + task-contract corrections
+
+Scope: Stage-owned planning/backlog/doc artifacts ONLY (no Go/source, no build,
+no commit/push, no PR reply/thread-resolve, no shipment claim). Applied the
+actionable PR #27 Copilot review items.
+
+**A. P-021 capture-first — four new active DEFERRED SCOPE EXPANSION stash entries**
+(each `requires deliberation: YES`; refs PR #27 + review threads
+`PRRT_kwDOTStvas6foPdV` / `PRRT_kwDOTStvas6foPd-` + feature `010-F` + shipment
+`010-S` + plan; task N/A — pre-existing production/repo surfaces):
+- **R2 `D2023898`** (task, medium) — make the Chromium sandbox-disable flag
+  opt-in, not unconditional (`internal/browser/allocator.go`).
+- **R3 `EEA7F685`** (task, high — secret-adjacent) — redact query/passcode from
+  browser navigation errors/logging (`runner.go`/`meeting.go`).
+- **R4 `A99EEABD`** (feature, medium) — deliberate a Teams-host allowlist vs.
+  intentional documented arbitrary-HTTP(S) support.
+- **R5 `3084A83E`** (task, medium) — confirm local env files untracked + add a
+  repository-approved secret-scanning guardrail (no secret values/paths recorded).
+
+Plan `## Residual Review Items` R2–R5 dispositions and shipment `010-S` residual
+section now cite the exact IDs. `87CDB97A` stays scoped **only** to R1
+(production-runtime ExecPath portability), not widened. (`chore` is not a
+supported stash kind in this workspace, so R2/R3/R5 were recorded as `task` with a
+chore-class note; R4 as `feature`.)
+
+**B. Same-surface task-contract corrections:**
+- **U1 / `010.001-T`** — replaced the 84-cell Cartesian matrix with **bounded
+  adaptive screening**: hard cap ≤8 launches / ≤3 live cycles; start with the
+  single smallest decisive raw-vs-mutated comparison; expand ONLY along an
+  implicated dimension; acceptance requires bounded outputs (launched cells +
+  expand/stop decisions), NOT all 84 combinations. Env-gate mechanism preserved.
+- **U4 / `010.004-T`** — the inner caption selectors (`closed-caption-text`/text,
+  `author`/speaker, `.fui-ChatMessageCompact`/block) must be **confirmed live and
+  MUST NOT remain VERIFY LIVE at completion**; `TestMeetingEnableCaptions` FAILS
+  if the required speaker/text/block extraction is empty or stale.
+- **U5 / `010.005-T`** — replaced the infeasible MP3 spectral assertion (the test
+  receives **encoded MP3**; repo has **no decoder**) with a feasible U5-owned
+  seam: a **PCM-before-encode observer tap** (nil-by-default test hook; single-
+  frequency Goertzel/energy on raw PCM) or a **browser-side AnalyserNode**; still
+  distinguishes real tab audio from Chrome fake-media and rejects non-zero MP3
+  bytes alone. File scope <3 (`audio.go` + `meeting_integration_test.go`,
+  `+allocator.go` conditional); split the analyser variant to a follow-up if it
+  exceeds 2h.
+- **U2 / `010.002-T`** — narrowed the secrecy criterion: only the **live
+  `TEAMS_MEETING_URL` value / `p=` query token** and **raw DOM/storage/profile
+  payloads** are forbidden; the env-var **identifier** `TEAMS_MEETING_URL` and
+  **redacted selector strings** are allowed.
+
+**C. Sizes / histogram / trace:** no task size changed — U1 stays **M** (bounded
+screening now fits the 2h budget), U2/U4/U5 stay **S**, U7 **XS**. Shipment
+`010-S` unchanged: **8 items**, histogram **M:2 / S:4 / XS:1**, DAG
+`U7→U1→U2→U3→(U4∥U5)→U6`, status **queued/unclaimed**. Requirements Trace rows
+unchanged (within-unit refinements only). Secret-scan of all touched artifacts:
+CLEAN (no live URL / `p=` token / account / calendar / cookie / profile path).

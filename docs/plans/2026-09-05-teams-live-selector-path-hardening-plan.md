@@ -194,38 +194,46 @@ trick with an explicit, version-controlled harness executable-path option.
   used direct navigation, not the mutated URL the harness sends), and (b) confirm
   per-run which caption-activation variant (guest-direct vs. full-nested) the bot
   lands in. If Ship judges the launcher root cause and guest identity already
-  conclusive from the recorded evidence, U1 may reduce to the URL-mutation matrix
+  conclusive from the recorded evidence, U1 may reduce to the URL-mutation comparison
   plus a confirmation pass rather than the full landing-surface hunt (record the
   reduction).
-* **Executable diagnostic seam (required — the existing harness cannot do this):**
+* **Executable diagnostic seam — bounded adaptive screening (required; the
+  existing harness cannot do this):**
   the current `meeting_integration_test.go` always applies `MutateJoinURL`,
   hardcodes `Headless: true`, and passes an empty UA that resolves to
   `DefaultUserAgent`, so it cannot compare configurations. U1 adds a
   **build-tagged (`integration`) diagnostic probe** (e.g.
-  `internal/browser/meeting_diagnostic_test.go`) with explicit controls:
-  * URL mode — **raw** vs. **`MutateJoinURL`-mutated**;
-  * render mode — **headed** vs. **`--headless=new`**;
-  * UA policy — **tri-state**: fixed Chrome/125, a newer fixed UA, and a genuine
-    **native/omitted** override (not silently defaulted to `DefaultUserAgent`);
-  * per-`/meet/` **candidate bypass-param experiments**: a baseline of
-    **none added**, then a **single-parameter ablation** that toggles each of the
-    five legacy params individually (`msLaunch=false`, `type=meetup-join`,
-    `directDl=true`, `enableMobilePage=true`, `suppressPrompt=true`), plus the
-    **full legacy set**, so U2's kept-vs-dropped decision is grounded
-    per-parameter (which individual param helps/hurts `/meet/`) rather than as one
-    all-or-nothing comparison. If run-budget forces trimming, prioritize the
-    singleton ablations of the params most likely implicated by U1's landing-surface
-    evidence and record which cells were skipped.
-  Each matrix cell runs **serially** with a **clean/isolated profile dir** so
-  cells cannot contaminate one another; profiles remain secret material.
+  `internal/browser/meeting_diagnostic_test.go`) that performs **bounded adaptive
+  screening — NOT a full Cartesian matrix**:
+  * **Hard cap (required):** at most **8 browser launches** across at most
+    **3 live cycles**, whichever bound is hit first. The full cross-product of the
+    available dimensions is **84 combinations** and is **explicitly out of scope**
+    — it cannot complete within the 2-hour budget. If a decision is still open at
+    the cap, U1 stops and records the open dimension as a follow-up.
+  * **Start with the single smallest decisive comparison:** **raw** vs.
+    **`MutateJoinURL`-mutated** `/meet/` landing at the default **headed /
+    native-UA** config (2 launches — the primary open U2 question: does mutation
+    change the launcher landing vs. the raw URL).
+  * **Expand only along an implicated dimension:** add a render-mode
+    (**headed** vs. **`--headless=new`**), UA (fixed Chrome/125, a newer fixed UA,
+    or a genuine **native/omitted** override), or **single-parameter** legacy
+    bypass-param ablation (`msLaunch=false`, `type=meetup-join`, `directDl=true`,
+    `enableMobilePage=true`, `suppressPrompt=true`) cell **only** when the prior
+    result implicates that specific dimension (a headless-only failure justifies
+    one headed-vs-headless pair; a UA interstitial justifies the UA variants; a
+    suspected param justifies ablating **that one** param). Never expand a
+    dimension the evidence has not implicated, and never enumerate the grid.
+  Each launched cell runs **serially** with a **clean/isolated profile dir** so
+  cells cannot contaminate one another; profiles remain secret material. Record
+  every launched cell, every expand/stop decision, and any dimension left
+  unexplored at the cap.
 * **Dedicated env gate (required — must NOT launch on routine integration runs):**
-  the diagnostic matrix is expensive (raw vs. mutated URL × headed vs. headless ×
-  tri-state UA × five-param ablation), so the probe carries **only** the
-  `integration` build tag (NO second build tag such as `diag`) and its matrix
-  body is gated at RUNTIME by a dedicated env gate
+  the adaptive screening is expensive per launch, so the probe carries **only**
+  the `integration` build tag (NO second build tag such as `diag`) and its
+  screening body is gated at RUNTIME by a dedicated env gate
   (`GO_TEAMS_DIAGNOSTIC_MATRIX=1`) that `t.Skip()`s unless set. A routine
   `go test -tags integration` run therefore **always compiles** the probe but
-  does **not** execute the matrix; the matrix runs only when the env gate is
+  does **not** execute the screening; it runs only when the env gate is
   enabled. Record confirmation of the env-gate mechanism in the findings note.
 * **What:** For each cell, record which landing surface renders (guest pre-join
   SPA / Microsoft sign-in / MFA / lobby / "unsupported browser" interstitial) and
@@ -259,7 +267,10 @@ trick with an explicit, version-controlled harness executable-path option.
   (3) a URL-implicated yes/no **plus the per-param kept/dropped decision for
   `/meet/`**, (4) the bot landing-surface class **and the selected identity
   mode** (guest vs. authenticated), (5) the winning config (headed/headless, UA)
-  — all redacted. Items (3)/(4) are the explicit inputs U2 and U3 consume.
+  — all redacted. The note records the **bounded set of launched cells**
+  (≤8 launches / ≤3 cycles) and the per-dimension expand/stop decision — **not**
+  an enumeration of all 84 combinations; any dimension left unexplored at the cap
+  is recorded as a follow-up. Items (3)/(4) are the explicit inputs U2 and U3 consume.
 * **Depends on:** U7 (the live harness must be launchable on the target host —
   no `google-chrome not found` abort — before any live diagnostic run).
 
@@ -422,13 +433,19 @@ trick with an explicit, version-controlled harness executable-path option.
   `#closed-captions-button`; then `WaitVisible` `captionWrapperSel`. Branch on an
   explicit bounded presence check for the submenu — do not blind-click a possibly
   absent `languageSpeechSel`, and do not swallow a genuinely stale selector.
-* **Still VERIFY LIVE (not covered by the 2026-09-05 evidence):** the in-JS
-  literals inside `captionObserverJS` — `closed-caption-text`, `author`, and the
-  `.fui-ChatMessageCompact` container class — must still be confirmed against a
-  live finalized caption. **Selector-sync checklist (avoid Go-const vs JS-literal
+* **Required live confirmation — must NOT remain VERIFY LIVE at completion (not
+  covered by the 2026-09-05 evidence):** the in-JS
+  literals inside `captionObserverJS` — `closed-caption-text` (text), `author`
+  (speaker), and the `.fui-ChatMessageCompact` container class (block) — **must be
+  confirmed against a live finalized caption before U4 completes**; no residual
+  `VERIFY LIVE` marker may remain on these three speaker/text/block selectors when
+  the task closes. **Selector-sync checklist (avoid Go-const vs JS-literal
   drift):** keep `captionWrapperSel` and the wrapper literal in sync, and verify
   the three inner literals in the same edit. (A silent miss makes the observer
   IIFE return `false` and `EnableCaptions` blocks with no error.)
+  **`TestMeetingEnableCaptions` MUST FAIL if the required speaker/text/block
+  extraction is empty or stale** — a reached `captionWrapperSel` with an empty
+  finalized speaker+text is a FAIL, not a pass.
 * **Prefer shared selector constants over duplicated raw JS literals (fold-in):**
   rather than hand-duplicating `captionWrapperSel` (and any other selector already
   defined as a Go const) as a raw literal inside `captionObserverJS`,
@@ -455,8 +472,10 @@ trick with an explicit, version-controlled harness executable-path option.
 * **Files:** `internal/browser/captions.go` (selector consts + `captionObserverJS`
   literals) and `internal/browser/meeting_chrome.go` (`activateCaptions`
   two-variant branch) — 2 files, within the <3 bound.
-* **Verify:** `TestMeetingEnableCaptions` passes green (a finalized caption
-  delivered to the sink); unit tests green; full gates clean.
+* **Verify:** `TestMeetingEnableCaptions` passes green **only** when a *finalized*
+  caption with a **non-empty speaker AND text** is delivered to the sink — an empty
+  or stale speaker/text/block extraction **FAILS** the test; unit tests green; full
+  gates clean.
 * **Depends on:** U3.
 
 ### U5 — Audio capture path verification → green `TestMeetingCaptureAudio`
@@ -485,32 +504,52 @@ trick with an explicit, version-controlled harness executable-path option.
 * **Fake-media distinction (critical).** `allocator.go` sets
   `use-fake-device-for-media-stream` and `use-fake-ui-for-media-stream`, so Chrome
   can supply a **synthetic** audio device — a naive non-zero-MP3-bytes check can
-  pass on fake media **without ever capturing real meeting/tab audio**. The
-  verification MUST distinguish fake-media capture from real meeting/tab audio:
-  assert the captured signal matches a **known live stimulus** (a deterministic
-  tone or spoken phrase injected into the meeting/tab) via a signal check
-  (expected dominant frequency / energy in the known band, or non-silence
-  correlated to the stimulus window), or exercise the capture assertion against
-  the real tab source rather than the fake device. Non-zero MP3 bytes alone are
-  NOT proof of real audio capture.
+  pass on fake media **without ever capturing real meeting/tab audio**. Non-zero
+  MP3 bytes alone are NOT proof of real audio capture.
+* **Feasible signal seam (required — an MP3 spectral check is infeasible).**
+  `TestMeetingCaptureAudio` receives **encoded MP3** and this repo ships **no MP3
+  decoder**, so a frequency/energy (spectral) assertion computed *on the MP3 bytes*
+  is not implementable here. The stimulus signal check MUST instead be taken at a
+  **feasible, U5-owned seam that has access to un-encoded signal**:
+  * **Primary — PCM-before-encode tap:** the capture path already forwards
+    **non-zero PCM over the `sendAudioToGo` binding before** shine encodes it. U5
+    adds a **narrow, test-only PCM observer seam** (an optional hook that is nil in
+    production and set only by the test) exposing those raw PCM frames, and the
+    test runs the signal check — a single-frequency Goertzel/energy estimate at the
+    known stimulus tone, or non-silence correlated to the known stimulus window —
+    on the **PCM**, not the MP3. The tap only *observes* PCM; it MUST NOT alter the
+    buffer handed to the encoder and MUST NOT re-break `shine-mp3` frame alignment
+    or the `-race` behavior.
+  * **Alternative — browser-side analyser:** an in-page `AudioContext`
+    `AnalyserNode` computes a dominant-bin/energy summary in the tab and reports the
+    **matched / not-matched decision** (vs. the known stimulus) over the binding, so
+    no Go-side decode is needed either.
+  Either seam MUST distinguish fake-media capture from real meeting/tab audio
+  (assert the injected **known live stimulus** — a deterministic tone or spoken
+  phrase — is present in the real tab source, not the Chrome fake device).
 * **Live precondition:** meeting audio must be present during capture (a speaker
   or shared audio) for non-zero MP3 bytes. Record as a U6 precondition.
 * **Bounded-cycle stop condition (2-hour rule):** if the capture path is not green
   within a bounded number of live cycles (e.g. 3), stop and file a follow-up task
   rather than exceeding the 2-hour budget.
-* **Files:** `internal/browser/audio.go` (+ `allocator.go` only if the
-  capture-source match string must change) **and
-  `internal/browser/meeting_integration_test.go`** — U5 OWNS the
-  `TestMeetingCaptureAudio` known-stimulus assertion and the
-  fake-media-vs-real-audio discrimination in that test file (<3 files).
+* **Files:** `internal/browser/audio.go` (the capture path + the narrow test-only
+  **PCM-before-encode observer seam**; `+ allocator.go` only if the capture-source
+  match string must change) **and `internal/browser/meeting_integration_test.go`**
+  — U5 OWNS the `TestMeetingCaptureAudio` known-stimulus assertion, the
+  PCM/analyser signal check, and the fake-media-vs-real-audio discrimination in
+  that test file. This stays within **<3 files** and the 2-hour budget: the seam is
+  a nil-by-default optional PCM hook plus a single-frequency Goertzel/energy check.
+  If it grows past the budget (e.g. a general analyser abstraction is attempted),
+  **split** the browser-side analyser variant into its own follow-up task rather
+  than exceeding 2h.
 * **Verify:** `TestMeetingCaptureAudio` passes green with a **stimulus-verified**
-  assertion — the captured audio must contain a **known live stimulus** (a
-  deterministic tone or spoken phrase played into the meeting/tab), checked by a
-  signal test (expected dominant frequency / energy in the known band, or
-  non-silence correlated to the stimulus window), **not merely non-zero MP3
-  bytes**, and must be distinguishable from Chrome fake-media output; clean return
-  after cancel; run with `-race` where feasible; unit tests green; full gates
-  clean.
+  assertion taken at the **PCM-before-encode tap** (or the browser-side analyser) —
+  **not** by decoding the MP3 (no decoder exists) and **not** merely from non-zero
+  MP3 bytes — confirming the captured signal contains the injected **known live
+  stimulus** (single-frequency Goertzel/energy at the known tone, or non-silence
+  correlated to the stimulus window) and is distinguishable from Chrome fake-media
+  output; clean return after cancel; run with `-race` where feasible; unit tests
+  green; full gates clean.
 * **Depends on:** U3.
 
 ### U6 — Live-harness reproducibility runbook + closure evidence
@@ -781,11 +820,15 @@ workflow policies:
 * **Runtime verification (per unit):**
   * U2 — unit tests over `/meet/` URL mutation (deterministic, headless-safe).
   * U3 — live `TestMeetingJoin` green (bot admitted to the meeting).
-  * U4 — live `TestMeetingEnableCaptions` green (finalized caption delivered).
-  * U5 — live `TestMeetingCaptureAudio` green: the captured MP3 contains the
-    KNOWN live audio stimulus (signal correlated to the stimulus window),
-    distinguishing real meeting/tab audio from Chrome fake-media, with a clean
-    cancel. Non-zero MP3 bytes alone are NOT a sufficient pass.
+  * U4 — live `TestMeetingEnableCaptions` green (a finalized caption with a
+    non-empty speaker AND text delivered; empty or stale speaker/text/block
+    extraction FAILS).
+  * U5 — live `TestMeetingCaptureAudio` green: a **PCM-before-encode tap** (or
+    browser-side analyser) — not an MP3 decode, which the repo lacks — shows the
+    captured signal contains the KNOWN live audio stimulus (signal correlated to
+    the stimulus window), distinguishing real meeting/tab audio from Chrome
+    fake-media, with a clean cancel. Non-zero MP3 bytes alone are NOT a sufficient
+    pass.
 * **Operational closure:** U6 runbook + browser-verification closure entry
   recording routes, headed/headless mode, human checkpoints, and per-flow
   verdicts. Blocked/partial flows (if any remain) become explicit follow-up
@@ -847,10 +890,12 @@ capacity-slack — do not re-break), and `amend-breaks-shipment-gate.md` /
   organizer/meeting is live and caption controls are visible; confirm
   `TEAMS_PROFILE_DIR` points to the separate empty bot profile and
   `TEAMS_MEETING_URL` resolves from the out-of-tree file.
-* **Target scenarios:** join admitted; finalized caption delivered; captured MP3
-  contains the KNOWN live audio stimulus (signal correlated to the stimulus
-  window, real meeting/tab audio distinguished from Chrome fake-media) with a
-  clean cancel — non-zero MP3 bytes alone are NOT a sufficient pass.
+* **Target scenarios:** join admitted; finalized caption delivered with a
+  non-empty speaker+text (empty or stale extraction FAILS); the
+  **PCM-before-encode tap** (or browser-side analyser — not an MP3 decode) shows
+  the captured signal contains the KNOWN live audio stimulus (signal correlated to
+  the stimulus window, real meeting/tab audio distinguished from Chrome fake-media)
+  with a clean cancel — non-zero MP3 bytes alone are NOT a sufficient pass.
 * **Blocked-path handling:** if server/meeting availability cannot be
   established, record `BLOCKED` validator evidence naming the exact missing
   prerequisite rather than downgrading to a false pass; if the bot waits in
@@ -1234,33 +1279,50 @@ condition not introduced by this work. **No implementation is performed here.**
   the same chromedp PATH-discovery signature (`exec: "google-chrome"… not found in
   %PATH%`), **distinct** from the managed agent-browser `DevToolsActivePort`
   launch failure — the two must not be conflated.
-* **R2 — `--no-sandbox` allocator flag (pre-existing).** The allocator disables
-  the Chrome sandbox. **Disposition:** pre-existing hardening concern, not
-  introduced or widened by this feature and outside the selector/path-hardening
-  contract surface; left intentionally unresolved. Not captured as a new deferred
-  entry (not directly caused by this change; revisit under a dedicated
-  browser-hardening effort).
+* **R2 — Chromium sandbox-disable flag (pre-existing).** The production allocator
+  disables the Chrome sandbox unconditionally. **Disposition:** out of the `010-F`
+  selector/path-hardening contract surface (production browser-launch security
+  posture); **not implemented here**. **Captured** per PR #27 Copilot review
+  (P-021 capture-first) as a DEFERRED SCOPE EXPANSION stash entry **`D2023898`**
+  (`kind: task`, `requires deliberation: YES`, provisional priority **medium**) —
+  make the sandbox-disable flag **opt-in** (config/env-gated, default sandbox
+  enabled) rather than unconditional.
 * **R3 — Runner/error URL logging (pre-existing; secret-adjacent).** Existing
-  logging in the runner/error paths could surface a join URL/token if invoked with
-  a live URL. **Disposition:** out of scope for `010-F` (no logging code changes
-  here); this plan's redaction rules already forbid committing any live URL/token
-  into artifacts, and U1/U6 scrub `t.Log`/chromedp error output. Flagged as a
-  residual **secret-hygiene** risk for a future logging-redaction pass; not
-  implemented in this shipment.
-* **R4 — Navigation host allowlist (pre-existing).** No allowlist constrains the
-  URLs the automation will navigate. **Disposition:** pre-existing; out of the
-  selector/path-hardening contract surface; intentionally unresolved. Not captured
-  as a new deferred entry.
-* **R5 — `.env.local` handling (pre-existing).** Reviewer-noted local-env file
-  handling. **Disposition:** pre-existing and out of scope; not acted on and not
-  captured as a deferred entry (not directly relevant to the selector/path work
-  under P-021 C1).
+  logging in the runner/error paths could surface a join URL/passcode if invoked
+  with a live URL. **Disposition:** out of scope for `010-F` (no production logging
+  code changes here); this plan's redaction rules already forbid committing any
+  live URL/token into artifacts, and U1/U6 scrub `t.Log`/chromedp error output.
+  **Captured** per PR #27 Copilot review (P-021 capture-first) as a DEFERRED SCOPE
+  EXPANSION stash entry **`EEA7F685`** (`kind: task`, `requires deliberation: YES`,
+  provisional priority **high** — secret-adjacent) — redact the query/passcode
+  from production navigation errors and logging; not implemented in this shipment.
+* **R4 — Navigation host allowlist / trust boundary (pre-existing).** No allowlist
+  constrains the URLs the automation will navigate. **Disposition:** out of the
+  selector/path-hardening contract surface; **not implemented here**. **Captured**
+  per PR #27 Copilot review (P-021 capture-first) as a DEFERRED SCOPE EXPANSION
+  stash entry **`A99EEABD`** (`kind: feature`, `requires deliberation: YES`,
+  provisional priority **medium**) — deliberate a Teams-host allowlist vs.
+  intentional, documented arbitrary-HTTP(S) support (the outcome may be allowlist
+  enforcement **or** a documented no-allowlist decision).
+* **R5 — Local env-file handling / secret-scanning guardrail (pre-existing).**
+  Reviewer-noted local-env file handling. **Disposition:** out of scope for
+  `010-F` (repository secret-hygiene / CI guardrail configuration); **not
+  implemented here**. **Captured** per PR #27 Copilot review (P-021 capture-first)
+  as a DEFERRED SCOPE EXPANSION stash entry **`3084A83E`** (`kind: task`,
+  `requires deliberation: YES`, provisional priority **medium**) — confirm local
+  env files are untracked and add a repository-approved secret-scanning guardrail
+  (no secret values/paths recorded).
 
-Rationale for not opening new deferred entries beyond `87CDB97A`: under P-021 C1
-only findings on the **authorized contract surface** are in scope, and only
-**directly relevant** unaddressed findings warrant a new deferred capture. R2–R5
-are pre-existing conditions outside this feature's surface; R1 is directly
-relevant and is the one item captured (`87CDB97A`).
+Capture disposition (updated 2026-09-05 per PR #27 Copilot review — **P-021
+capture-first**): R2–R5 are each now **captured as their own DEFERRED SCOPE
+EXPANSION stash entry** (`D2023898`, `EEA7F685`, `A99EEABD`, `3084A83E`), all
+`requires deliberation: YES`, each carrying refs PR #27, review threads
+`PRRT_kwDOTStvas6foPdV` / `PRRT_kwDOTStvas6foPd-`, feature `010-F`, shipment
+`010-S`, and this plan. They remain **outside** the `010-F` contract surface and
+are **not implemented in this shipment**; capture records the deliberate deferral
+(the review's capture-first requirement), it does **not** authorize the work here.
+`87CDB97A` stays scoped **only** to R1 — production-runtime browser
+executable-path (ExecPath) portability — and is **not** widened to cover R2–R5.
 
 ### Post-gate local-review remediation (2026-09-06)
 

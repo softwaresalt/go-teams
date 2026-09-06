@@ -280,21 +280,30 @@ git status --short                    # MUST print nothing; if it prints
 # Extract only the 009-S hunks for these 4 files -- not a whole-file
 # snapshot, and not the full 3d59b7d merge diff (which also touches
 # unrelated backlog/doc paths, see the "does not work as written" note
-# above):
-git diff 822915c 3d59b7d -- internal/audio/mp3.go internal/audio/mp3_test.go internal/audio/race.go internal/audio/norace.go > /tmp/009-S-audio-rollback.patch
+# above). The scratch patch MUST stay inside the workspace: `/tmp` is
+# outside the repository root, is not gitignored, and is not portable to
+# all supported shells, so an agent (or operator) MUST refuse to run a
+# `/tmp`-targeted variant of this step (AGENTS.md:328-329;
+# .github/instructions/constitution.instructions.md:44-48). Use the
+# workspace-local, gitignored `logs/` directory instead:
+mkdir -p logs
+git diff 822915c 3d59b7d -- internal/audio/mp3.go internal/audio/mp3_test.go internal/audio/race.go internal/audio/norace.go > logs/009-S-audio-rollback.patch
 # Dry-run the reverse-apply first. A non-zero exit means the current files
 # have diverged from the 009-S hunks (e.g. a later PR touched the same
 # lines) -- STOP and resolve the conflict manually. Do NOT force-apply and
 # do NOT fall back to a whole-file `git checkout` of an old commit, which
 # would silently erase any later, unrelated changes to these files.
-git apply -R --check /tmp/009-S-audio-rollback.patch
-git apply -R /tmp/009-S-audio-rollback.patch
+git apply -R --check logs/009-S-audio-rollback.patch
+git apply -R logs/009-S-audio-rollback.patch
 go build ./...
 go vet ./...
 go test ./internal/audio/...          # non-race: actually exercises encoder-output tests
 go test -race ./internal/audio/...    # race: confirms the restored skip guards suppress checkptr
 git add internal/audio/
 git commit -m "revert(audio): restore pre-009-S encoder (see Rollback trigger above for the observed regression), ref docs/compound/build-errors/shine-mp3-race-checkptr.md"
+# Cleanup: logs/ is gitignored, so the scratch patch never enters tracked
+# state, but remove it once the revert commit above is in place:
+rm logs/009-S-audio-rollback.patch
 ```
 
 **Corrected (Copilot finding, 2026-09-06)**: the restored pre-fix
@@ -380,10 +389,17 @@ below, so archiving/renaming it here would break this artifact's own
 evidence trail; the remaining older closure/review records belong to other
 units' own closures for the same reason as the memory files above.
 
-Verified via `git grep -n --fixed-strings <old-path> -- ':!docs/archive/*'`
-for each of the four other-unit memory paths above: no cross-references
-exist outside `docs/archive/`, so leaving them in place (rather than
-touching them here) carries no dangling-reference risk either way.
+Verified via `git grep -n --fixed-strings <old-path> -- ':!docs/archive/*'
+':!docs/closure/009-S-009-F-post-merge-closure.md'` for each of the four
+other-unit memory paths above. The second exclusion is this artifact
+itself: it quotes all four paths verbatim in the paragraph above (lines
+369-372), so without excluding it, the command self-matches this document
+and cannot support a "no cross-references" claim as originally written.
+With both exclusions applied, the command reproducibly returns no matches
+for any of the four paths -- no cross-references exist outside
+`docs/archive/` or this document's own quotation -- so leaving the four
+files in place (rather than touching them here) carries no
+dangling-reference risk either way.
 
 `go vet ./...` and `gofmt -l .` re-run clean after this docs-only pass (no
 source touched).

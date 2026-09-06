@@ -228,9 +228,22 @@ separate authorization). Enumerated via full-pagination GraphQL query
 against the live PR #28 state: 1 unresolved inline thread (rollback
 whole-file-restore safety, thread `PRRT_kwDOTStvas6fuG8z`) plus 3
 review-body-only "Suppressed comments" findings from the same review
-(`5126252328`, HEAD `94bef3d`) -- P-020 compaction evidence, and a stale
-local-readiness record (this same finding). All three were classified
-in-scope under P-021 C1 (same closure-artifact contract surface) and fixed:
+(`5126252328`, HEAD `94bef3d`): P-020 compaction evidence, a stale
+local-readiness record, and a reviewed-HEAD audit-trail inaccuracy (this
+file's then-current line 51 named the first three Copilot-reviewed
+commits as `83342f6`/`c4dd319`/`aec923e`, omitting `00dc602` and
+misattributing `aec923e`). All four items (the inline thread plus these 3)
+were classified in-scope under P-021 C1 (same closure-artifact contract
+surface). **Correction**: this entry previously claimed all three
+body-only findings were fixed within this round's own batch below; that
+was inaccurate. The inline thread and the first two body-only findings
+(P-020 compaction evidence; the stale local-readiness record, corrected in
+the PR body's `Reviewed HEAD` field and cited in PR comment `5561766710`)
+were fixed in this round, per the commits below. The third body-only
+finding -- the reviewed-HEAD audit-trail inaccuracy -- was inadvertently
+left unaddressed by this round's batch and was not actually fixed until
+the later, separate commit `4461a55` (see the entry after this round's
+bullets below). Fixed in this round:
 
 - Commit `724ed79`: reversed only the 009-S-introduced audio hunks in the
   rollback procedure (`git diff | git apply -R --check | git apply -R`)
@@ -289,5 +302,42 @@ in-scope under P-021 C1 (same closure-artifact contract surface) and fixed:
 
 Local gates re-run clean at the final HEAD of this round: `go vet ./...`,
 `gofmt -l .`. No production code touched across any commit this round.
-PR #28 remains unmerged; 010-S remains unclaimed and untouched; no merge
-attempted; no admin fallback used.
+
+**Post-round-8 reconciliation (2026-09-06)**: commit `4461a55` fixed the
+third review-body-only finding named above (the reviewed-HEAD audit-trail
+inaccuracy at this file's then-current line 51), correcting the
+first-three-cycles list to `83342f6`/`00dc602`/`c4dd319`. Three further
+Copilot findings from review `5126233189` (round-4/5/6 "at HEAD X"
+phrasing read as review-target-commit vs. fix-commit ambiguity, lines
+59/71/106) were then each fixed in their own dedicated commit -- `e802946`,
+`c7ebfe7`, `d1ac0e6` -- rather than bundled, since each named a distinct
+hash pair. `d1ac0e6` was PR #28's HEAD at the start of the next
+remediation round below.
+
+**Correction (this entry)**: the paragraph immediately above this one ("PR
+#28 remains unmerged... no admin fallback used", as it read before this
+correction) omitted the actual blocking state at HEAD `d1ac0e6`, leaving
+future resumption without the real blockers. The accurate terminal state
+at that HEAD was: 3 unresolved inline threads -- `PRRT_kwDOTStvas6fuZf3`
+(`:291`, rollback `/tmp` path), `PRRT_kwDOTStvas6fuj_F` (`:386`, git-grep
+self-reference claim), and `PRRT_kwDOTStvas6fuyHQ` (`:225`, this round's
+3-findings-names-2 undercount, corrected earlier in this entry) -- plus a
+P-018 `autoharness gate copilot-review` verdict of `REVIEW_TIMEOUT`
+(BLOCK) at that HEAD. PR #28 remained `OPEN`/`MERGEABLE`, unmerged; 010-S
+remained unclaimed and untouched; no merge was attempted; no admin
+fallback was used.
+
+**Current remediation round (2026-09-06, in progress as of this commit)**:
+a separately operator-authorized Ship continuation is fixing the content
+underlying all 3 threads above in this same commit (rollback patch
+redirected to workspace-local `logs/`, no `/tmp`; cross-reference
+verification corrected to exclude this closure artifact's own
+self-quotation and re-verified reproducible; the findings-count text
+corrected earlier in this entry). Per the mandatory execution contract,
+replies, GraphQL thread resolution, the body-only PR comment for review
+`5126488219`, readiness update, and the follow-up P-018/Copilot-review
+poll all happen after this commit is pushed -- their outcomes are recorded
+in the PR body's Local Review Readiness block and PR comments, and in a
+following session memory update, not duplicated here. PR #28 remains
+unmerged as of this commit; 010-S remains unclaimed and untouched; no
+merge attempted; no admin fallback used.

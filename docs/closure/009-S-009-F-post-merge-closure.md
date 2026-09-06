@@ -244,15 +244,26 @@ shipment merged), leaving all backlog/doc state untouched:
 ```bash
 git checkout 822915c -- internal/audio/mp3.go internal/audio/mp3_test.go
 git checkout 822915c -- internal/audio/race.go internal/audio/norace.go
-go build ./... && go vet ./... && go test -race ./internal/audio/...
+go build ./...
+go vet ./...
+go test ./internal/audio/...          # non-race: actually exercises encoder-output tests
+go test -race ./internal/audio/...    # race: confirms the restored skip guards suppress checkptr
 git add internal/audio/
 git commit -m "revert(audio): restore pre-009-S encoder to <root-cause>, see docs/compound/build-errors/shine-mp3-race-checkptr.md"
 ```
 
-Validate with `go test -race ./internal/audio/...` (expect this to
-reintroduce the `-race` skip guards, so the checkptr fault will not surface
-— confirming the restore is the true pre-fix state) and `go build ./...` /
-`go vet ./...` for the whole module before pushing.
+**Corrected (Copilot finding, 2026-09-06)**: the restored pre-fix
+`mp3_test.go` re-adds `if raceDetectorEnabled { t.Skip(...) }` guards on every
+encoder-output test, so a `-race`-only validation run **skips all of them**
+and proves nothing about MP3 output after rollback — it only confirms the
+checkptr fault is suppressed again. The corrected validation runs **both**:
+`go test ./internal/audio/...` (non-race — actually exercises
+`TestEncoderProducesMP3Frames`, `TestEncoderEncodesAllSamples`,
+`TestEncoderHandlesNonFrameAlignedInput`, `TestEncoderFlushEmitsRemainder`,
+i.e. the real output-regression trigger from the Rollback trigger section
+above) **and** `go test -race ./internal/audio/...` (race — confirms the
+restored skip guards are in effect, i.e. the true pre-fix configuration) —
+plus `go build ./...` / `go vet ./...` for the whole module before pushing.
 
 ## Validation window
 
@@ -303,11 +314,16 @@ scoped out of 009-S at plan time and is tracked under its own shipment
   under stash `CC0A7034` / shipment `010-S` (queued; out of scope here).
 - shine-mp3 `unsafe`/`-race` upstream fix — tracked in
   `docs/compound/build-errors/shine-mp3-race-checkptr.md`.
-- **New (from this backfill's corrections)**: no test in `internal/audio`
-  performs a byte-for-byte / fixed-reference comparison of MP3 encoder
-  output; the "byte-identical" property is currently a source-level argument
-  only, not a tested one. Adding such a regression test would let a future
-  shine-mp3 upgrade be verified byte-identical rather than merely
-  frame-count-identical. Not filed as a separate backlog item by this
-  closure PR (would be new scope); recorded here as an explicit residual-risk
-  note per P-021 C1/C3.
+- **New (from this backfill's corrections; captured per P-021 C2)**: no test
+  in `internal/audio` performs a byte-for-byte / fixed-reference comparison
+  of MP3 encoder output; the "byte-identical" property is currently a
+  source-level argument only, not a tested one. Adding such a regression
+  test would let a future shine-mp3 upgrade be verified byte-identical
+  rather than merely frame-count-identical. This is out of scope for PR #28
+  (which authorizes only the 009-S closure backfill, not new
+  `internal/audio` test coverage) per P-021 C1, so it was captured as
+  deferred-scope-expansion stash entry **`FE245033`** (six-field payload:
+  expansion statement, C1 out-of-scope rationale, source refs — PR #28,
+  review-thread `PRRT_kwDOTStvas6fpj0Y`, task `009.001-T`, feature `009-F`,
+  shipment `009-S` — `requires deliberation: NO`, kind `task`, provisional
+  priority `low`) rather than merely noted in prose, per P-021 C2/C3.

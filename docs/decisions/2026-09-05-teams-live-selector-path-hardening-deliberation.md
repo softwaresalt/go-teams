@@ -236,3 +236,37 @@ constraints into every downstream item.
   bot profile.
 * **High runtime/rollback risk of live iteration** — Mitigation: plan hardening
   is required; each task has a bounded live scope and a single green-test exit.
+
+## Decision Addendum (2026-09-05, post-live-evidence)
+
+Parent-session live execution produced evidence that supersedes parts of the
+original decomposition and the Unresolved Questions above. The covering-feature
+abstraction and the Option B choice are unchanged; the authoritative
+decomposition is updated as follows:
+
+* **U7 runs FIRST (new DAG root, prerequisite of U1).** A test-only
+  `TEAMS_BROWSER_PATH` → `chromedp.ExecPath` harness enabler (`010.007-T`) is the
+  root of the DAG: an Edge-only / non-PATH host aborts with
+  `exec: "google-chrome": executable file not found in %PATH%` before any live
+  diagnostic can run, so U7 gates U1 and the whole chain. It is
+  test-infrastructure only (no production source edit).
+* **Pre-join root cause is CONFIRMED — the launcher interstitial.** The
+  `pre-join not visible` timeout is caused by the `/dl/launcher/launcher.html`
+  launcher: a fresh-guest `/meet/<id>` link redirects there and `Join` must click
+  `joinOnWeb` before the pre-join SPA renders. This resolves the first
+  Unresolved Question above — it is NOT a stale `joinNowSel`, a Chrome/125 UA
+  interstitial, or a `--headless=new` DOM difference. U3 implements the confirmed
+  launcher fix.
+* **Identity is CONFIRMED GUEST**, and lobby admission by the organizer IS
+  required (an explicit human checkpoint, proven live) — resolving the second
+  Unresolved Question.
+* **U1 is narrowed to two diagnostics ONLY** — U1 no longer identifies the root
+  cause (already confirmed). It assesses only: (a) whether `MutateJoinURL` legacy
+  params change the `/meet/` launcher landing vs the raw URL (the U2 input), and
+  (b) which caption-activation variant (guest-direct `#closed-captions-button` vs
+  full-nested `#LanguageSpeechMenuControl-id`) the bot lands in per run.
+* **Organizer-CDP attachment is EXPLICITLY OUT OF SCOPE.** The third Unresolved
+  Question (attach to an existing authenticated CDP endpoint via RemoteAllocator
+  vs launch own browser) is resolved as OUT OF SCOPE: the bot launches its own
+  browser via `TEAMS_BROWSER_PATH` (U7); attaching to the organizer's CDP 9223 is
+  not pursued, and the organizer session must remain unaltered.

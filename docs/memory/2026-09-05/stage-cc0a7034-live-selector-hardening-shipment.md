@@ -176,7 +176,10 @@ reproduced.
 **prerequisites** (`getDisplayMedia` + `AudioContext`) are present; streaming
 still unverified. U5 (`010.005-T`) plan text + acceptance criteria updated to
 separate "prereqs present" (confirmed, NOT a pass) from verified end-to-end
-streaming (non-zero MP3 bytes). Within U5's existing boundary.
+streaming, where the pass REQUIRES a KNOWN live-stimulus correlation (a
+deterministic tone / spoken phrase asserted in the captured signal, distinguishing
+real meeting/tab audio from Chrome fake-media); non-zero MP3 bytes alone are
+INSUFFICIENT. Within U5's existing boundary.
 
 **(c) NEW SCOPE — U7 (independently scope-audited, then added)** — chromedp
 auto-discovery aborts `exec: "google-chrome": executable file not found in %PATH%`

@@ -218,15 +218,15 @@ trick with an explicit, version-controlled harness executable-path option.
     evidence and record which cells were skipped.
   Each matrix cell runs **serially** with a **clean/isolated profile dir** so
   cells cannot contaminate one another; profiles remain secret material.
-* **Dedicated opt-in (required — must NOT launch on routine integration runs):**
+* **Dedicated env gate (required — must NOT launch on routine integration runs):**
   the diagnostic matrix is expensive (raw vs. mutated URL × headed vs. headless ×
-  tri-state UA × five-param ablation), so it MUST sit behind its **own** opt-in
-  *beyond* the `integration` tag — a second build tag (e.g.
-  `//go:build integration && diag`) or a dedicated env gate (e.g.
-  `GO_TEAMS_DIAGNOSTIC_MATRIX=1`). A routine `go test -tags integration` run
-  compiles the probe but does **not** execute the matrix; the matrix runs only
-  when the dedicated opt-in is set. Record which mechanism was chosen in the
-  findings note.
+  tri-state UA × five-param ablation), so the probe carries **only** the
+  `integration` build tag (NO second build tag such as `diag`) and its matrix
+  body is gated at RUNTIME by a dedicated env gate
+  (`GO_TEAMS_DIAGNOSTIC_MATRIX=1`) that `t.Skip()`s unless set. A routine
+  `go test -tags integration` run therefore **always compiles** the probe but
+  does **not** execute the matrix; the matrix runs only when the env gate is
+  enabled. Record confirmation of the env-gate mechanism in the findings note.
 * **What:** For each cell, record which landing surface renders (guest pre-join
   SPA / Microsoft sign-in / MFA / lobby / "unsupported browser" interstitial) and
   the current values of the pre-join, mute, display-name, admitted-toolbar, and
@@ -499,7 +499,10 @@ trick with an explicit, version-controlled harness executable-path option.
   within a bounded number of live cycles (e.g. 3), stop and file a follow-up task
   rather than exceeding the 2-hour budget.
 * **Files:** `internal/browser/audio.go` (+ `allocator.go` only if the
-  capture-source match string must change) (<3 files).
+  capture-source match string must change) **and
+  `internal/browser/meeting_integration_test.go`** — U5 OWNS the
+  `TestMeetingCaptureAudio` known-stimulus assertion and the
+  fake-media-vs-real-audio discrimination in that test file (<3 files).
 * **Verify:** `TestMeetingCaptureAudio` passes green with a **stimulus-verified**
   assertion — the captured audio must contain a **known live stimulus** (a
   deterministic tone or spoken phrase played into the meeting/tab), checked by a
@@ -525,7 +528,11 @@ trick with an explicit, version-controlled harness executable-path option.
   harness must click `joinOnWeb` before pre-join), the organizer/lobby-admission
   and bot-side login/MFA human checkpoints, the live speech/audio stimulus
   preconditions (U4/U5), and the browser-verification closure evidence (redacted
-  route, headed/headless mode, verdicts) for the three now-green flows.
+  route, headed/headless mode, verdicts) recorded per flow AT EXECUTION TIME as an
+  observed verdict — pass / blocked / partial — with a flow marked green ONLY when
+  its live evidence is captured (audio green ONLY when stimulus-verified). No
+  success is claimed before the evidence exists; the runbook does not pre-assert
+  that any flow is green.
 * **Confirmed selector inventory (record in the runbook, redacted):** capture the
   2026-09-05 Live Selector Evidence table so future selector drift is diffable —
   guest launcher `button[data-tid="joinOnWeb"]`; pre-join display-name/join/mic
@@ -727,7 +734,7 @@ workflow policies:
   U3/U4/U5, preserving width isolation.
 * **Simplicity / YAGNI (scope value — not a numbered constitution principle):** no speculative abstraction — U2 changes
   only the `/meet/` branch and leaves the legacy path byte-identical; U1's
-  diagnostic probe is build-tagged scaffolding (behind a dedicated opt-in) that is
+  diagnostic probe is build-tagged scaffolding (behind a dedicated env gate) that is
   not shipped as production behavior; U7 is the **narrowest test-only form** — the
   wider production `Options.ExecPath` portability change is explicitly **deferred
   to a separate feature** (stash `87CDB97A`), not built here; CDP-attach is
@@ -1267,7 +1274,8 @@ production/test source change, no build, no shipment claim, and no PR action**
 root cause **confirmed**; Requirements Trace and Constitution Check now cover
 **U1–U7** with corrected principle citations; the malformed `joinOnWebSel` inline
 code is fixed; U1 is narrowed to the still-open URL-mutation/caption-variant
-diagnostics **behind a dedicated opt-in** so routine `-tags integration` runs do
+diagnostics **behind a dedicated env gate** so routine `-tags integration` runs
+compile the probe but do
 not launch the matrix; U7 requires **tagged compile verification**; U4 prefers a
 **single shared selector const interpolated into the JS** over duplicated
 literals; U5 acceptance now requires a **stimulus-verified** capture that

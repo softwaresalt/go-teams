@@ -66,6 +66,17 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    three are same-contract-surface corrections to Ship's own authored
    closure artifact / PR body (P-021 C1 in scope) — no new P-021 capture was
    required for this round.
+8. A 5th Copilot-review round (round 5 overall; extension round 2 of the
+   operator-authorized 3 additional rounds) at HEAD `f735dc8` surfaced 1
+   further finding: the compacted memory
+   (`docs/memory/compacted/2026-07-11-009-S-mp3-race-safety-compacted.md`)
+   still stated "MP3 output byte-identical" as a plain verified fact,
+   reintroducing the oversold claim the closure artifact had already
+   corrected in round 1. Reworded to match the closure artifact's
+   Byte-identity correction (source-level cap-only-growth argument, not a
+   tested byte-for-byte guarantee; cites stash `FE245033`). Same-
+   contract-surface correction (P-021 C1 in scope); no new P-021 capture
+   required.
 
 ## Explicitly NOT done (scope boundary held)
 
@@ -101,5 +112,7 @@ continuation, scoped only to PR #28 / this closure remediation, with an
 explicit operator authorization of up to 3 additional Copilot
 review-fix-push-poll rounds (an extension to, not a reset of, the
 already-exhausted 3-round budget from item 6). Round 4 overall / extension
-round 1 is recorded in item 7 above. 010-S remains unclaimed. Still awaiting
-explicit separate operator merge approval — none exists yet.
+round 1 is recorded in item 7 above; round 5 overall / extension round 2 is
+recorded in item 8 above (2 of the 3 authorized extension rounds consumed).
+010-S remains unclaimed. Still awaiting explicit separate operator merge
+approval — none exists yet.

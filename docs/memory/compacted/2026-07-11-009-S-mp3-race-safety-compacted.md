@@ -19,9 +19,15 @@ stride past the final sample (index `len+1`) — never dereferenced, but
 `NOASSERTION`-licensed (vendoring/forking rejected — copyright risk).
 Fix: `audio.encodeFrames` allocates the interleaved buffer with small extra
 **capacity** (`encoderTailSlack = 4`) so the end pointer stays inside the
-allocation. Capacity-only change → MP3 output byte-identical. Removed
-`raceDetectorEnabled` skip guards + `race.go`/`norace.go`; encoder tests now
-run under `-race` unconditionally.
+allocation. **Corrected (Copilot finding, 2026-09-06)**: capacity-only
+change → MP3 output is source-level argued to be byte-identical (grows
+`cap`, not `len`, of the interleaved buffer; shine-mp3 writes/reads by
+`len`), but no test in `internal/audio` asserts byte-for-byte equality --
+encoder tests confirm frame/sample-count completeness only (see the
+Byte-identity correction in
+`docs/closure/009-S-009-F-post-merge-closure.md` and the tracked follow-up,
+stash `FE245033`). Removed `raceDetectorEnabled` skip guards +
+`race.go`/`norace.go`; encoder tests now run under `-race` unconditionally.
 
 ## Key reusable insight
 

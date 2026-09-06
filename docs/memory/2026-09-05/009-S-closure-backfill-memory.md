@@ -72,8 +72,9 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    per Copilot review `5124405427`. (Correction: Copilot review
    `5126233189`, line 59.)
 8. A 5th Copilot-review round (round 5 overall; extension round 2 of the
-   operator-authorized 3 additional rounds) at HEAD `f735dc8` surfaced 1
-   further finding: the compacted memory
+   operator-authorized 3 additional rounds) — triggered by Copilot's
+   review of HEAD `f735dc8` (round 4's fix commit, per Copilot review
+   `5124591998`) — surfaced 1 further finding: the compacted memory
    (`docs/memory/compacted/2026-07-11-009-S-mp3-race-safety-compacted.md`)
    still stated "MP3 output byte-identical" as a plain verified fact,
    reintroducing the oversold claim the closure artifact had already
@@ -81,7 +82,10 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    Byte-identity correction (source-level cap-only-growth argument, not a
    tested byte-for-byte guarantee; cites stash `FE245033`). Same-
    contract-surface correction (P-021 C1 in scope); no new P-021 capture
-   required.
+   required. This round's own fix landed in commit `0644f82` (the PR
+   description's round-5 entry), not `f735dc8` — the HEAD named above
+   is the reviewed commit that surfaced this finding. (Correction:
+   Copilot review `5126233189`, line 71.)
 
 ## Explicitly NOT done (scope boundary held)
 

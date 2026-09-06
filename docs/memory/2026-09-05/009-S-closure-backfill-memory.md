@@ -137,6 +137,35 @@ consensus, remediation, post-remediation re-review) before any further
 Copilot round. 010-S remains unclaimed and untouched. Still awaiting
 explicit separate operator merge approval — none exists yet.
 
+10. As predicted, the push-triggered Copilot re-review at HEAD `2a0d8bd`
+    (review `5126192802`) surfaced 2 further "Suppressed comments" (again
+    with no dedicated inline thread, `Comments generated: 0 new`): (A)
+    `.backlogit/stash.jsonl:7` — a recurrence of the already-resolved
+    `requires deliberation: NO` P-021 C6 concern (thread
+    `PRRT_kwDOTStvas6fpl3y`); confirmed once more, via a 4-model Adversarial
+    Review consensus (4/4, HIGH confidence), that no P-021-compliant fix
+    exists — Ship's P-021 C5 creation-only authority forbids editing a
+    captured deferred-scope-expansion entry, so this remains
+    acknowledge-only with no file change. (B)
+    `docs/closure/009-S-009-F-post-merge-closure.md`'s backfill-note sentence
+    overclaimed "without altering ... backlog state", when this PR did
+    append stash entry `FE245033`. Per operator instruction, since findings
+    remained after the final (3rd) authorized Copilot round, Ship stopped
+    further direct Copilot review-fix-push-poll cycles and invoked the
+    `Adversarial Review` custom workflow instead (4-reviewer consensus:
+    anchor `gpt-5.6-sol` + 3 tiers; 4/4 HIGH confidence both findings).
+    Finding B was confirmed in-scope (P-021 C1, same-contract-surface
+    accuracy fix to Ship's own authored artifact) and MAJOR severity; the
+    consensus-validated minimal patch (`backlog state` →
+    `the already-archived 009-S backlog items`) was applied by Ship itself
+    (the Adversarial Review sub-agent hit a platform sub-agent depth cap
+    and could not write files directly, so it returned the validated diff
+    for Ship to apply — applied verbatim, confirmed via `git diff`). No
+    other content changed; `.backlogit/stash.jsonl` was NOT touched. This
+    is round 7 overall — the Adversarial Review pathway explicitly
+    authorized by the operator as the alternative to a 4th Copilot-only
+    round, not itself a 4th direct Copilot round.
+
 **Recovery continuation (2026-09-06)**: Orchestrator routed a targeted Ship
 continuation, scoped only to PR #28 / this closure remediation, with an
 explicit operator authorization of up to 3 additional Copilot

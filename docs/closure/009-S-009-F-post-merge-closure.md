@@ -26,8 +26,8 @@ by the `pipeline-topology` predecessor-closure check
 in that pass — only `docs/closure/2026-07-11-009-S-review.md` (pre-merge
 adversarial review) and the archival commit existed. This backfill supplies
 the missing releasability/closure evidence without altering any already-merged
-history, code, or backlog state. No implementation work, no new shipment
-claim, and no scope beyond 009-S is performed here.
+history, code, or the already-archived 009-S backlog items. No implementation
+work, no new shipment claim, and no scope beyond 009-S is performed here.
 
 **Revision note (2026-09-06)**: the first version of this artifact contained
 five inaccuracies caught by Copilot review on PR #28 (unsupported

@@ -236,28 +236,52 @@ written and would be unsafe even with a fix:
    so reverting those backlog files now would corrupt current backlog state
    rather than cleanly undo the audio fix.
 
-**Source-only targeted rollback** (the correct procedure): restore only the
-audio implementation files to their pre-fix state at commit `822915c`
-(`3d59b7d`'s first parent — the tip of `main` immediately before this
-shipment merged), leaving all backlog/doc state untouched.
+**Source-only targeted rollback** (the correct procedure): reverse only the
+009-S-introduced changes to the audio implementation files, leaving all
+backlog/doc state — and any later, unrelated edits to these same files —
+untouched.
 
-**Precondition (Copilot finding, 2026-09-06)**: the checkout commands below
-overwrite tracked paths, and repository policy classifies an overwrite
-without a clean-worktree guard or explicit approval as destructive. This
-procedure MUST NOT be run against a dirty worktree and MUST NOT be run
-without explicit operator approval of the specific rollback decision — both
-are enforced as literal steps below, not left implicit in prose:
+**Corrected (Copilot finding, 2026-09-06)**: restoring these files via a raw
+`git checkout 822915c -- <path>` (whole-file snapshot from the pre-fix
+commit) would also erase any committed changes made to them by later,
+unrelated PRs. The Rollback trigger above explicitly includes a regression
+surfacing in *a subsequent PR's* CI run, so a clean worktree alone does not
+make a whole-file restore safe over time — it silently discards whatever
+those subsequent PRs wrote to these paths. The corrected procedure below
+instead extracts only the 009-S hunks for these 4 files
+(`git diff 822915c 3d59b7d -- <paths>`) and reverse-applies that patch
+against the current tree, so later, unrelated edits to the same files
+survive, and a genuine overlap is surfaced as an explicit `git apply`
+conflict rather than a silent overwrite.
+
+**Precondition (Copilot finding, 2026-09-06)**: the patch-apply commands
+below modify tracked paths, and repository policy classifies an unreviewed
+modification without a clean-worktree guard or explicit approval as
+destructive. This procedure MUST NOT be run against a dirty worktree and
+MUST NOT be run without explicit operator approval of the specific rollback
+decision — both are enforced as literal steps below, not left implicit in
+prose:
 
 ```bash
 git status --short                    # MUST print nothing; if it prints
                                         # anything, STOP and resolve/stash the
                                         # uncommitted changes first -- do not
                                         # overwrite a dirty worktree
-# STOP: do not run the checkout commands below without explicit operator
-# approval of *this* rollback decision. This is a destructive overwrite of
+# STOP: do not run the patch commands below without explicit operator
+# approval of *this* rollback decision. This is a destructive change to
 # internal/audio/* and is never auto-executable by an agent.
-git checkout 822915c -- internal/audio/mp3.go internal/audio/mp3_test.go
-git checkout 822915c -- internal/audio/race.go internal/audio/norace.go
+# Extract only the 009-S hunks for these 4 files -- not a whole-file
+# snapshot, and not the full 3d59b7d merge diff (which also touches
+# unrelated backlog/doc paths, see the "does not work as written" note
+# above):
+git diff 822915c 3d59b7d -- internal/audio/mp3.go internal/audio/mp3_test.go internal/audio/race.go internal/audio/norace.go > /tmp/009-S-audio-rollback.patch
+# Dry-run the reverse-apply first. A non-zero exit means the current files
+# have diverged from the 009-S hunks (e.g. a later PR touched the same
+# lines) -- STOP and resolve the conflict manually. Do NOT force-apply and
+# do NOT fall back to a whole-file `git checkout` of an old commit, which
+# would silently erase any later, unrelated changes to these files.
+git apply -R --check /tmp/009-S-audio-rollback.patch
+git apply -R /tmp/009-S-audio-rollback.patch
 go build ./...
 go vet ./...
 go test ./internal/audio/...          # non-race: actually exercises encoder-output tests

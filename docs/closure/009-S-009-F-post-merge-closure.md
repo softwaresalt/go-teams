@@ -239,9 +239,23 @@ written and would be unsafe even with a fix:
 **Source-only targeted rollback** (the correct procedure): restore only the
 audio implementation files to their pre-fix state at commit `822915c`
 (`3d59b7d`'s first parent — the tip of `main` immediately before this
-shipment merged), leaving all backlog/doc state untouched:
+shipment merged), leaving all backlog/doc state untouched.
+
+**Precondition (Copilot finding, 2026-09-06)**: the checkout commands below
+overwrite tracked paths, and repository policy classifies an overwrite
+without a clean-worktree guard or explicit approval as destructive. This
+procedure MUST NOT be run against a dirty worktree and MUST NOT be run
+without explicit operator approval of the specific rollback decision — both
+are enforced as literal steps below, not left implicit in prose:
 
 ```bash
+git status --short                    # MUST print nothing; if it prints
+                                        # anything, STOP and resolve/stash the
+                                        # uncommitted changes first -- do not
+                                        # overwrite a dirty worktree
+# STOP: do not run the checkout commands below without explicit operator
+# approval of *this* rollback decision. This is a destructive overwrite of
+# internal/audio/* and is never auto-executable by an agent.
 git checkout 822915c -- internal/audio/mp3.go internal/audio/mp3_test.go
 git checkout 822915c -- internal/audio/race.go internal/audio/norace.go
 go build ./...
@@ -303,17 +317,28 @@ reports no deletions.
 underlying disposition — the code has been on `main` since 2026-07-12,
 CI-verified `-race`-clean both before merge and continuously since
 2026-09-04, and now has an accurate, executable rollback procedure. Of the
-three items tracked under Remaining follow-ups below, the live-verification
+four items tracked under Remaining follow-ups below, the live-verification
 follow-up (`CC0A7034`) is intentionally NOT a condition of *this* shipment's
 releasability — it was scoped out of 009-S at plan time and is tracked under
 its own shipment (`010-S`, queued, untouched by this backfill). The other
-two (shine-mp3 upstream fix; `FE245033`) are likewise non-blocking residual
-items, not conditions of this READY disposition.
+three (CI `paths-ignore` tuning, `D3EFD224`; shine-mp3 upstream fix;
+`FE245033`) are likewise non-blocking residual items, not conditions of this
+READY disposition.
 
 ## Remaining follow-ups (not blocking)
 
 - Live end-to-end audio verification against a real Teams meeting — tracked
   under stash `CC0A7034` / shipment `010-S` (queued; out of scope here).
+- **Added (Copilot finding, 2026-09-06)**: CI `pull_request` trigger
+  `paths-ignore` tuning — tracked under stash `D3EFD224` (low priority,
+  parked). Carried forward unchanged from the original 009-S review
+  (`docs/closure/2026-07-11-009-S-review.md:48`) and the compacted memory
+  (`docs/memory/compacted/2026-07-11-009-S-mp3-race-safety-compacted.md`);
+  omitted from this artifact's first revision by oversight, not by
+  disposition change. Not blocking: `required_status_checks=[]` today, so
+  docs/backlog-only PRs merge clean without this fix; only becomes relevant
+  if required checks are re-added (see the stash entry for the full
+  conditional-fix rationale).
 - shine-mp3 `unsafe`/`-race` upstream fix — tracked in
   `docs/compound/build-errors/shine-mp3-race-checkptr.md`.
 - **New (from this backfill's corrections; captured per P-021 C2)**: no test

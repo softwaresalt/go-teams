@@ -43,6 +43,29 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
    incomplete rollback validation, a missed P-021 C2 capture, and PR
    description/memory-checkpoint accuracy (this file). One of the findings
    required a P-021 C2 capture-only stash entry (`FE245033`, see below).
+   **Correction (Copilot finding, 2026-09-06, thread `PRRT_kwDOTStvas6fpoke`,
+   anchored to this file's prior line 39)**: the PR body's Local Review
+   Readiness block stated `Shadow review: not requested`. That was
+   inaccurate — GitHub's Copilot automated review is engine-triggered per
+   push, not manually "requested", and by this point had already completed
+   three review cycles (HEADs `83342f6`, `c4dd319`, `aec923e`), each fully
+   reviewed and its threads resolved before the next commit. The PR body's
+   Shadow review field has been corrected to describe Copilot review as
+   engaged (automated, per-push) with its completion tied to the reviewed
+   HEAD, rather than "not requested".
+7. A 4th Copilot-review fix/reply/resolve round (round 4 overall; extension
+   round 1 of the operator-authorized 3 additional rounds for this recovery
+   continuation) addressed 3 further findings at HEAD `aec923e`: (a) the
+   rollback runbook's checkout commands lacked an explicit clean-worktree
+   check and operator-approval precondition before the destructive restore;
+   (b) the PR body's stale `Shadow review: not requested` claim (corrected
+   in item 6 above); (c) the Remaining follow-ups list omitted active stash
+   entry `D3EFD224` (CI `paths-ignore` tuning, low priority), which was
+   carried forward by the original 009-S review and the compacted memory but
+   dropped from this backfill artifact's first revision by oversight. All
+   three are same-contract-surface corrections to Ship's own authored
+   closure artifact / PR body (P-021 C1 in scope) — no new P-021 capture was
+   required for this round.
 
 ## Explicitly NOT done (scope boundary held)
 
@@ -72,3 +95,11 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
 Awaiting explicit operator merge approval for the closure-backfill PR. Once
 merged, 010-S becomes eligible to be picked up by Ship in a future session
 per the normal Stage → Ship shipment-intake flow (not performed here).
+
+**Recovery continuation (2026-09-06)**: Orchestrator routed a targeted Ship
+continuation, scoped only to PR #28 / this closure remediation, with an
+explicit operator authorization of up to 3 additional Copilot
+review-fix-push-poll rounds (an extension to, not a reset of, the
+already-exhausted 3-round budget from item 6). Round 4 overall / extension
+round 1 is recorded in item 7 above. 010-S remains unclaimed. Still awaiting
+explicit separate operator merge approval — none exists yet.

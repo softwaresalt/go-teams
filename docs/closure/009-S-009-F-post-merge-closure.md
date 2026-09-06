@@ -263,7 +263,7 @@ go vet ./...
 go test ./internal/audio/...          # non-race: actually exercises encoder-output tests
 go test -race ./internal/audio/...    # race: confirms the restored skip guards suppress checkptr
 git add internal/audio/
-git commit -m "revert(audio): restore pre-009-S encoder to <root-cause>, see docs/compound/build-errors/shine-mp3-race-checkptr.md"
+git commit -m "revert(audio): restore pre-009-S encoder (see Rollback trigger above for the observed regression), ref docs/compound/build-errors/shine-mp3-race-checkptr.md"
 ```
 
 **Corrected (Copilot finding, 2026-09-06)**: the restored pre-fix

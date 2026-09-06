@@ -101,11 +101,41 @@ satisfied `compaction_status`/`closure_status` frontmatter contract.
 - Only 009-S's own memory artifact was compacted; other shipments'
   (001-S…008-S) older memory files were left as-is to avoid scope creep.
 
+9. A 6th Copilot-review round (round 6 overall; extension round 3 of 3 —
+   the final operator-authorized additional round) at HEAD `0644f82`
+   surfaced 1 further finding, delivered as a review-body "Suppressed
+   comments" entry (review `5124607493`, no dedicated inline review thread
+   was created — `Comments generated: 0 new`) anchored to
+   `docs/closure/009-S-009-F-post-merge-closure.md:266`: the rollback
+   runbook's copy/pasteable `git commit -m "revert(audio): restore
+   pre-009-S encoder to <root-cause>, ..."` command contained an unresolved
+   `<root-cause>` placeholder, making the documented procedure
+   non-executable as written if copy/pasted literally. Corrected the commit
+   message to reference the already-authored "Rollback trigger" section
+   immediately above (which documents the actual trigger condition: a
+   `-race` checkptr fault or MP3-output regression attributable to the
+   `encoderTailSlack` change) instead of embedding a speculative root-cause
+   placeholder, so the command is genuinely ready-to-run with no
+   fill-in-the-blank text. Same-contract-surface correction to Ship's own
+   authored closure artifact (P-021 C1 in scope); no new P-021 capture
+   required.
+
 ## Next steps
 
 Awaiting explicit operator merge approval for the closure-backfill PR. Once
 merged, 010-S becomes eligible to be picked up by Ship in a future session
 per the normal Stage → Ship shipment-intake flow (not performed here).
+
+**Round 6 / extension round 3 of 3 (2026-09-06)**: this consumed the final
+additional Copilot review-fix-push-poll round of the operator's
+previously-authorized 3-round extension (rounds 4 and 5 — extension rounds
+1 and 2 — are recorded in items 7 and 8 above). Per the operator's explicit
+instruction for this round, if any further Copilot review findings remain
+after this round's push, Ship does not run a further Copilot round;
+instead it invokes the `Adversarial Review` workflow (multi-model
+consensus, remediation, post-remediation re-review) before any further
+Copilot round. 010-S remains unclaimed and untouched. Still awaiting
+explicit separate operator merge approval — none exists yet.
 
 **Recovery continuation (2026-09-06)**: Orchestrator routed a targeted Ship
 continuation, scoped only to PR #28 / this closure remediation, with an

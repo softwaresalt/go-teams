@@ -4,9 +4,9 @@ date: 2026-09-05
 agent: stage
 status: complete
 stash_processed: [CC0A7034]
-stash_deferred: [D3EFD224]
+stash_deferred: [D3EFD224, 87CDB97A]
 feature: 010-F
-tasks: [010.001-T, 010.002-T, 010.003-T, 010.004-T, 010.005-T, 010.006-T]
+tasks: [010.007-T, 010.001-T, 010.002-T, 010.003-T, 010.004-T, 010.005-T, 010.006-T]
 shipment: 010-S
 deliberation: 001-DL
 plan: docs/plans/2026-09-05-teams-live-selector-path-hardening-plan.md
@@ -65,14 +65,17 @@ FSM/caption/audio verification"
 
 | Task | Unit | Domain | Size | Complexity | Depends on |
 |---|---|---|---|---|---|
-| 010.001-T | U1 live-DOM diagnostic (build-tagged probe, Ship-executed) | test-infra/spike | M | medium | — |
+| 010.007-T | U7 integration-harness browser exec-path enabler (test-only) | test-infra | XS | trivial | — (DAG root) |
+| 010.001-T | U1 live-DOM diagnostic (build-tagged probe, Ship-executed) | test-infra/spike | M | medium | U7 |
 | 010.002-T | U2 `/meet/` URL mutation hardening | code (test-first) | S | low | U1 |
 | 010.003-T | U3 pre-join/lobby selectors → green TestMeetingJoin | code (char-first) | M | medium | U1, U2 |
 | 010.004-T | U4 caption selectors → green TestMeetingEnableCaptions | code (char-first) | S | medium | U3 |
-| 010.005-T | U5 audio path → green TestMeetingCaptureAudio | code (char-first) | S | low | U3 |
+| 010.005-T | U5 audio path → green TestMeetingCaptureAudio | code (char-first) | S | medium | U3 |
 | 010.006-T | U6 runbook + closure evidence | docs | S | low | U3, U4, U5 |
 
-DAG: U1 → U2 → U3 → (U4 ∥ U5) → U6. Estimated effort ≈ 6 tasks × ≤2h.
+DAG: U7 → U1 → U2 → U3 → (U4 ∥ U5) → U6. Shipment `010-S` = **8 items**
+(feature `010-F` + 7 tasks); task-size histogram **M:2 / S:4 / XS:1**, 0 unsized.
+Estimated effort ≈ 7 tasks × ≤2h.
 
 ## Degradation note (capability gate)
 
@@ -92,16 +95,21 @@ task's implementation-notes, not from a structured field.
   localStorage/profile paths).
 - Do NOT terminate/alter the manually-launched Edge organizer (CDP 9223);
   teardown targets only the bot's own launched PID (no image-wide kill).
-- Bot uses a separate git-ignored, workspace-contained profile; Chrome-for-Testing
-  must be on PATH (root cause of the first-run `google-chrome` abort).
+- Bot uses a separate git-ignored, workspace-contained profile; the live harness
+  is pointed at the browser executable via `TEAMS_BROWSER_PATH` (primary setup),
+  with prepending Chrome-for-Testing to PATH only a historical fallback for the
+  first-run `google-chrome` abort.
 - Parent evidence docs (circuit-break + blocked-closure) must not be overwritten.
 - Bot-side login/MFA is an explicit, never-automated U1/U6 operator checkpoint.
 
 ## Handoff
 
 - **Shipment ID (handoff token to Ship): `010-S`** (status: queued).
-- Ship claims `010-S`, executes U1 first (live diagnostic feeds U2/U3), then the
-  DAG. U1 is a Ship-pipeline diagnostic, not a Stage spike.
+- Ship claims `010-S`, executes **U7 first** (`010.007-T` — the harness
+  exec-path enabler and DAG root that makes the live harness launchable on the
+  Edge-only host), **then U1** (`010.001-T` — live diagnostic feeds U2/U3), then
+  the remaining DAG. U1 is a Ship-pipeline diagnostic, not a Stage spike; U7 is a
+  Ship-executed test-infra enabler. Dependency edge: `010.001-T` → `010.007-T`.
 
 ## Addendum — post-gate live selector evidence folded in (2026-09-05)
 

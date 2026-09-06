@@ -36,10 +36,17 @@ The join URL format shifted: current Teams links are
 `ValidateMeetingURL` already accepts the new format (scheme/host only). The
 harness applies `MutateJoinURL` to `TEAMS_MEETING_URL` before navigation.
 
-The failure is either a stale `joinNowSel`, a wrong landing surface produced by
-the legacy URL mutation, an unsupported-UA/`--headless=new` DOM variance, or a
-combination. Root cause is unknown and must be characterized from live DOM
-before any selector edits.
+**Root cause — CONFIRMED (2026-09-05 live evidence).** The failure is the
+`/dl/launcher/launcher.html` launcher interstitial: on a fresh guest profile the
+`/meet/<id>?p=<token>` link redirects to the launcher, whose first control is
+`button[data-tid="joinOnWeb"]`, but `chromeMeeting.Join` waits on `joinNowSel`
+immediately after `Navigate` and never clicks `joinOnWeb`, so it times out on the
+launcher before pre-join renders (the observed `pre-join not visible: context
+deadline exceeded`). Identity is confirmed **guest**. The launcher fix (U3) is no
+longer hypothetical. What remains genuinely open is narrower and diagnostic-only:
+whether `MutateJoinURL`'s legacy params change the `/meet/` landing versus the raw
+URL (the U2 input) and which caption-activation variant (guest-direct vs.
+full-nested) the bot lands in per run — these are U1's residual scope.
 
 **Hard constraints threaded into every unit:**
 
@@ -55,7 +62,8 @@ before any selector edits.
 
 | Source requirement (CC0A7034 / deliberation) | Implementation unit(s) |
 |---|---|
-| Identify why the live pre-join wait times out before touching selectors | U1 |
+| Make the live harness launchable on Edge-only / non-PATH hosts (test-infra enabler; 2026-09-05 live evidence) | U7 (DAG root; U1 dep) |
+| Launcher root cause CONFIRMED (fresh-guest `/meet/` link redirects to `/dl/launcher/launcher.html`; a `joinOnWeb` click is required before pre-join). Assess the remaining open questions — `/meet/` URL-mutation behavior and caption-activation variants | U1 (assess); U3 implements the confirmed launcher fix |
 | Handle the current `/meet/<id>?p=<token>` join-path format correctly | U2 |
 | Make the pre-join/lobby FSM pass live → green `TestMeetingJoin` | U3 (dep U1, U2) |
 | Make live captions activate/stream → green `TestMeetingEnableCaptions` | U4 (dep U3) |
@@ -118,7 +126,7 @@ question (U2 input) and confirming the caption-path variant per run.
 | Display-name input | `input[data-tid="prejoin-display-name-input"]` | same | ✅ valid (refresh provenance) | U3 |
 | Join-now button | `[data-tid="prejoin-join-button"]` | same | ✅ valid | U3 |
 | Mic toggle *selector* | `[data-tid="toggle-mute"]` | `input[type=checkbox][role=switch][data-tid="toggle-mute"][data-cid="toggle-mute-true"]` | ✅ selector valid | U3 |
-| Mic toggle *state read* | `muteRequired(ariaChecked)` reads `aria-checked` | switch exposes **no `aria-checked`**; DOM property `checked=true` when mic is ON | **STALE — read `checked` property (or `data-cid`/title)** | U3 |
+| Mic toggle *state read* | `muteRequired(ariaChecked)` reads `aria-checked` | switch exposes **no `aria-checked`**; DOM property `checked=true` when mic is ON | **STALE — read the `checked` DOM property ONLY (no `aria-checked`; do NOT use `data-cid`/title as the state source)** | U3 |
 | Lobby text | `"Someone will let you in shortly"` | same (worked live) | ✅ valid | U3 |
 | Admission/hangup | `meetingToolbarSel = [data-tid="hangup-button"]` | guest hangup is `#hangup-button` (**no data-tid**); organizer full client also has `#hangup-button` (its data-tid is `hangup-main-btn`) | **STALE — use `#hangup-button`** | U3 |
 
@@ -210,6 +218,15 @@ trick with an explicit, version-controlled harness executable-path option.
     evidence and record which cells were skipped.
   Each matrix cell runs **serially** with a **clean/isolated profile dir** so
   cells cannot contaminate one another; profiles remain secret material.
+* **Dedicated opt-in (required — must NOT launch on routine integration runs):**
+  the diagnostic matrix is expensive (raw vs. mutated URL × headed vs. headless ×
+  tri-state UA × five-param ablation), so it MUST sit behind its **own** opt-in
+  *beyond* the `integration` tag — a second build tag (e.g.
+  `//go:build integration && diag`) or a dedicated env gate (e.g.
+  `GO_TEAMS_DIAGNOSTIC_MATRIX=1`). A routine `go test -tags integration` run
+  compiles the probe but does **not** execute the matrix; the matrix runs only
+  when the dedicated opt-in is set. Record which mechanism was chosen in the
+  findings note.
 * **What:** For each cell, record which landing surface renders (guest pre-join
   SPA / Microsoft sign-in / MFA / lobby / "unsupported browser" interstitial) and
   the current values of the pre-join, mute, display-name, admitted-toolbar, and
@@ -310,7 +327,8 @@ trick with an explicit, version-controlled harness executable-path option.
      `chromedp.WaitVisible(joinNowSel)`, add a step that detects the
      `/dl/launcher/launcher.html` interstitial and clicks the "join on web"
      control before waiting for pre-join. Add a new selector const
-     `joinOnWebSel = ` `` `button[data-tid="joinOnWeb"]` `` in `prejoin.go`. Probe
+     `joinOnWebSel` (Go raw-string value `` `button[data-tid="joinOnWeb"]` ``) in
+     `prejoin.go`. Probe
      for it first (bounded `WaitVisible`/`existsJS`, matching the `enforceMute`
      idiom) so a run that lands directly on pre-join (no launcher) still proceeds.
      This resolves the observed `pre-join not visible: context deadline exceeded`.
@@ -325,10 +343,11 @@ trick with an explicit, version-controlled harness executable-path option.
      `checked=true` when the mic is ON. `enforceMute` currently reads
      `aria-checked` via `chromedp.AttributeValue` and `muteRequired(ariaChecked
      string)` compares to `"true"`, so it never mutes. Change the state source to
-     read the boolean `checked` property (e.g. `chromedp.Evaluate` of
-     `document.querySelector('[data-tid="toggle-mute"]').checked`, or the stable
-     `data-cid="toggle-mute-true"`/title) and rewrite `muteRequired` to take that
-     boolean. **Preserve test-first coverage:** `muteRequired` stays a pure,
+     read **only** the boolean `checked` property (e.g. `chromedp.Evaluate` of
+     `document.querySelector('[data-tid="toggle-mute"]').checked`); do **not**
+     read `aria-checked`, and do **not** use `data-cid`/title as the mic-state
+     source. Rewrite `muteRequired` to take that boolean. **Preserve test-first
+     coverage:** `muteRequired` stays a pure,
      unit-tested predicate (assert mute-required when ON, not when OFF).
 * **Already-valid selectors (do NOT churn — refresh provenance only):**
   `joinNowSel = [data-tid="prejoin-join-button"]`,
@@ -393,7 +412,9 @@ trick with an explicit, version-controlled harness executable-path option.
     `closed-captions-button-on` in full client, absent in guest — so bind to the
     **id**, not the data-tid).
   * `captionWrapperSel`: `[data-tid="closed-caption-renderer-wrapper"]` — **valid,
-    keep** (and it stays duplicated as the JS literal inside `captionObserverJS`).
+    keep** (prefer interpolating this shared const into `captionObserverJS` rather
+    than duplicating it as a raw JS literal — see the single-source-of-truth
+    fold-in below).
 * **Two-variant activation (no broad silent fallback):** rewrite the fixed
   3-`Click` chain in `activateCaptions` to: click `#callingButtons-showMoreBtn`;
   **if** `#LanguageSpeechMenuControl-id` becomes visible (full client) click it,
@@ -408,6 +429,15 @@ trick with an explicit, version-controlled harness executable-path option.
   drift):** keep `captionWrapperSel` and the wrapper literal in sync, and verify
   the three inner literals in the same edit. (A silent miss makes the observer
   IIFE return `false` and `EnableCaptions` blocks with no error.)
+* **Prefer shared selector constants over duplicated raw JS literals (fold-in):**
+  rather than hand-duplicating `captionWrapperSel` (and any other selector already
+  defined as a Go const) as a raw literal inside `captionObserverJS`,
+  **interpolate the shared Go const into the JS** (e.g. build the observer script
+  with `fmt.Sprintf`/string concatenation from `captionWrapperSel`) so the Go
+  const is the single source of truth and const-vs-literal drift becomes
+  structurally impossible. Where a name genuinely lives only in JS (the inner
+  `closed-caption-text`, `author`, `.fui-ChatMessageCompact`), the selector-sync
+  checklist above remains the backstop; verify those in the same edit.
 * **Robustness (fold-in):** wrap each `activateCaptions` menu step in a **bounded
   per-step `chromedp.WaitVisible` with a short timeout** (rather than the current
   blocking `Click` that retries until the full 2-minute ctx expiry, or a single
@@ -449,8 +479,20 @@ trick with an explicit, version-controlled harness executable-path option.
   non-zero PCM forwarded over the `sendAudioToGo` binding and non-zero MP3 bytes
   written. U5's exit therefore explicitly separates "prereqs present" (already
   confirmed — not a pass by itself) from "stream verified" (the green
-  `TestMeetingCaptureAudio` with non-zero MP3 bytes and a clean cancel). Do not
-  downgrade prereq presence into a pass.
+  `TestMeetingCaptureAudio` with a **stimulus-verified** capture — not merely
+  non-zero MP3 bytes — and a clean cancel). Do not downgrade prereq presence into
+  a pass.
+* **Fake-media distinction (critical).** `allocator.go` sets
+  `use-fake-device-for-media-stream` and `use-fake-ui-for-media-stream`, so Chrome
+  can supply a **synthetic** audio device — a naive non-zero-MP3-bytes check can
+  pass on fake media **without ever capturing real meeting/tab audio**. The
+  verification MUST distinguish fake-media capture from real meeting/tab audio:
+  assert the captured signal matches a **known live stimulus** (a deterministic
+  tone or spoken phrase injected into the meeting/tab) via a signal check
+  (expected dominant frequency / energy in the known band, or non-silence
+  correlated to the stimulus window), or exercise the capture assertion against
+  the real tab source rather than the fake device. Non-zero MP3 bytes alone are
+  NOT proof of real audio capture.
 * **Live precondition:** meeting audio must be present during capture (a speaker
   or shared audio) for non-zero MP3 bytes. Record as a U6 precondition.
 * **Bounded-cycle stop condition (2-hour rule):** if the capture path is not green
@@ -458,9 +500,14 @@ trick with an explicit, version-controlled harness executable-path option.
   rather than exceeding the 2-hour budget.
 * **Files:** `internal/browser/audio.go` (+ `allocator.go` only if the
   capture-source match string must change) (<3 files).
-* **Verify:** `TestMeetingCaptureAudio` passes green (non-zero MP3 bytes; clean
-  return after cancel); run with `-race` where feasible; unit tests green; full
-  gates clean.
+* **Verify:** `TestMeetingCaptureAudio` passes green with a **stimulus-verified**
+  assertion — the captured audio must contain a **known live stimulus** (a
+  deterministic tone or spoken phrase played into the meeting/tab), checked by a
+  signal test (expected dominant frequency / energy in the known band, or
+  non-silence correlated to the stimulus window), **not merely non-zero MP3
+  bytes**, and must be distinguishable from Chrome fake-media output; clean return
+  after cancel; run with `-race` where feasible; unit tests green; full gates
+  clean.
 * **Depends on:** U3.
 
 ### U6 — Live-harness reproducibility runbook + closure evidence
@@ -471,8 +518,9 @@ trick with an explicit, version-controlled harness executable-path option.
   **git-ignored, workspace-contained** bot profile — **guest (confirmed
   2026-09-05); an authenticated-identity landing is an operator checkpoint**;
   `TEAMS_MEETING_URL` sourced from the out-of-tree private file — **never
-  committed**), the Chrome-for-Testing-on-PATH requirement (root cause of the
-  first-run `google-chrome` abort), the **join-path launcher note** (a `/meet/`
+  committed**), the **`TEAMS_BROWSER_PATH` primary harness setup** (point the
+  harness at the browser executable via U7; prepending Chrome-for-Testing to PATH
+  is only a historical fallback for the first-run `google-chrome` abort), the **join-path launcher note** (a `/meet/`
   link on a fresh guest profile redirects to `/dl/launcher/launcher.html` and the
   harness must click `joinOnWeb` before pre-join), the organizer/lobby-admission
   and bot-side login/MFA human checkpoints, the live speech/audio stimulus
@@ -505,9 +553,11 @@ trick with an explicit, version-controlled harness executable-path option.
   `amend-breaks-shipment-gate.md` (no `git commit --amend`/rebase after items are
   marked done) and `copilot-rereview-timing.md` (don't merge on a false-clean
   thread count; wait for Copilot review at current HEAD).
-* **Compound-refresh follow-up:** after U6, promote the DevToolsActivePort +
-  Chrome-for-Testing-on-PATH root cause into `docs/compound/` so future compound
-  searches surface it (today it lives only in `docs/memory/`).
+* **Compound-refresh follow-up:** after U6, promote BOTH distinct root causes —
+  the agent-browser managed-launch DevToolsActivePort failure and the chromedp
+  harness `google-chrome` PATH-discovery failure (remedied by `TEAMS_BROWSER_PATH`)
+  — into `docs/compound/` as separate learnings so future compound
+  searches surface them (today they live only in `docs/memory/`).
 * **Files:** `docs/closure/browser-automation/` (net-new runbook + closure entry;
   do not overwrite the parent blocked-closure record) + a comment-only docstring
   fix in `internal/browser/meeting_integration_test.go` (<3 files; docs/comment
@@ -556,6 +606,12 @@ trick with an explicit, version-controlled harness executable-path option.
   `google-chrome not found` abort); with the var unset, behavior is byte-identical
   to today. Because this is `integration`-tagged, the default `go test ./...` gate
   is unaffected; full gates (`go vet`, `golangci-lint`, `gofmt -l`) stay clean.
+  Because the helper only builds under the `integration` tag, a plain
+  build / `go vet ./...` will **not** catch a compile break in it — U7 MUST be
+  compile-verified **under the tag**: e.g. `go vet -tags integration
+  ./internal/browser/...` and a tagged no-run compile such as `go test -tags
+  integration -run '^$' ./internal/browser/...` (forces the tagged file to
+  compile without a live meeting).
 * **Depends on:** none (root enabler).
 
 ## Dependency Graph
@@ -579,9 +635,13 @@ U7 ──▶ U1 ──▶ U2 ──▶ U3 ──┬──▶ U4 ──┐
 
 ## Decisions and Rationale
 
-* **Diagnostic-first (U1) before selector edits** — the live-DOM root cause is
-  unknown; editing selectors blind risks thrash and blows the 2-hour budget.
-  U1 collapses the uncertainty so U3/U4/U5 are apply-and-verify.
+* **Diagnostic-first (U1) before selector edits** — the launcher root cause is
+  already CONFIRMED from 2026-09-05 live evidence (a fresh-guest `/meet/` link
+  redirects to `/dl/launcher/launcher.html`, requiring a `joinOnWeb` click before
+  pre-join), so U1 does NOT re-diagnose it and U3 implements that confirmed
+  launcher fix. U1 instead assesses the remaining open questions — `/meet/`
+  URL-mutation behavior and caption-activation variants (guest-direct vs
+  full-nested) — so U3/U4/U5 are apply-and-verify.
 * **URL hardening (U2) is its own unit** — the `/meet/` vs `/l/meetup-join`
   divergence is a distinct code/domain concern with unit-test coverage,
   separable from DOM selector work.
@@ -617,17 +677,18 @@ U7 ──▶ U1 ──▶ U2 ──▶ U3 ──┬──▶ U4 ──┐
   the separate empty profile and launches its own browser.
 * **Live-run flakiness/timeouts** — the 2-minute join / 1-minute audio harness
   budgets may need tuning (U3), a bounded change only if U1 shows it is needed.
-* **Environment prerequisite** — Chrome-for-Testing must be on PATH; without it
-  the harness aborts before any DOM work with `google-chrome not found` (captured
-  in U6). **U7** removes the ad-hoc PATH prepend by adding an explicit
-  `TEAMS_BROWSER_PATH` harness option so an Edge-only host can run without the
-  trick; the identical **production-runtime** gap (`runner.go`/`meeting.go` share
-  the same allocator call) is out of 010-F scope and is filed as a separate
-  follow-up.
+* **Environment prerequisite** — the harness is pointed at the browser executable
+  via the `TEAMS_BROWSER_PATH` option (**U7**) as the PRIMARY setup; prepending
+  Chrome-for-Testing to PATH is only a historical fallback. Without either, the
+  harness aborts before any DOM work with `google-chrome not found` (captured
+  in U6). **U7** provides the explicit `TEAMS_BROWSER_PATH` harness option so an
+  Edge-only host can run without the PATH trick; the identical **production-runtime**
+  gap (`runner.go`/`meeting.go` share the same allocator call) is out of 010-F
+  scope and is filed as a separate follow-up (deferred stash 87CDB97A).
 
 ## Constitution Check
 
-Principle-by-principle mapping of U1–U6 against the workspace constitution and
+Principle-by-principle mapping of U1–U7 against the workspace constitution and
 workflow policies:
 
 * **Test-first / red-green (Principle II, P-002/P-004):** U2 is test-first
@@ -638,40 +699,52 @@ workflow policies:
   `-tags integration` run (the observed `pre-join not visible` failure), not the
   default gate. The simpler alternative (pure unit oracle for DOM selectors) was
   rejected because selector correctness is only observable against live Teams
-  DOM. Each code unit still runs the full default gate for regressions.
+  DOM. Each code unit still runs the full default gate for regressions. **U7** is
+  a **test-only pure superset** (an unset `TEAMS_BROWSER_PATH` yields
+  byte-identical current behavior), so it needs no red phase of its own; it is
+  compile-verified under the `integration` tag (Principle I gate).
 * **Quality gates (Principle I):** every code unit's Verify names
   `go vet ./...`, `golangci-lint run`, `gofmt -l .`, and `go test`.
 * **CLI/workspace containment (Principle IV):** `TEAMS_PROFILE_DIR` is asserted
   to resolve to a git-ignored path inside the workspace (U1 precheck, U6
   runbook).
 * **Decomposition integrity (P-003):** source → deliberation `001-DL` → this plan
-  → feature → tasks; acyclic DAG; every unit has a verifiable exit and ≥1
-  acceptance criterion.
+  → feature → tasks; acyclic DAG (U7 is the root enabler; U1–U6 depend
+  transitively on it); every unit has a verifiable exit and ≥1 acceptance
+  criterion.
 * **Hardening (P-006):** `Requires plan hardening: yes`; `## Plan Hardening`
   present with strict-safety ProposedAction/ActionRisk classification.
 * **Role boundary (P-010):** U1 is explicitly a Ship-pipeline diagnostic (not a
   Stage spike). Stage produces only planning/decomposition artifacts; Ship runs
-  the harness and edits source.
+  the harness and edits source. U7 is likewise a **Ship-executed test-infra
+  enabler** (not a Stage spike); Stage only planned and sequenced it.
 * **Dependency hygiene / width isolation (Principle VI):** no new dependencies;
   one skill domain per unit. **Width-isolation note:** U1 is test-infra +
   redacted note (single diagnostic domain); U3 keeps production selector edits
   separate from any test-infra budget-knob change via the micro-split option; U6
-  is docs/comment-only (runbook + a comment-only docstring fix).
-* **Simplicity / YAGNI (Principle V):** no speculative abstraction — U2 changes
+  is docs/comment-only (runbook + a comment-only docstring fix); **U7 is
+  test-infra only** — deliberately NOT folded into the production-Go units
+  U3/U4/U5, preserving width isolation.
+* **Simplicity / YAGNI (scope value — not a numbered constitution principle):** no speculative abstraction — U2 changes
   only the `/meet/` branch and leaves the legacy path byte-identical; U1's
-  diagnostic probe is build-tagged scaffolding that is not shipped as production
-  behavior; CDP-attach is explicitly deferred rather than built.
-* **Observability / evidence (Principle VIII):** every unit emits a verifiable
+  diagnostic probe is build-tagged scaffolding (behind a dedicated opt-in) that is
+  not shipped as production behavior; U7 is the **narrowest test-only form** — the
+  wider production `Options.ExecPath` portability change is explicitly **deferred
+  to a separate feature** (stash `87CDB97A`), not built here; CDP-attach is
+  explicitly deferred rather than built.
+* **Structured Observability / evidence (Principle V):** every unit emits a verifiable
   artifact — U1 a dated redacted findings note, U2–U5 green named tests, U6 a
   reproducible runbook + closure entry recording the three passing flows and any
   residual blocked flow.
-* **Bounded effort / 2-hour rule (Principle XI):** U3/U4/U5 each carry an explicit
+* **Bounded effort / 2-hour rule (Development Workflow > Task Granularity):** U3/U4/U5 each carry an explicit
   bounded-cycle stop condition; oversize discoveries are filed as follow-up tasks
   rather than expanding a unit past budget.
 * **Safety (Principle VII, strict-safety):** destructive/broad process kills
   forbidden; live-auth run classified `high`; approval/checkpoint path recorded.
 * **Secrets (Principle III):** private URL, tokens, cookies, and profiles are
-  secret material; redaction and synthetic-fixture rules bind U1/U2/U6.
+  secret material; redaction and synthetic-fixture rules bind U1/U2/U6, and
+  `TEAMS_BROWSER_PATH` (U7) is bound by Protected Invariant 5 — its value is never
+  echoed or committed into redacted `docs/` evidence.
 * **Artifacts (Principle IX):** markdown + frontmatter; parent-owned evidence
   protected from overwrite.
 
@@ -702,7 +775,10 @@ workflow policies:
   * U2 — unit tests over `/meet/` URL mutation (deterministic, headless-safe).
   * U3 — live `TestMeetingJoin` green (bot admitted to the meeting).
   * U4 — live `TestMeetingEnableCaptions` green (finalized caption delivered).
-  * U5 — live `TestMeetingCaptureAudio` green (non-zero MP3, clean cancel).
+  * U5 — live `TestMeetingCaptureAudio` green: the captured MP3 contains the
+    KNOWN live audio stimulus (signal correlated to the stimulus window),
+    distinguishing real meeting/tab audio from Chrome fake-media, with a clean
+    cancel. Non-zero MP3 bytes alone are NOT a sufficient pass.
 * **Operational closure:** U6 runbook + browser-verification closure entry
   recording routes, headed/headless mode, human checkpoints, and per-flow
   verdicts. Blocked/partial flows (if any remain) become explicit follow-up
@@ -757,13 +833,17 @@ capacity-slack — do not re-break), and `amend-breaks-shipment-gate.md` /
 
 ### Verification Depth (environment prechecks + blocked-path handling)
 
-* **Prechecks before any live run:** confirm Chrome-for-Testing is on PATH
-  (root cause of the first-run `google-chrome` abort); confirm the Edge
+* **Prechecks before any live run:** confirm `TEAMS_BROWSER_PATH` is set to the
+  browser executable as the primary harness setup (prepending Chrome-for-Testing
+  to PATH is only a historical fallback for the first-run `google-chrome` abort);
+  confirm the Edge
   organizer/meeting is live and caption controls are visible; confirm
   `TEAMS_PROFILE_DIR` points to the separate empty bot profile and
   `TEAMS_MEETING_URL` resolves from the out-of-tree file.
-* **Target scenarios:** join admitted; finalized caption delivered; non-zero MP3
-  captured with clean cancel.
+* **Target scenarios:** join admitted; finalized caption delivered; captured MP3
+  contains the KNOWN live audio stimulus (signal correlated to the stimulus
+  window, real meeting/tab audio distinguished from Chrome fake-media) with a
+  clean cancel — non-zero MP3 bytes alone are NOT a sufficient pass.
 * **Blocked-path handling:** if server/meeting availability cannot be
   established, record `BLOCKED` validator evidence naming the exact missing
   prerequisite rather than downgrading to a false pass; if the bot waits in
@@ -910,8 +990,10 @@ cycle before harvest.
   set via branch logic or a separate const set.
 * U2 test matrix: add `/meet/<id>` without `p` and confirm legacy branch still
   sets `type=meetup-join`.
-* After U6, compound-refresh the DevToolsActivePort + Chrome-for-Testing-on-PATH
-  root cause into `docs/compound/`.
+* After U6, compound-refresh BOTH distinct root causes — the agent-browser
+  managed-launch DevToolsActivePort failure and the chromedp harness
+  `google-chrome` PATH-discovery failure (remedied by `TEAMS_BROWSER_PATH`) —
+  into `docs/compound/`.
 
 **Disposition:** revise the plan (cycle 1) to resolve all P1 findings and fold
 in the P2/P3 items, then re-run the review gate.
@@ -1122,3 +1204,77 @@ U1 (dependency edge `010.001-T` → `010.007-T`). The production-runtime
 portability gap is deferred to a new stash entry.
 
 <!-- plan-review-attempt: 3 (post-gate U7 scope addition, scope-audited ADVISORY, no full re-gate) -->
+
+---
+
+### Residual Review Items (non-blocking P2/P3 — intentionally unresolved)
+
+decision: ADVISORY (unchanged). These are recorded as explicit residual-risk
+notes per P-021 so their non-resolution is a **documented, deliberate** decision,
+not an oversight. None blocks shipment `010-S`; each is either out of the
+`010-F` selector/path-hardening + verification contract surface or a pre-existing
+condition not introduced by this work. **No implementation is performed here.**
+
+* **R1 — Production Edge-only / non-PATH host browser-path portability (deferred,
+  captured).** `ChromeRunner.run` (`internal/browser/runner.go`) and
+  `NewLiveMeeting` (`internal/browser/meeting.go`) build the chromedp allocator
+  with no exec-path option, so the deployed bot aborts on hosts without a
+  Chrome/Chromium binary on `PATH` — the runtime twin of the harness gap U7
+  fixes for tests only. **Disposition:** out of `010-F` scope (runtime deployment
+  portability is a distinct feature); captured as a full P-021 C2 DEFERRED SCOPE
+  EXPANSION in stash `87CDB97A` (`requires deliberation: YES`). Non-blocking: U7
+  unblocks live verification without it. Signature note: the production abort is
+  the same chromedp PATH-discovery signature (`exec: "google-chrome"… not found in
+  %PATH%`), **distinct** from the managed agent-browser `DevToolsActivePort`
+  launch failure — the two must not be conflated.
+* **R2 — `--no-sandbox` allocator flag (pre-existing).** The allocator disables
+  the Chrome sandbox. **Disposition:** pre-existing hardening concern, not
+  introduced or widened by this feature and outside the selector/path-hardening
+  contract surface; left intentionally unresolved. Not captured as a new deferred
+  entry (not directly caused by this change; revisit under a dedicated
+  browser-hardening effort).
+* **R3 — Runner/error URL logging (pre-existing; secret-adjacent).** Existing
+  logging in the runner/error paths could surface a join URL/token if invoked with
+  a live URL. **Disposition:** out of scope for `010-F` (no logging code changes
+  here); this plan's redaction rules already forbid committing any live URL/token
+  into artifacts, and U1/U6 scrub `t.Log`/chromedp error output. Flagged as a
+  residual **secret-hygiene** risk for a future logging-redaction pass; not
+  implemented in this shipment.
+* **R4 — Navigation host allowlist (pre-existing).** No allowlist constrains the
+  URLs the automation will navigate. **Disposition:** pre-existing; out of the
+  selector/path-hardening contract surface; intentionally unresolved. Not captured
+  as a new deferred entry.
+* **R5 — `.env.local` handling (pre-existing).** Reviewer-noted local-env file
+  handling. **Disposition:** pre-existing and out of scope; not acted on and not
+  captured as a deferred entry (not directly relevant to the selector/path work
+  under P-021 C1).
+
+Rationale for not opening new deferred entries beyond `87CDB97A`: under P-021 C1
+only findings on the **authorized contract surface** are in scope, and only
+**directly relevant** unaddressed findings warrant a new deferred capture. R2–R5
+are pre-existing conditions outside this feature's surface; R1 is directly
+relevant and is the one item captured (`87CDB97A`).
+
+### Post-gate local-review remediation (2026-09-06)
+
+decision: ADVISORY (unchanged — a doc/backlog/plan-artifact remediation pass; no
+source edits, no re-gate). A local review of branch `chore/stage-010-S` surfaced
+precision/consistency findings against the planning and backlog artifacts (not
+against source). All corrections were applied to **artifacts only** (plan,
+backlog items, shipment manifest, memory/closure records, stash) with **no
+production/test source change, no build, no shipment claim, and no PR action**
+(P-010 boundary preserved). Notable changes: Problem Frame marks the launcher
+root cause **confirmed**; Requirements Trace and Constitution Check now cover
+**U1–U7** with corrected principle citations; the malformed `joinOnWebSel` inline
+code is fixed; U1 is narrowed to the still-open URL-mutation/caption-variant
+diagnostics **behind a dedicated opt-in** so routine `-tags integration` runs do
+not launch the matrix; U7 requires **tagged compile verification**; U4 prefers a
+**single shared selector const interpolated into the JS** over duplicated
+literals; U5 acceptance now requires a **stimulus-verified** capture that
+distinguishes Chrome fake-media from real meeting/tab audio; and the mic-state
+read is constrained to the boolean **`checked` property only** (no `aria-checked`,
+no `data-cid`/title as state). Redaction rules unchanged and re-verified: no live
+URL, `p=` token, account/UPN, calendar, cookie, or profile/session-state path
+appears in any artifact. The ADVISORY gate verdict stands.
+
+<!-- plan-review-attempt: 3 (local-review remediation of artifacts only, no source change, no re-gate) -->

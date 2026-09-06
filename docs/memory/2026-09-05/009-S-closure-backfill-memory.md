@@ -203,3 +203,78 @@ round 1 is recorded in item 7 above; round 5 overall / extension round 2 is
 recorded in item 8 above (2 of the 3 authorized extension rounds consumed).
 010-S remains unclaimed. Still awaiting explicit separate operator merge
 approval — none exists yet.
+
+
+**Second recovery continuation / round 8 (2026-09-06)**: a new Ship session
+was explicitly authorized by the operator for ONE further bounded
+remediation batch over the Copilot findings enumerated at session start
+(this is a fresh authorization, not a continuation of the round 4-7
+extension budget noted above, and not a bypass of the circuit-breaker that
+correctly halted the prior session -- that halt stood until this new,
+separate authorization). Enumerated via full-pagination GraphQL query
+against the live PR #28 state: 1 unresolved inline thread (rollback
+whole-file-restore safety, thread `PRRT_kwDOTStvas6fuG8z`) plus 3
+review-body-only "Suppressed comments" findings from the same review
+(`5126252328`, HEAD `94bef3d`) -- P-020 compaction evidence, and a stale
+local-readiness record (this same finding). All three were classified
+in-scope under P-021 C1 (same closure-artifact contract surface) and fixed:
+
+- Commit `724ed79`: reversed only the 009-S-introduced audio hunks in the
+  rollback procedure (`git diff | git apply -R --check | git apply -R`)
+  instead of a whole-file `git checkout` restore. Inline thread reply
+  posted and thread resolved via GraphQL (`resolveReviewThread`) -- after
+  discovering and working around a **new** instance of the same "stale
+  PENDING review blocks the reply endpoint" issue noted in the prior
+  session (review `5124582766`): `addPullRequestReviewThreadReply`
+  silently attaches to an existing PENDING review rather than publishing
+  immediately, so the reply was invisible until that review was submitted
+  (`COMMENT` event) -- done, and verified visible via REST before
+  resolving the thread. Review `5124582769` (the second stale PENDING
+  review, containing one further orphaned round-4 reply) was left
+  untouched, consistent with the prior session's explicit "out-of-scope
+  cleanup" classification of these objects -- reported to the operator
+  below, not fixed.
+- Commit `016c721`: re-ran a genuine `compact-context` `target: all`
+  assessment (not manually pre-restricted) to answer the Copilot finding
+  that the original P-020 compaction was too narrowly hand-scoped. An
+  initial pass additionally compacted four *other*, already-shipped
+  units' memory (001-S, 007-S, 008-S, 004-S/005-S/006-S) that
+  independently exceeded the age threshold; this was **reverted** in a
+  follow-up commit (see below) after local review (Correctness Reviewer +
+  Constitution Reviewer, report-only) flagged it as inconsistent with this
+  document's own "Scope: 009-S closure only" statement -- P-020 permits but
+  does not require sweeping other units' memory into an unrelated closure.
+  PR-level comment posted (no thread exists for a body-only finding).
+- Local review (Correctness Reviewer + Constitution Reviewer, report-only,
+  over `93cd5e9..016c721`): both independently returned
+  `READY_WITH_FOLLOWUPS`, P0=0. Both raised the same P1 (the
+  four-other-shipment compaction sweep was inconsistent with this
+  artifact's declared "Scope: 009-S closure only"). Correctness Reviewer
+  additionally raised: this checkpoint's own stale "no further remediation"
+  claim (P1, this entry is the fix); a stale "corrects all five" count in
+  the Revision note (P2); a short-form `pre_fix_commit` SHA (P3, fixed);
+  and two advisory-only notes requiring no action (could not execute git
+  commands in a view-only tool context -- already independently verified
+  by Ship; an unrelated pre-existing source-comment claim in
+  `internal/audio/mp3.go`, out of scope -- not part of this diff).
+  Constitution Reviewer additionally raised: the P-020 evidence section
+  overstated policy as requiring the sweep rather than merely permitting
+  it (P2, fixed); an unembedded grep-verification claim (P3, fixed); and a
+  frontmatter key-naming inconsistency in the now-reverted multi-shipment
+  compacted file (P3, moot -- file deleted). Fixed in a follow-up commit:
+  reverted the four-file sweep, rewrote the P-020 compaction evidence
+  section to correctly scope to 009-S's own "one intended candidate" per
+  `workflow-policies.md:657-663`, clarified the "Revision note" to
+  disclose it describes only the first of many correction rounds (not an
+  exhaustive change log), and recorded the full 40-character
+  `pre_fix_commit` SHA in frontmatter (was a 7-char abbreviation). This
+  paragraph is itself that follow-up round's checkpoint entry.
+- **This entry corrects the "No further remediation was performed this
+  session" statement above**: that statement accurately described the
+  *prior* session's end state at the time it was written: it does not
+  apply to this new, separately-authorized session.
+
+Local gates re-run clean at the final HEAD of this round: `go vet ./...`,
+`gofmt -l .`. No production code touched across any commit this round.
+PR #28 remains unmerged; 010-S remains unclaimed and untouched; no merge
+attempted; no admin fallback used.

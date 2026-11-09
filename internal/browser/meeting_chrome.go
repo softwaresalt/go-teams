@@ -122,7 +122,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
 						m.recapEntries = entries
 						slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
-						if summary := captureAISummaryFromTargets(ctx, targets); summary != "" {
+						if summary := captureAISummaryFromTargets(ctx, port); summary != "" {
 							m.aiSummary = summary
 							slog.Info("browser: copied AI summary from meeting recap")
 						}
@@ -279,7 +279,7 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 			if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
 				m.recapEntries = entries
 				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
-				if summary := captureAISummaryFromTargets(ctx, targets); summary != "" {
+				if summary := captureAISummaryFromTargets(ctx, port); summary != "" {
 					m.aiSummary = summary
 					slog.Info("browser: copied AI summary from meeting recap")
 				}

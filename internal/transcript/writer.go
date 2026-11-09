@@ -184,9 +184,9 @@ func formatAISummaryMarkdown(raw string) string {
 			if idx := strings.Index(trimmed, ":"); idx > 0 {
 				title := strings.TrimSpace(trimmed[:idx])
 				body := strings.TrimSpace(trimmed[idx+1:])
-				sb.WriteString(fmt.Sprintf("  * **%s:** %s\n", sanitizeField(title), sanitizeField(body)))
+				sb.WriteString("  * **" + sanitizeField(title) + ":** " + sanitizeField(body) + "\n")
 			} else {
-				sb.WriteString(fmt.Sprintf("  * %s\n", sanitizeField(trimmed)))
+				sb.WriteString("  * " + sanitizeField(trimmed) + "\n")
 			}
 			continue
 		}
@@ -198,7 +198,7 @@ func formatAISummaryMarkdown(raw string) string {
 				!strings.EqualFold(nextTrimmed, "Meeting notes:") &&
 				!strings.EqualFold(nextTrimmed, "Follow-up tasks:") {
 				heading := strings.TrimSuffix(trimmed, ":")
-				sb.WriteString(fmt.Sprintf("* **%s:** %s\n", sanitizeField(heading), sanitizeField(nextTrimmed)))
+				sb.WriteString("* **" + sanitizeField(heading) + ":** " + sanitizeField(nextTrimmed) + "\n")
 				i++
 				continue
 			}

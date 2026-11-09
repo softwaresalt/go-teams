@@ -12,6 +12,7 @@ import (
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/capture"
 	"github.com/softwaresalt/go-teams/internal/config"
+	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
 // deps holds injectable dependencies so commands can be unit-tested with fakes
@@ -41,6 +42,7 @@ func defaultDeps() *deps {
 		newSession: func(c config.Config, meetingURL string) meetingSession {
 			return capture.NewSession(capture.SessionConfig{
 				OutputDir:    c.OutputDir,
+				OutputFile:   c.OutputFile,
 				MeetingURL:   meetingURL,
 				BotName:      c.BotName,
 				CaptionsOnly: !c.CaptureAudio,
@@ -70,13 +72,46 @@ func NewRootCommand() *cobra.Command {
 
 func newRootCommand(d *deps) *cobra.Command {
 	var configPath string
+	var flags captureFlags
 	root := &cobra.Command{
-		Use:          "teams-cli",
-		Short:        "Autonomous Microsoft Teams live-transcription and audio capture",
+		Use:   "teams-cli [meeting-url] [output-markdown-path]",
+		Short: "Autonomous Microsoft Teams live-transcription and meeting recap capture",
+		Long: "teams-cli captures live captions and Meeting Recap transcripts (including " +
+			"the AI Summary) from Microsoft Teams into local Markdown files.\n\n" +
+			"Examples:\n" +
+			"  teams-cli.exe \"https://teams.cloud.microsoft/l/meetingrecap?...\" \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli.exe captions \"https://teams.cloud.microsoft/l/meetingrecap?...\" -o \"C:\\out\\transcript.md\" --headless",
 		SilenceUsage: true,
+		Args:         cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rawURL := flags.meetingURL
+			if len(args) >= 1 {
+				rawURL = args[0]
+			}
+			if rawURL == "" {
+				return cmd.Help()
+			}
+			cfg, err := loadConfigFrom(d, configPath)
+			if err != nil {
+				return err
+			}
+			if !cmd.Flags().Changed("headless") {
+				cfg.Headless = false
+			}
+			applyCaptureFlags(cmd, &cfg, flags)
+			if len(args) >= 2 {
+				applyOutputTarget(&cfg, args[1])
+			}
+			mutated, err := teams.MutateJoinURL(rawURL)
+			if err != nil {
+				return err
+			}
+			return runCapture(cmd.Context(), d, cfg, mutated)
+		},
 	}
 	root.PersistentFlags().StringVar(&configPath, "config", "",
 		"path to the config file (default: user config directory)")
+	bindCaptureFlags(root, &flags)
 	root.AddCommand(
 		newAuthCommand(d, &configPath),
 		newJoinCommand(d, &configPath),
@@ -109,10 +144,34 @@ func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 			}
 			def.Headless = false
 			def.OutputDir = "transcripts"
-			def.ProfileDir = filepath.Join("bin", "profile")
+			def.ProfileDir = resolveDefaultProfileDir(def.ProfileDir)
 			return def, nil
 		}
 		return config.Config{}, err
 	}
 	return cfg, nil
+}
+
+// resolveDefaultProfileDir prefers an existing workspace/executable-relative
+// profile directory (e.g. bin/profile next to teams-cli.exe or in the current
+// working directory) so automation runs work regardless of the caller's working
+// directory.
+func resolveDefaultProfileDir(fallback string) string {
+	candidates := []string{filepath.Join("bin", "profile")}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append([]string{
+			filepath.Join(exeDir, "profile"),
+			filepath.Join(exeDir, "bin", "profile"),
+		}, candidates...)
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			if abs, absErr := filepath.Abs(c); absErr == nil {
+				return abs
+			}
+			return c
+		}
+	}
+	return filepath.Join("bin", "profile")
 }

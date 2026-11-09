@@ -39,6 +39,7 @@ type MeetingSchedule struct {
 // Config is the top-level go-teams CLI configuration.
 type Config struct {
 	OutputDir    string            `yaml:"output_dir"`
+	OutputFile   string            `yaml:"output_file,omitempty"`
 	ProfileDir   string            `yaml:"profile_dir"`
 	BotName      string            `yaml:"bot_name"`
 	Headless     bool              `yaml:"headless"`

@@ -15,8 +15,12 @@ import (
 
 // SessionConfig configures a capture Session.
 type SessionConfig struct {
-	// OutputDir is where the transcript and audio files are written.
+	// OutputDir is where the transcript and audio files are written when
+	// OutputFile is not set.
 	OutputDir string
+	// OutputFile is an optional explicit destination path for the Markdown
+	// transcript file.
+	OutputFile string
 	// MeetingURL is the mutated Teams meeting URL (used for output naming).
 	MeetingURL string
 	// BotName is written into the transcript frontmatter header.
@@ -61,6 +65,7 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 
 	out, err := s.setupOutput(OutputConfig{
 		Dir:          s.cfg.OutputDir,
+		FilePath:     s.cfg.OutputFile,
 		MeetingURL:   s.cfg.MeetingURL,
 		BotName:      s.cfg.BotName,
 		Now:          s.cfg.Now,

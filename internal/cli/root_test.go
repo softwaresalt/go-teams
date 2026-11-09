@@ -195,3 +195,35 @@ func TestCaptionsCommandDefaultsToTeamsHomeWhenNoURLGiven(t *testing.T) {
 	assert.True(t, rec.called)
 	assert.Contains(t, rec.url, "teams.microsoft.com")
 }
+
+func TestCLIOutputFileFlagAndPositionalArg(t *testing.T) {
+	var gotCfg config.Config
+	rec := &captureRecorder{}
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
+		newRunner:  func(config.Config) browser.Runner { return &fakeRunner{} },
+		newMeeting: func(ctx context.Context, cfg config.Config, url string) (browser.Meeting, context.Context, func(), error) {
+			gotCfg = cfg
+			rec.url = url
+			return nil, ctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession { return recorderSession{rec} },
+	}
+
+	// 1. Positional <url> <output.md> on captions command
+	err := runCmd(context.Background(), d, "captions", "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", `C:\out\recap.md`)
+	require.NoError(t, err)
+	assert.Equal(t, `C:\out\recap.md`, gotCfg.OutputFile)
+
+	// 2. -o / --output with a .md file path on join command
+	gotCfg = config.Config{}
+	err = runCmd(context.Background(), d, "join", "https://teams.microsoft.com/meet/123", "-o", `C:\out\call.md`)
+	require.NoError(t, err)
+	assert.Equal(t, `C:\out\call.md`, gotCfg.OutputFile)
+
+	// 3. Direct root command invocation: teams-cli <url> <output.md>
+	gotCfg = config.Config{}
+	err = runCmd(context.Background(), d, "https://teams.cloud.microsoft/l/meetingrecap?threadId=2", `C:\out\direct.md`)
+	require.NoError(t, err)
+	assert.Equal(t, `C:\out\direct.md`, gotCfg.OutputFile)
+}

@@ -33,18 +33,18 @@ func TestParseRecapTimestamp(t *testing.T) {
 func TestParseRecapItemsJSON(t *testing.T) {
 	raw := `{
 		"entries": [
-			{"speaker": "John Seitzinger", "timestamp": "PT0M3S", "text": "", "type": "StartEvent"},
-			{"speaker": "John Seitzinger", "timestamp": "PT0M19S", "text": "Good morning.", "type": "Text"},
-			{"speaker": "Derek Williams", "timestamp": "PT0M20S", "text": "Hello there.", "type": "Text"}
+			{"speaker": "Presenter A", "timestamp": "PT0M3S", "text": "", "type": "StartEvent"},
+			{"speaker": "Presenter A", "timestamp": "PT0M19S", "text": "Good morning.", "type": "Text"},
+			{"speaker": "Presenter B", "timestamp": "PT0M20S", "text": "Hello there.", "type": "Text"}
 		]
 	}`
 	entries, err := parseRecapEntriesPayload(raw)
 	require.NoError(t, err)
 	require.Len(t, entries, 2, "StartEvent with empty text should be filtered out")
-	assert.Equal(t, "John Seitzinger", entries[0].Speaker)
+	assert.Equal(t, "Presenter A", entries[0].Speaker)
 	assert.Equal(t, "00:00:19", entries[0].Offset)
 	assert.Equal(t, "Good morning.", entries[0].Text)
-	assert.Equal(t, "Derek Williams", entries[1].Speaker)
+	assert.Equal(t, "Presenter B", entries[1].Speaker)
 	assert.Equal(t, "00:00:20", entries[1].Offset)
 	assert.Equal(t, "Hello there.", entries[1].Text)
 }

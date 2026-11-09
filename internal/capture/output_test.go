@@ -183,3 +183,40 @@ func TestSetupOutputCaptionsOnlyCreatesMarkdownOnly(t *testing.T) {
 		t.Fatalf("expected only one .md file in output dir, got %v", entries)
 	}
 }
+
+func TestSetupOutputExplicitFilePathCreatesAndOverwritesMarkdownFile(t *testing.T) {
+	dir := t.TempDir()
+	targetFile := filepath.Join(dir, "nested", "custom-transcript.md")
+
+	out1, err := setupOutput(OutputConfig{
+		FilePath:     targetFile,
+		MeetingURL:   "https://teams.microsoft.com/meet/999888777?p=secret",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("first setupOutput with FilePath: %v", err)
+	}
+	if out1.TranscriptPath != targetFile {
+		t.Fatalf("TranscriptPath = %q, want %q", out1.TranscriptPath, targetFile)
+	}
+	if err := out1.Close(); err != nil {
+		t.Fatalf("close first output: %v", err)
+	}
+
+	// Second run to the same explicit FilePath (automation re-run) must succeed.
+	out2, err := setupOutput(OutputConfig{
+		FilePath:     targetFile,
+		MeetingURL:   "https://teams.microsoft.com/meet/999888777?p=secret",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("second setupOutput with FilePath: %v", err)
+	}
+	if err := out2.Close(); err != nil {
+		t.Fatalf("close second output: %v", err)
+	}
+}

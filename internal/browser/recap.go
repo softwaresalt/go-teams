@@ -103,19 +103,36 @@ const copyAISummaryJS = `(async () => {
 	return copiedText;
 })()`
 
-func captureAISummaryFromTargets(ctx context.Context, targets []cdpTargetInfo) string {
-	for _, t := range targets {
-		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
-			continue
+func captureAISummaryFromTargets(ctx context.Context, port int) string {
+	for attempt := 0; attempt < 20; attempt++ {
+		if ctx.Err() != nil {
+			return ""
 		}
-		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
-			continue
-		}
-		for attempt := 0; attempt < 6; attempt++ {
-			if raw, err := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, copyAISummaryJS); err == nil && strings.TrimSpace(raw) != "" {
-				return strings.TrimSpace(raw)
+		// The outer recap page and its Copy all button can appear after the
+		// transcript iframe, so discover targets again on every attempt.
+		targets, err := listCDPTargets(port)
+		if err == nil {
+			for _, t := range targets {
+				if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+					continue
+				}
+				if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+					continue
+				}
+				if raw, err := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, copyAISummaryJS); err == nil && strings.TrimSpace(raw) != "" {
+					return strings.TrimSpace(raw)
+				}
 			}
-			time.Sleep(500 * time.Millisecond)
+		}
+		if attempt == 19 {
+			break
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ""
+		case <-timer.C:
 		}
 	}
 	return ""

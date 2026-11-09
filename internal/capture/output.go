@@ -37,8 +37,13 @@ var (
 
 // OutputConfig configures creation of the transcript+audio file pair.
 type OutputConfig struct {
-	// Dir is the target directory for the output files; it is created if absent.
+	// Dir is the target directory for the output files when FilePath is not
+	// set; it is created if absent.
 	Dir string
+	// FilePath is an optional explicit destination path for the Markdown
+	// transcript file. When set, the transcript is written directly to
+	// FilePath (creating parent directories as needed).
+	FilePath string
 	// MeetingURL is used to derive the sanitized meeting id in the file names.
 	MeetingURL string
 	// BotName is written into the transcript frontmatter header.
@@ -65,13 +70,9 @@ type Output struct {
 	mp3File *os.File
 }
 
-// setupOutput creates the output directory and the transcript+MP3 file pair,
-// writes the transcript frontmatter header, and returns the open Output. Files
-// are created with O_EXCL so an existing file is never silently truncated; a
-// name collision (same meeting id in the same millisecond) surfaces as an error
-// instead of corrupting a concurrent capture. On any error every file and
-// handle created so far is rolled back so no partial artifacts remain (the pair
-// is created atomically).
+// setupOutput creates the output directory and files, writes the transcript
+// header, and returns the open Output. Generated names use O_EXCL to reject
+// collisions; an explicit FilePath replaces the destination on each run.
 func setupOutput(cfg OutputConfig) (*Output, error) {
 	now := cfg.Now
 	if now.IsZero() {
@@ -80,17 +81,48 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	id := sanitizeMeetingID(cfg.MeetingURL)
 	base := fmt.Sprintf("%s-%s", id, now.Format(timestampLayout))
 
-	dir, err := filepath.Abs(cfg.Dir)
-	if err != nil {
-		return nil, fmt.Errorf("capture: resolve output dir %s: %w", cfg.Dir, err)
+	explicitFile := cfg.FilePath
+	var (
+		mdPath  string
+		mp3Path string
+		openFlg = os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	)
+	if explicitFile != "" {
+		absFile, err := filepath.Abs(explicitFile)
+		if err != nil {
+			return nil, fmt.Errorf("capture: resolve output file %s: %w", explicitFile, err)
+		}
+		parentDir := filepath.Dir(absFile)
+		if err := os.MkdirAll(parentDir, dirPerm); err != nil {
+			return nil, fmt.Errorf("capture: create output dir %s: %w", parentDir, err)
+		}
+		mdPath = absFile
+		ext := filepath.Ext(absFile)
+		if ext != "" {
+			mp3Path = strings.TrimSuffix(absFile, ext) + ".mp3"
+		} else {
+			mp3Path = absFile + ".mp3"
+		}
+		// When an explicit output file path is requested (automation mode),
+		// truncate/overwrite if it already exists.
+		openFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	} else {
+		dir, err := filepath.Abs(cfg.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("capture: resolve output dir %s: %w", cfg.Dir, err)
+		}
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
+			return nil, fmt.Errorf("capture: create output dir %s: %w", dir, err)
+		}
+		mdPath = filepath.Join(dir, base+".md")
+		mp3Path = filepath.Join(dir, base+".mp3")
 	}
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
-		return nil, fmt.Errorf("capture: create output dir %s: %w", dir, err)
-	}
-	mdPath := filepath.Join(dir, base+".md")
-	mp3Path := filepath.Join(dir, base+".mp3")
 
-	mdFile, err := os.OpenFile(mdPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
+	if !cfg.CaptionsOnly && strings.EqualFold(mdPath, mp3Path) {
+		return nil, fmt.Errorf("capture: transcript and audio paths must differ: %s", mdPath)
+	}
+
+	mdFile, err := os.OpenFile(mdPath, openFlg, filePerm)
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
@@ -118,7 +150,7 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			mdFile:         mdFile,
 		}, nil
 	}
-	mp3File, err := os.OpenFile(mp3Path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
+	mp3File, err := os.OpenFile(mp3Path, openFlg, filePerm)
 	if err != nil {
 		// Best-effort rollback so a failed pair leaves no partial artifacts;
 		// the audio-create error is the failure worth surfacing.

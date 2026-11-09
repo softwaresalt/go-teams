@@ -1,6 +1,11 @@
 package cli
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/spf13/cobra"
 
 	"github.com/softwaresalt/go-teams/internal/config"
@@ -10,6 +15,9 @@ import (
 const defaultTeamsCaptureURL = "https://teams.microsoft.com/v2/"
 
 type captureFlags struct {
+	meetingURL  string
+	output      string
+	outputFile  string
 	outputDir   string
 	profileDir  string
 	botName     string
@@ -20,7 +28,10 @@ type captureFlags struct {
 }
 
 func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
-	cmd.Flags().StringVarP(&f.outputDir, "output-dir", "o", "", "directory where the Markdown transcript is saved")
+	cmd.Flags().StringVarP(&f.meetingURL, "url", "u", "", "Teams meeting or recap URL to capture")
+	cmd.Flags().StringVarP(&f.output, "output", "o", "", "output Markdown file path (.md) or directory")
+	cmd.Flags().StringVar(&f.outputFile, "output-file", "", "explicit output Markdown file path (.md)")
+	cmd.Flags().StringVar(&f.outputDir, "output-dir", "", "directory where the Markdown transcript is saved")
 	cmd.Flags().StringVar(&f.profileDir, "profile-dir", "", "browser user-data directory for session persistence")
 	cmd.Flags().StringVar(&f.botName, "bot-name", "", "display name injected on guest pre-join")
 	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
@@ -29,9 +40,34 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().BoolVar(&f.audio, "audio", false, "also capture tab audio to an MP3 file")
 }
 
+func applyOutputTarget(cfg *config.Config, target string) {
+	if target == "" {
+		return
+	}
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		cfg.OutputDir = target
+		cfg.OutputFile = ""
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(target))
+	if ext == ".md" || ext == ".markdown" {
+		cfg.OutputFile = target
+		return
+	}
+	cfg.OutputDir = target
+	cfg.OutputFile = ""
+}
+
 func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if f.outputDir != "" {
 		cfg.OutputDir = f.outputDir
+		cfg.OutputFile = ""
+	}
+	if f.output != "" {
+		applyOutputTarget(cfg, f.output)
+	}
+	if f.outputFile != "" {
+		cfg.OutputFile = f.outputFile
 	}
 	if f.profileDir != "" {
 		cfg.ProfileDir = f.profileDir
@@ -56,16 +92,26 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 	var flags captureFlags
 	cmd := &cobra.Command{
-		Use:   "join <meeting-url>",
+		Use:   "join <meeting-url> [output-markdown-path]",
 		Short: "Join a Teams meeting and capture its live captions to a Markdown file",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			rawURL := flags.meetingURL
+			if len(args) >= 1 {
+				rawURL = args[0]
+			}
+			if rawURL == "" {
+				return fmt.Errorf("cli: join requires a <meeting-url> argument or --url flag")
+			}
 			cfg, err := loadConfigFrom(d, *configPath)
 			if err != nil {
 				return err
 			}
 			applyCaptureFlags(cmd, &cfg, flags)
-			mutated, err := teams.MutateJoinURL(args[0])
+			if len(args) >= 2 {
+				applyOutputTarget(&cfg, args[1])
+			}
+			mutated, err := teams.MutateJoinURL(rawURL)
 			if err != nil {
 				return err
 			}
@@ -79,13 +125,12 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 	var flags captureFlags
 	cmd := &cobra.Command{
-		Use:   "captions [meeting-url]",
-		Short: "Open a browser window, wait for user authentication and call entry, and save live captions to Markdown",
-		Long: "captions opens a visible browser window (either at the provided Teams " +
-			"meeting URL or at teams.microsoft.com/v2/ when omitted), waits for you " +
-			"to sign in and enter a Teams call, navigates the call menu to turn on " +
-			"live captions, and streams finalized captions into a local Markdown file.",
-		Args: cobra.MaximumNArgs(1),
+		Use:   "captions [meeting-url] [output-markdown-path]",
+		Short: "Capture Teams live captions or Meeting Recap transcript + AI Summary to Markdown",
+		Long: "captions opens a browser (headed by default, or headless with --headless), " +
+			"navigates to the provided Teams meeting or Meeting Recap URL, and writes " +
+			"the captured transcript and AI Summary to the specified Markdown file or output directory.",
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfigFrom(d, *configPath)
 			if err != nil {
@@ -98,8 +143,14 @@ func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 			}
 			applyCaptureFlags(cmd, &cfg, flags)
 			rawURL := defaultTeamsCaptureURL
-			if len(args) == 1 {
+			if flags.meetingURL != "" {
+				rawURL = flags.meetingURL
+			}
+			if len(args) >= 1 {
 				rawURL = args[0]
+			}
+			if len(args) >= 2 {
+				applyOutputTarget(&cfg, args[1])
 			}
 			mutated, err := teams.MutateJoinURL(rawURL)
 			if err != nil {

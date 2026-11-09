@@ -182,7 +182,7 @@ func TestWriteAISummaryFormatsCopiedTeamsSummary(t *testing.T) {
 		"\tPhased Delivery: Start with low-risk items first.\n" +
 		"Follow-up tasks:\n" +
 		"Work Scope: \n" +
-		"Prepare a written scope document. (John)\n"
+		"Prepare a written scope document. (Presenter)\n"
 
 	require.NoError(t, w.WriteAISummary(rawCopied))
 	require.NoError(t, w.Flush())
@@ -193,7 +193,7 @@ func TestWriteAISummaryFormatsCopiedTeamsSummary(t *testing.T) {
 	assert.Contains(t, out, "* **Scope Alignment:** The team aligned on the 200-hour package.")
 	assert.Contains(t, out, "  * **Phased Delivery:** Start with low-risk items first.")
 	assert.Contains(t, out, "## Follow-up tasks")
-	assert.Contains(t, out, "* **Work Scope:** Prepare a written scope document. (John)")
+	assert.Contains(t, out, "* **Work Scope:** Prepare a written scope document. (Presenter)")
 	assert.NotContains(t, out, "secret=123", "recap URL with query tokens should be stripped from AI summary")
 	assert.NotContains(t, out, "\n\n\n", "markdown output must not contain multiple consecutive blank lines")
 }

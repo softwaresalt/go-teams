@@ -37,6 +37,89 @@ type RecapTranscriptEntry struct {
 	Text    string
 }
 
+// AISummaryProvider is an optional interface implemented by Meeting values that
+// capture the Teams Meeting Recap AI Summary alongside the transcript.
+type AISummaryProvider interface {
+	AISummary() string
+}
+
+// copyAISummaryJS navigates to the Notes -> AI summary tab on the Teams Meeting
+// Recap page, hooks clipboard writes (navigator.clipboard and document copy
+// events), clicks the "Copy all" button on the AI summary, and returns the
+// copied plain-text summary.
+const copyAISummaryJS = `(async () => {
+	const notesTab = document.querySelector('button[role="tab"][data-tid="Notes"]');
+	if (notesTab && notesTab.getAttribute('aria-selected') !== 'true') {
+		notesTab.click();
+		await new Promise(r => setTimeout(r, 300));
+	}
+	const aiNotesTab = document.querySelector('button[role="tab"][data-tid="AINotes"]');
+	if (aiNotesTab && aiNotesTab.getAttribute('aria-selected') !== 'true') {
+		aiNotesTab.click();
+		await new Promise(r => setTimeout(r, 300));
+	}
+	const copyBtn = document.querySelector('button[aria-label="Copy all"], button[aria-label*="Copy" i]');
+	if (!copyBtn) {
+		return '';
+	}
+	let copiedText = '';
+	const copyListener = (e) => {
+		if (e.clipboardData) {
+			const origSetData = e.clipboardData.setData.bind(e.clipboardData);
+			e.clipboardData.setData = (type, val) => {
+				if (type === 'text/plain') copiedText = String(val || '');
+				return origSetData(type, val);
+			};
+		}
+	};
+	document.addEventListener('copy', copyListener, true);
+	if (navigator.clipboard) {
+		const origWriteText = navigator.clipboard.writeText ? navigator.clipboard.writeText.bind(navigator.clipboard) : null;
+		navigator.clipboard.writeText = async (txt) => {
+			copiedText = String(txt || '');
+			if (origWriteText) {
+				try { await origWriteText(txt); } catch (_) {}
+			}
+		};
+		const origWrite = navigator.clipboard.write ? navigator.clipboard.write.bind(navigator.clipboard) : null;
+		navigator.clipboard.write = async (items) => {
+			try {
+				for (const item of items) {
+					if (item.types && item.types.includes('text/plain')) {
+						const blob = await item.getType('text/plain');
+						copiedText = await blob.text();
+					}
+				}
+			} catch (_) {}
+			if (origWrite) {
+				try { await origWrite(items); } catch (_) {}
+			}
+		};
+	}
+	copyBtn.click();
+	await new Promise(r => setTimeout(r, 500));
+	document.removeEventListener('copy', copyListener, true);
+	return copiedText;
+})()`
+
+func captureAISummaryFromTargets(ctx context.Context, targets []cdpTargetInfo) string {
+	for _, t := range targets {
+		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+			continue
+		}
+		for attempt := 0; attempt < 6; attempt++ {
+			if raw, err := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, copyAISummaryJS); err == nil && strings.TrimSpace(raw) != "" {
+				return strings.TrimSpace(raw)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return ""
+}
+
 type cdpTargetInfo struct {
 	ID                   string `json:"id"`
 	Type                 string `json:"type"`

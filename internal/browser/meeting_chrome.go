@@ -37,10 +37,16 @@ type chromeMeeting struct {
 	headedStop   func()
 	attachedCtx  context.Context
 	recapEntries []RecapTranscriptEntry
+	aiSummary    string
 }
 
 func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 	return &chromeMeeting{opts: opts}
+}
+
+// AISummary implements AISummaryProvider.
+func (m *chromeMeeting) AISummary() string {
+	return m.aiSummary
 }
 
 func (m *chromeMeeting) stopHeadedBrowser() {
@@ -115,6 +121,10 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
 						m.recapEntries = entries
 						slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
+						if summary := captureAISummaryFromTargets(ctx, targets); summary != "" {
+							m.aiSummary = summary
+							slog.Info("browser: copied AI summary from meeting recap")
+						}
 						return nil
 					}
 				}

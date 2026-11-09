@@ -59,3 +59,10 @@ func TestCleanHeadedBrowserFlags(t *testing.T) {
 	}
 	assert.Contains(t, args, "--remote-debugging-port=9222")
 }
+
+func TestCopyAISummaryJSStructure(t *testing.T) {
+	assert.Contains(t, copyAISummaryJS, `data-tid="Notes"`)
+	assert.Contains(t, copyAISummaryJS, `data-tid="AINotes"`)
+	assert.Contains(t, copyAISummaryJS, `aria-label="Copy all"`)
+	assert.Contains(t, copyAISummaryJS, `navigator.clipboard`)
+}

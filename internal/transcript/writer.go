@@ -127,6 +127,74 @@ func (w *Writer) WriteEvent(ev CaptionEvent) error {
 	return nil
 }
 
+// WriteAISummary formats and appends the Teams AI Summary (Meeting notes and
+// Follow-up tasks copied from the Recap AI summary tab) to the Markdown
+// transcript.
+func (w *Writer) WriteAISummary(raw string) error {
+	formatted := formatAISummaryMarkdown(raw)
+	if formatted == "" {
+		return nil
+	}
+	if _, err := w.bw.WriteString(formatted); err != nil {
+		return fmt.Errorf("transcript: write ai summary: %w", err)
+	}
+	return nil
+}
+
+func formatAISummaryMarkdown(raw string) string {
+	trimmedRaw := strings.TrimSpace(raw)
+	if trimmedRaw == "" {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(trimmedRaw, "\r\n", "\n"), "\n")
+	var sb strings.Builder
+	sb.WriteString("# AI Summary\n\n")
+
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], " \r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "View the full meeting recap in Teams:") {
+			continue
+		}
+		if strings.EqualFold(trimmed, "Meeting notes:") {
+			sb.WriteString("\n## Meeting notes\n\n")
+			continue
+		}
+		if strings.EqualFold(trimmed, "Follow-up tasks:") {
+			sb.WriteString("\n## Follow-up tasks\n\n")
+			continue
+		}
+		if strings.HasPrefix(line, "\t") {
+			if idx := strings.Index(trimmed, ":"); idx > 0 {
+				title := strings.TrimSpace(trimmed[:idx])
+				body := strings.TrimSpace(trimmed[idx+1:])
+				sb.WriteString(fmt.Sprintf("  * **%s:** %s\n", sanitizeField(title), sanitizeField(body)))
+			} else {
+				sb.WriteString(fmt.Sprintf("  * %s\n", sanitizeField(trimmed)))
+			}
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && i+1 < len(lines) {
+			nextRaw := strings.TrimRight(lines[i+1], " \r")
+			nextTrimmed := strings.TrimSpace(nextRaw)
+			if nextTrimmed != "" &&
+				!strings.HasPrefix(nextRaw, "\t") &&
+				!strings.EqualFold(nextTrimmed, "Meeting notes:") &&
+				!strings.EqualFold(nextTrimmed, "Follow-up tasks:") {
+				heading := strings.TrimSuffix(trimmed, ":")
+				sb.WriteString(fmt.Sprintf("* **%s:** %s\n", sanitizeField(heading), sanitizeField(nextTrimmed)))
+				i++
+				continue
+			}
+		}
+		sb.WriteString(fmt.Sprintf("%s\n\n", sanitizeField(trimmed)))
+	}
+	return sb.String()
+}
+
 // Flush writes any buffered data to the underlying writer.
 func (w *Writer) Flush() error {
 	if err := w.bw.Flush(); err != nil {

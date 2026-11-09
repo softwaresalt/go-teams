@@ -24,8 +24,9 @@ type captionPair struct {
 type fakeMeeting struct {
 	mu sync.Mutex
 
-	joinErr  error
-	audioErr error
+	joinErr   error
+	audioErr  error
+	aiSummary string
 
 	events []captionPair
 
@@ -33,6 +34,10 @@ type fakeMeeting struct {
 	emitted        chan struct{} // closed after events are delivered
 	audioStarted   chan struct{} // closed when CaptureAudio begins
 	audioReturnNow bool          // if true, CaptureAudio returns audioErr without blocking
+}
+
+func (f *fakeMeeting) AISummary() string {
+	return f.aiSummary
 }
 
 func (f *fakeMeeting) mark(s string) {
@@ -259,6 +264,47 @@ func TestSessionRunCaptionsOnlySkipsAudioAndFlushesImmediately(t *testing.T) {
 		if call == "audio" {
 			t.Fatalf("CaptureAudio must not be called when CaptionsOnly is true; calls=%v", fm.calls())
 		}
+	}
+}
+
+func TestSessionRunAppendsAISummaryWhenProvided(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.microsoft.com/meet/123456?p=token",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: true,
+	})
+	s.now = fixedTime
+
+	fm := &fakeMeeting{
+		events:    []captionPair{{"Alice", "First utterance."}},
+		aiSummary: "Meeting notes:\nKey Topic:\nDiscussed key items.\n",
+		emitted:   make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx, fm) }()
+
+	<-fm.emitted
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected 1 markdown file, got %v", entries)
+	}
+	b, err := os.ReadFile(dir + string(os.PathSeparator) + entries[0].Name())
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	md := string(b)
+	if !strings.Contains(md, "# AI Summary") || !strings.Contains(md, "Discussed key items.") {
+		t.Fatalf("expected appended AI Summary in markdown, got:\n%s", md)
 	}
 }
 

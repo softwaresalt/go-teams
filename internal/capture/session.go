@@ -143,8 +143,21 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	mu.Lock()
 	result := firstErr
 	mu.Unlock()
-	if result == nil && out.TranscriptPath != "" {
-		slog.Info("capture: transcript complete", "path", out.TranscriptPath)
+	if result == nil {
+		if sp, ok := m.(browser.AISummaryProvider); ok {
+			if summary := sp.AISummary(); summary != "" {
+				if writeErr := out.Transcript.WriteAISummary(summary); writeErr != nil {
+					return fmt.Errorf("capture: write ai summary: %w", writeErr)
+				}
+				if flushErr := out.Transcript.Flush(); flushErr != nil {
+					return fmt.Errorf("capture: flush ai summary: %w", flushErr)
+				}
+				slog.Info("capture: appended AI summary to transcript")
+			}
+		}
+		if out.TranscriptPath != "" {
+			slog.Info("capture: transcript complete", "path", out.TranscriptPath)
+		}
 	}
 	return result
 }

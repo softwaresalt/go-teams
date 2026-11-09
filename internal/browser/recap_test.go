@@ -56,8 +56,22 @@ func TestCleanHeadedBrowserFlags(t *testing.T) {
 			"headed browser must not pass --disable-blink-features=AutomationControlled")
 		assert.NotContains(t, a, "no-sandbox",
 			"headed browser must not disable the browser sandbox")
+		assert.NotContains(t, a, "headless",
+			"headed browser must not include --headless")
 	}
 	assert.Contains(t, args, "--remote-debugging-port=9222")
+}
+
+func TestCleanHeadlessBrowserFlags(t *testing.T) {
+	args := cleanBrowserArgs(9222, `/tmp/profile`, true, "https://teams.cloud.microsoft")
+	for _, a := range args {
+		assert.NotContains(t, a, "AutomationControlled",
+			"headless browser must not pass --disable-blink-features=AutomationControlled")
+		assert.NotContains(t, a, "no-sandbox",
+			"headless browser must not disable the browser sandbox")
+	}
+	assert.Contains(t, args, "--remote-debugging-port=9222")
+	assert.Contains(t, args, "--headless=new")
 }
 
 func TestCopyAISummaryJSStructure(t *testing.T) {

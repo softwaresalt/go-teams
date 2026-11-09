@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -128,16 +129,17 @@ type cdpTargetInfo struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
-// cleanHeadedBrowserArgs returns the minimal, untampered command-line flags
-// used to launch a visible browser window for interactive Microsoft 365
-// authentication and Teams usage. It deliberately omits stealth/sandbox flags
-// such as --disable-blink-features=AutomationControlled and --no-sandbox, which
-// trigger browser security warnings and Teams/Purview policy blocks.
-func cleanHeadedBrowserArgs(port int, profileDir, initialURL string) []string {
+// cleanBrowserArgs returns the minimal, untampered command-line flags used to
+// launch a browser instance (headed or --headless=new) without stealth/sandbox
+// flags such as --disable-blink-features=AutomationControlled or --no-sandbox.
+func cleanBrowserArgs(port int, profileDir string, headless bool, initialURL string) []string {
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--no-first-run",
 		"--no-default-browser-check",
+	}
+	if headless {
+		args = append(args, "--headless=new")
 	}
 	if profileDir != "" {
 		args = append(args, fmt.Sprintf("--user-data-dir=%s", profileDir))
@@ -146,6 +148,10 @@ func cleanHeadedBrowserArgs(port int, profileDir, initialURL string) []string {
 		args = append(args, initialURL)
 	}
 	return args
+}
+
+func cleanHeadedBrowserArgs(port int, profileDir, initialURL string) []string {
+	return cleanBrowserArgs(port, profileDir, false, initialURL)
 }
 
 // ParseRecapTimestamp parses an ISO-8601 duration (e.g. "PT15M29S", "PT1H2M3S")
@@ -292,13 +298,16 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, fun
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 
-	args := cleanHeadedBrowserArgs(port, absProfile, initialURL)
+	args := cleanBrowserArgs(port, absProfile, opts.Headless, initialURL)
 	cmd := exec.Command(execPath, args...)
 	if err := cmd.Start(); err != nil {
-		return 0, "", nil, fmt.Errorf("browser: start headed browser: %w", err)
+		return 0, "", nil, fmt.Errorf("browser: start browser: %w", err)
 	}
 	cleanup := func() {
 		if cmd.Process != nil {
+			if runtime.GOOS == "windows" {
+				_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+			}
 			_ = cmd.Process.Kill()
 			_, _ = cmd.Process.Wait()
 		}
@@ -309,7 +318,7 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, fun
 		cleanup()
 		return 0, "", nil, err
 	}
-	slog.Info("browser: launched clean browser window", "pid", cmd.Process.Pid, "cdp_port", port)
+	slog.Info("browser: launched clean browser", "pid", cmd.Process.Pid, "cdp_port", port, "headless", opts.Headless)
 	return port, wsURL, cleanup, nil
 }
 

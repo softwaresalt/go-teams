@@ -33,6 +33,7 @@ const (
 type chromeMeeting struct {
 	opts         MeetingOptions
 	headedOpts   *Options
+	cdpPort      int
 	headedMu     sync.Mutex
 	headedStop   func()
 	attachedCtx  context.Context
@@ -203,6 +204,12 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 	clickedLauncher := false
 
 	for {
+		if m.cdpPort > 0 {
+			if ok := m.tryExtractRecapViaCDP(ctx, m.cdpPort); ok {
+				return nil
+			}
+		}
+
 		var toolbar, lobby, prejoin, launcher bool
 		if err := chromedp.Run(ctx,
 			chromedp.Evaluate(existsJS(meetingToolbarSel), &toolbar),
@@ -233,13 +240,15 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 		case PreJoinLauncher:
 			if !clickedLauncher {
 				slog.Info("browser: launcher interstitial detected; clicking join on web")
-				if err := chromedp.Run(ctx, chromedp.Click(joinOnWebSel, chromedp.ByQuery)); err != nil {
+				var clicked bool
+				if err := chromedp.Run(ctx, chromedp.Evaluate(clickJS(joinOnWebSel), &clicked)); err != nil {
 					slog.Warn("browser: click join on web failed; retrying", "err", err)
-				} else {
+				} else if clicked {
 					clickedLauncher = true
 				}
 			}
 		case PreJoinWaitingForUser:
+			clickedLauncher = false
 			if !loggedWaiting {
 				slog.Info("browser: waiting for user authentication and meeting entry in browser window")
 				loggedWaiting = true
@@ -252,6 +261,33 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) bool {
+	targets, err := listCDPTargets(port)
+	if err != nil {
+		return false
+	}
+	for _, t := range targets {
+		if (t.Type != "page" && t.Type != "iframe") || t.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+			continue
+		}
+		if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
+			if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
+				m.recapEntries = entries
+				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
+				if summary := captureAISummaryFromTargets(ctx, targets); summary != "" {
+					m.aiSummary = summary
+					slog.Info("browser: copied AI summary from meeting recap")
+				}
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // enforceMute clicks the microphone toggle if it is currently enabled so the

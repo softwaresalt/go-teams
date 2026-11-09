@@ -3,6 +3,9 @@ package browser
 import (
 	"context"
 	"io"
+	"net"
+	"path/filepath"
+	"strconv"
 
 	"github.com/chromedp/chromedp"
 )
@@ -50,10 +53,11 @@ func NewMeeting(opts MeetingOptions) Meeting {
 // NewLiveMeeting allocates a Chromium context for meeting capture and returns a
 // chromedp-backed Meeting bound to it, the context that drives the meeting's
 // methods, and a cleanup func that cancels the browser and allocator contexts
-// (terminating the spawned Chromium process). When opts.Headless is false, the
-// browser is launched cleanly via a local CDP debugging port without stealth or
-// sandbox-disabling flags. The caller MUST invoke cleanup when the meeting is
-// done, on success, failure, and cancellation.
+// (terminating the spawned Chromium process). Both headed and headless modes
+// launch via a clean local CDP debugging port without stealth or
+// sandbox-disabling flags so both Live Calls and Meeting Recaps work in
+// headless mode once the profile is authenticated. The caller MUST invoke
+// cleanup when the meeting is done, on success, failure, and cancellation.
 func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Meeting, context.Context, func(), error) {
 	cm := newChromeMeeting(mopts)
 	if !opts.Headless {
@@ -66,11 +70,34 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 		}
 		return cm, browserCtx, cleanup, nil
 	}
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, AllocatorOptions(opts)...)
+	allocOpts := cleanHeadlessAllocatorOptions(opts)
+	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		cm.cdpPort = port
+		allocOpts = append(allocOpts, chromedp.Flag("remote-debugging-port", strconv.Itoa(port)))
+	}
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, allocOpts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cleanup := func() {
 		cancelBrowser()
 		cancelAlloc()
 	}
 	return cm, browserCtx, cleanup, nil
+}
+
+func cleanHeadlessAllocatorOptions(opts Options) []chromedp.ExecAllocatorOption {
+	out := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	out = append(out, chromedp.Flag("headless", "new"))
+	if opts.UserDataDir != "" {
+		dir := opts.UserDataDir
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+		out = append(out, chromedp.UserDataDir(dir))
+	}
+	if execPath := ResolveExecPath(opts.ExecPath); execPath != "" {
+		out = append(out, chromedp.ExecPath(execPath))
+	}
+	return out
 }

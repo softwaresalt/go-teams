@@ -102,6 +102,12 @@ func existsJS(selector string) string {
 	return fmt.Sprintf(`document.querySelector(%q) !== null`, selector)
 }
 
+// clickJS returns a JavaScript expression that invokes .click() on the first
+// element matching selector and returns true when matched.
+func clickJS(selector string) string {
+	return fmt.Sprintf(`(() => { const el = document.querySelector(%q); if (el) { el.click(); return true; } return false; })()`, selector)
+}
+
 // propBoolJS returns a JavaScript expression that safely reads a boolean
 // property on the first element matching selector.
 func propBoolJS(selector, prop string) string {

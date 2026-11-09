@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"time"
 
@@ -95,24 +94,19 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 	return cm, browserCtx, cleanup, nil
 }
 
+func cleanHeadlessFlags() []Flag {
+	return []Flag{
+		{Name: "headless", Value: "new"},
+		{Name: "use-fake-ui-for-media-stream", Value: true},
+		{Name: "auto-select-desktop-capture-source", Value: "Microsoft Teams"},
+		{Name: "mute-audio", Value: false},
+	}
+}
+
 func cleanHeadlessAllocatorOptions(opts Options) []chromedp.ExecAllocatorOption {
 	out := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
-	out = append(out,
-		chromedp.Flag("headless", "new"),
-		chromedp.Flag("use-fake-ui-for-media-stream", true),
-		chromedp.Flag("auto-select-desktop-capture-source", "Microsoft Teams"),
-		chromedp.Flag("mute-audio", false),
-	)
-	if runtime.GOOS == "linux" {
-		// Ubuntu 24.04+ CI runners restrict unprivileged user namespaces via
-		// AppArmor, causing headless Chrome to exit during zygote initialization
-		// unless sandbox and /dev/shm flags are set on Linux.
-		out = append(out,
-			chromedp.NoSandbox,
-			chromedp.Flag("disable-setuid-sandbox", true),
-			chromedp.Flag("disable-dev-shm-usage", true),
-			chromedp.Flag("disable-gpu", true),
-		)
+	for _, f := range cleanHeadlessFlags() {
+		out = append(out, chromedp.Flag(f.Name, f.Value))
 	}
 	if opts.UserDataDir != "" {
 		dir := opts.UserDataDir

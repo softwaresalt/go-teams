@@ -75,6 +75,25 @@ func TestCleanHeadlessBrowserFlags(t *testing.T) {
 	assert.Contains(t, args, "--auto-select-desktop-capture-source=Microsoft Teams")
 }
 
+func TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox(t *testing.T) {
+	flags := cleanHeadlessFlags()
+	for _, f := range flags {
+		assert.NotEqual(t, "no-sandbox", f.Name, "cleanHeadlessAllocatorOptions must not disable the browser sandbox")
+		assert.NotEqual(t, "disable-setuid-sandbox", f.Name, "cleanHeadlessAllocatorOptions must not disable setuid sandbox")
+		assert.NotEqual(t, "disable-blink-features", f.Name, "cleanHeadlessAllocatorOptions must not pass AutomationControlled")
+	}
+	headlessFlag, ok := findFlag(flags, "headless")
+	require.True(t, ok)
+	assert.Equal(t, "new", headlessFlag.Value)
+
+	captureFlag, ok := findFlag(flags, "auto-select-desktop-capture-source")
+	require.True(t, ok)
+	assert.Equal(t, "Microsoft Teams", captureFlag.Value)
+
+	opts := cleanHeadlessAllocatorOptions(Options{UserDataDir: t.TempDir(), ExecPath: "/custom/edge.exe"})
+	assert.Greater(t, len(opts), len(flags))
+}
+
 func TestCopyAISummaryJSStructure(t *testing.T) {
 	assert.Contains(t, copyAISummaryJS, `data-tid="Notes"`)
 	assert.Contains(t, copyAISummaryJS, `data-tid="AINotes"`)

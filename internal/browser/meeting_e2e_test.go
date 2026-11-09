@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,9 @@ import (
 //  5. Caption menu navigation (#callingButtons-showMoreBtn -> #LanguageSpeechMenuControl-id -> #closed-captions-button)
 //  6. Live caption DOM MutationObserver (rolling text + multi-turn same-speaker + settled unpunctuated caption)
 func TestChromeMeetingEndToEnd(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("live browser e2e test targets Windows consumer hosts only")
+	}
 	if ResolveExecPath("") == "" {
 		t.Skip("no Chromium-based browser executable found on host")
 	}

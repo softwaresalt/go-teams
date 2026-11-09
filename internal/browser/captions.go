@@ -40,6 +40,7 @@ const captionObserverJS = `(() => {
   const initialWrapper = document.querySelector('[data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-captions-renderer"]');
   if (!initialWrapper) { return false; }
   const timers = new WeakMap();
+  const pendingText = new WeakMap();
   const lastSent = new WeakMap();
   const findSpeaker = (el, root) => {
     let cur = el.closest('.fui-ChatMessageCompact') || el.parentElement;
@@ -56,14 +57,21 @@ const captionObserverJS = `(() => {
     const text = (el.textContent || '').trim();
     if (!text || lastSent.get(el) === text) { return; }
     const speaker = findSpeaker(el, root);
-    const prevTimer = timers.get(el);
-    if (prevTimer) { clearTimeout(prevTimer); }
     if (/[.!?]$/.test(text)) {
+      const prevTimer = timers.get(el);
+      if (prevTimer) { clearTimeout(prevTimer); timers.delete(el); }
+      pendingText.delete(el);
       lastSent.set(el, text);
       window.sendCaptionToGo(JSON.stringify({ speaker: speaker, text: text }));
       return;
     }
+    if (pendingText.get(el) === text && timers.has(el)) { return; }
+    const prevTimer = timers.get(el);
+    if (prevTimer) { clearTimeout(prevTimer); }
+    pendingText.set(el, text);
     const timer = setTimeout(() => {
+      timers.delete(el);
+      pendingText.delete(el);
       const settledText = (el.textContent || '').trim();
       if (!settledText || lastSent.get(el) === settledText) { return; }
       const settledSpeaker = findSpeaker(el, root) || speaker;

@@ -88,7 +88,12 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 
 func cleanHeadlessAllocatorOptions(opts Options) []chromedp.ExecAllocatorOption {
 	out := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
-	out = append(out, chromedp.Flag("headless", "new"))
+	out = append(out,
+		chromedp.Flag("headless", "new"),
+		chromedp.Flag("use-fake-ui-for-media-stream", true),
+		chromedp.Flag("auto-select-desktop-capture-source", "Microsoft Teams"),
+		chromedp.Flag("mute-audio", false),
+	)
 	if opts.UserDataDir != "" {
 		dir := opts.UserDataDir
 		if abs, err := filepath.Abs(dir); err == nil {

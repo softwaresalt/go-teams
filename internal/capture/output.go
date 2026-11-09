@@ -118,8 +118,15 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		mp3Path = filepath.Join(dir, base+".mp3")
 	}
 
-	if !cfg.CaptionsOnly && strings.EqualFold(mdPath, mp3Path) {
-		return nil, fmt.Errorf("capture: transcript and audio paths must differ: %s", mdPath)
+	if !cfg.CaptionsOnly {
+		if strings.EqualFold(mdPath, mp3Path) {
+			return nil, fmt.Errorf("capture: transcript and audio paths must differ: %s", mdPath)
+		}
+		mdInfo, mdErr := os.Stat(mdPath)
+		mp3Info, mp3Err := os.Stat(mp3Path)
+		if mdErr == nil && mp3Err == nil && os.SameFile(mdInfo, mp3Info) {
+			return nil, fmt.Errorf("capture: transcript and audio paths refer to the same file: %s", mdPath)
+		}
 	}
 
 	mdFile, err := os.OpenFile(mdPath, openFlg, filePerm)

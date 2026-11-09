@@ -72,6 +72,7 @@ func TestCleanHeadlessBrowserFlags(t *testing.T) {
 	}
 	assert.Contains(t, args, "--remote-debugging-port=9222")
 	assert.Contains(t, args, "--headless=new")
+	assert.Contains(t, args, "--auto-select-desktop-capture-source=Microsoft Teams")
 }
 
 func TestCopyAISummaryJSStructure(t *testing.T) {

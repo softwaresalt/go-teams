@@ -55,4 +55,5 @@ func TestCaptionObserverJSStructure(t *testing.T) {
 	assert.Contains(t, captionObserverJS, "closed-caption-text")
 	assert.Contains(t, captionObserverJS, "sendCaptionToGo")
 	assert.Contains(t, captionObserverJS, "characterData")
+	assert.Contains(t, captionObserverJS, "pendingText")
 }

@@ -220,3 +220,34 @@ func TestSetupOutputExplicitFilePathCreatesAndOverwritesMarkdownFile(t *testing.
 		t.Fatalf("close second output: %v", err)
 	}
 }
+
+func TestSetupOutputRejectsHardLinkedTranscriptAndAudioAlias(t *testing.T) {
+	dir := t.TempDir()
+	mdFile := filepath.Join(dir, "call.md")
+	mp3File := filepath.Join(dir, "call.mp3")
+	if err := os.WriteFile(mdFile, []byte("original"), 0o600); err != nil {
+		t.Fatalf("write mdFile: %v", err)
+	}
+	if err := os.Link(mdFile, mp3File); err != nil {
+		t.Skipf("hard links not supported on this filesystem: %v", err)
+	}
+
+	_, err := setupOutput(OutputConfig{
+		FilePath:     mdFile,
+		MeetingURL:   "https://teams.microsoft.com/meet/999888777",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: false,
+	})
+	if err == nil {
+		t.Fatal("expected setupOutput to reject aliased transcript and audio files")
+	}
+	// Original file content must not have been truncated.
+	got, readErr := os.ReadFile(mdFile)
+	if readErr != nil {
+		t.Fatalf("read mdFile: %v", readErr)
+	}
+	if string(got) != "original" {
+		t.Fatalf("expected aliased file to remain untouched, got %q", string(got))
+	}
+}

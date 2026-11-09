@@ -444,6 +444,23 @@ func (p *payloadPump) stop() {
 	p.workWG.Wait()
 }
 
+// targetContext returns a context that carries the active chromedp target
+// (using m.attachedCtx when Join attached to a headed CDP target) while
+// propagating cancellation from callerCtx so Session.Run's runCtx can cancel
+// EnableCaptions and CaptureAudio on write/flush/worker errors without closing
+// the underlying browser target.
+func (m *chromeMeeting) targetContext(callerCtx context.Context) (context.Context, context.CancelFunc) {
+	if m.attachedCtx == nil {
+		return context.WithCancel(callerCtx)
+	}
+	targetCtx, cancel := context.WithCancel(m.attachedCtx)
+	stop := context.AfterFunc(callerCtx, cancel)
+	return targetCtx, func() {
+		stop()
+		cancel()
+	}
+}
+
 // EnableCaptions implements Meeting. It activates Teams live captions, registers
 // the sendCaptionToGo CDP binding, injects the caption MutationObserver, and
 // routes forwarded fragments through Go-side deduplication to sink. It blocks
@@ -462,16 +479,15 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 		}
 		return nil
 	}
-	if m.attachedCtx != nil {
-		ctx = m.attachedCtx
-	}
-	if chromedp.FromContext(ctx) == nil {
+	targetCtx, cancelTarget := m.targetContext(ctx)
+	defer cancelTarget()
+	if chromedp.FromContext(targetCtx) == nil {
 		return fmt.Errorf("browser: enable captions requires a chromedp browser context")
 	}
-	if err := m.activateCaptions(ctx); err != nil {
+	if err := m.activateCaptions(targetCtx); err != nil {
 		return err
 	}
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := chromedp.Run(targetCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		return cdpruntime.AddBinding(captionBinding).Do(ctx)
 	})); err != nil {
 		return fmt.Errorf("browser: add caption binding: %w", err)
@@ -482,7 +498,7 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 	// sink delivery. pump.stop() is a producer barrier that drains all buffered
 	// fragments before EnableCaptions returns, so the transcript tail is not
 	// lost on shutdown and no sink call happens after return.
-	workerCtx, cancel := context.WithCancel(ctx)
+	workerCtx, cancel := context.WithCancel(targetCtx)
 	dedup := transcript.NewDeduplicator()
 	pump := newPayloadPump(captionQueueSize, func(raw string) {
 		if err := handleCaptionPayload(raw, dedup, sink); err != nil {
@@ -508,14 +524,14 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 	})
 
 	var attached bool
-	if err := chromedp.Run(ctx, chromedp.Evaluate(captionObserverJS, &attached)); err != nil {
+	if err := chromedp.Run(targetCtx, chromedp.Evaluate(captionObserverJS, &attached)); err != nil {
 		return fmt.Errorf("browser: inject caption observer: %w", err)
 	}
 	if !attached {
 		slog.Warn("browser: caption renderer not yet present; observer not attached")
 	}
 
-	<-ctx.Done()
+	<-targetCtx.Done()
 	return nil
 }
 
@@ -645,10 +661,12 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 	if w == nil {
 		return fmt.Errorf("browser: audio writer must not be nil")
 	}
-	if chromedp.FromContext(ctx) == nil {
+	targetCtx, cancelTarget := m.targetContext(ctx)
+	defer cancelTarget()
+	if chromedp.FromContext(targetCtx) == nil {
 		return fmt.Errorf("browser: capture audio requires a chromedp browser context")
 	}
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := chromedp.Run(targetCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		return cdpruntime.AddBinding(audioBinding).Do(ctx)
 	})); err != nil {
 		return fmt.Errorf("browser: add audio binding: %w", err)
@@ -658,7 +676,7 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 	// producer barrier on stop, so buffered audio chunks are drained (not lost)
 	// on shutdown. workerErr is written only by the pump's worker goroutine and
 	// is read after pump.stop() joins it, so the access is race-free.
-	workerCtx, cancel := context.WithCancel(ctx)
+	workerCtx, cancel := context.WithCancel(targetCtx)
 	var workerErr error
 	enc := audio.NewEncoder(w, audio.SampleRate)
 	pump := newPayloadPump(audioQueueSize, func(raw string) {
@@ -708,7 +726,7 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 	awaitPromise := func(p *cdpruntime.EvaluateParams) *cdpruntime.EvaluateParams {
 		return p.WithAwaitPromise(true)
 	}
-	if err := chromedp.Run(ctx, chromedp.Evaluate(audioCaptureJS, &started, awaitPromise)); err != nil {
+	if err := chromedp.Run(targetCtx, chromedp.Evaluate(audioCaptureJS, &started, awaitPromise)); err != nil {
 		return fmt.Errorf("browser: start audio capture: %w", err)
 	}
 	if !started {

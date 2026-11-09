@@ -12,6 +12,7 @@ diff.txt
 # Directories
 bin/
 logs/
+transcripts/
 .vscode/
 .copilot/
 .mcp.json

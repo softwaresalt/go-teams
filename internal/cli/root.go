@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -107,6 +108,8 @@ func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 				return config.Config{}, defErr
 			}
 			def.Headless = false
+			def.OutputDir = "transcripts"
+			def.ProfileDir = filepath.Join("bin", "profile")
 			return def, nil
 		}
 		return config.Config{}, err

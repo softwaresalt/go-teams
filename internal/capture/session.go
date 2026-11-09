@@ -98,9 +98,18 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	}
 
 	sink := func(speaker, text string) {
-		slog.Info("capture: caption", "speaker", speaker, "text", text)
+		ts := s.now()
+		if idx := strings.Index(speaker, browser.RecapOffsetSeparator); idx >= 0 {
+			offsetStr := speaker[idx+len(browser.RecapOffsetSeparator):]
+			speaker = speaker[:idx]
+			if parsedTS, ok := browser.ParseRecapTimestamp(offsetStr, ts); ok {
+				ts = parsedTS
+			}
+		} else {
+			slog.Info("capture: caption", "speaker", speaker, "text", text)
+		}
 		if writeErr := out.Transcript.WriteEvent(transcript.CaptionEvent{
-			Timestamp: s.now(),
+			Timestamp: ts,
 			Speaker:   speaker,
 			Text:      text,
 		}); writeErr != nil {
@@ -134,6 +143,9 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	mu.Lock()
 	result := firstErr
 	mu.Unlock()
+	if result == nil && out.TranscriptPath != "" {
+		slog.Info("capture: transcript complete", "path", out.TranscriptPath)
+	}
 	return result
 }
 

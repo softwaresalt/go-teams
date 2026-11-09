@@ -2,13 +2,16 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	cdpruntime "github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/softwaresalt/go-teams/internal/audio"
@@ -28,31 +31,159 @@ const (
 // operate on a chromedp browser context supplied by the caller so that a single
 // browser session spans join, captions, and audio.
 type chromeMeeting struct {
-	opts MeetingOptions
+	opts         MeetingOptions
+	headedOpts   *Options
+	headedMu     sync.Mutex
+	headedStop   func()
+	attachedCtx  context.Context
+	recapEntries []RecapTranscriptEntry
 }
 
 func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 	return &chromeMeeting{opts: opts}
 }
 
-// Join implements Meeting. ctx MUST be a chromedp browser context. It validates
-// the meeting URL, navigates to it, waits for user authentication or launcher
-// interstitial handling as needed, runs the pre-join sequence (enforce mute,
-// inject the bot name, click "Join now") when pre-join is shown, and polls
-// until admitted or ctx is cancelled. If the user authenticates and joins a
-// call directly in the browser window, Join detects the active call toolbar and
-// returns immediately.
+func (m *chromeMeeting) stopHeadedBrowser() {
+	m.headedMu.Lock()
+	stop := m.headedStop
+	m.headedStop = nil
+	m.headedMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+// Join implements Meeting. It validates the meeting URL, navigates to it, waits
+// for user authentication or launcher interstitial handling as needed, and
+// detects either a Teams Meeting Recap transcript (via xplatplugins.aspx /
+// .ms-List) or a live call pre-join / active call toolbar.
 func (m *chromeMeeting) Join(ctx context.Context) error {
-	if chromedp.FromContext(ctx) == nil {
+	if m.headedOpts == nil && chromedp.FromContext(ctx) == nil {
 		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
 	}
 	if err := teams.ValidateMeetingURL(m.opts.MeetingURL); err != nil {
 		return fmt.Errorf("browser: invalid meeting url: %w", err)
 	}
+	if m.headedOpts != nil {
+		return m.joinHeaded(ctx)
+	}
 	if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {
 		return fmt.Errorf("browser: navigate to meeting: %w", err)
 	}
 	return m.awaitPreJoinOrAdmission(ctx)
+}
+
+func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
+	port, wsURL, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, m.opts.MeetingURL)
+	if err != nil {
+		return err
+	}
+	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, wsURL)
+	m.headedMu.Lock()
+	m.headedStop = func() {
+		cancelAlloc()
+		cleanupProc()
+	}
+	m.headedMu.Unlock()
+
+	ticker := time.NewTicker(1500 * time.Millisecond)
+	defer ticker.Stop()
+
+	loggedWaiting := false
+	clickedLauncher := false
+	reNavigatedRecap := false
+
+	for {
+		targets, err := listCDPTargets(port)
+		if err == nil {
+			var mainPage *cdpTargetInfo
+			for i := range targets {
+				t := &targets[i]
+				if (t.Type != "page" && t.Type != "iframe") || t.WebSocketDebuggerURL == "" {
+					continue
+				}
+				if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+					continue
+				}
+				if t.Type == "page" && mainPage == nil {
+					mainPage = t
+				}
+
+				// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
+				// has a Meeting Recap transcript list populated.
+				if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
+					if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
+						m.recapEntries = entries
+						slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
+						return nil
+					}
+				}
+			}
+
+			if mainPage != nil {
+				stateRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `JSON.stringify({
+					host: location.host,
+					path: location.pathname,
+					toolbar: document.querySelector('#hangup-button, [data-tid="hangup-button"], [data-tid="hangup-main-btn"]') !== null,
+					lobby: document.body !== null && document.body.innerText.includes("Someone will let you in shortly"),
+					prejoin: document.querySelector('[data-tid="prejoin-join-button"]') !== null,
+					launcher: document.querySelector('#openTeamsClientInBrowser, button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]') !== null,
+					recapHeader: document.querySelector('[data-tid="intelligent-recap-header"]') !== null,
+					tidCount: document.querySelectorAll('[data-tid]').length
+				})`)
+				if evalErr == nil {
+					var st struct {
+						Host        string `json:"host"`
+						Path        string `json:"path"`
+						Toolbar     bool   `json:"toolbar"`
+						Lobby       bool   `json:"lobby"`
+						Prejoin     bool   `json:"prejoin"`
+						Launcher    bool   `json:"launcher"`
+						RecapHeader bool   `json:"recapHeader"`
+						TidCount    int    `json:"tidCount"`
+					}
+					_ = json.Unmarshal([]byte(stateRaw), &st)
+
+					if st.Launcher {
+						if !clickedLauncher {
+							slog.Info("browser: launcher interstitial detected; clicking use web app")
+							_, _ = evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `(() => {
+								const btn = document.querySelector('#openTeamsClientInBrowser, button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]');
+								if (btn) { btn.click(); return true; }
+								return false;
+							})()`)
+							clickedLauncher = true
+						}
+					} else {
+						clickedLauncher = false
+						if strings.Contains(m.opts.MeetingURL, "meetingrecap") &&
+							strings.Contains(st.Host, "teams.cloud.microsoft") &&
+							!st.RecapHeader &&
+							st.TidCount > 20 &&
+							!reNavigatedRecap {
+							// Wait for Teams to finish routing the launcher deep link; only
+							// re-navigate if the recap container still has not appeared.
+							reNavigatedRecap = true
+						} else if st.Toolbar || st.Lobby || st.Prejoin {
+							// Live meeting flow on the open page target.
+							tCtx, _ := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(mainPage.ID)))
+							m.attachedCtx = tCtx
+							return m.awaitPreJoinOrAdmission(tCtx)
+						} else if !loggedWaiting {
+							slog.Info("browser: waiting for user authentication and meeting/recap load in browser window")
+							loggedWaiting = true
+						}
+					}
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
@@ -274,6 +405,19 @@ func (p *payloadPump) stop() {
 func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) error {
 	if sink == nil {
 		return fmt.Errorf("browser: caption sink must not be nil")
+	}
+	if len(m.recapEntries) > 0 {
+		for _, entry := range m.recapEntries {
+			speaker := entry.Speaker
+			if entry.Offset != "" {
+				speaker = speaker + RecapOffsetSeparator + entry.Offset
+			}
+			sink(speaker, entry.Text)
+		}
+		return nil
+	}
+	if m.attachedCtx != nil {
+		ctx = m.attachedCtx
 	}
 	if chromedp.FromContext(ctx) == nil {
 		return fmt.Errorf("browser: enable captions requires a chromedp browser context")

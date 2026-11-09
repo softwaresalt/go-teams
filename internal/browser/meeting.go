@@ -47,17 +47,30 @@ func NewMeeting(opts MeetingOptions) Meeting {
 	return newChromeMeeting(opts)
 }
 
-// NewLiveMeeting allocates a headless Chromium context for automated capture and
-// returns a chromedp-backed Meeting bound to it, the context that drives the
-// meeting's methods, and a cleanup func that cancels the browser and allocator
-// contexts (terminating the spawned Chromium process). The caller MUST invoke
-// cleanup when the meeting is done, on success, failure, and cancellation.
+// NewLiveMeeting allocates a Chromium context for meeting capture and returns a
+// chromedp-backed Meeting bound to it, the context that drives the meeting's
+// methods, and a cleanup func that cancels the browser and allocator contexts
+// (terminating the spawned Chromium process). When opts.Headless is false, the
+// browser is launched cleanly via a local CDP debugging port without stealth or
+// sandbox-disabling flags. The caller MUST invoke cleanup when the meeting is
+// done, on success, failure, and cancellation.
 func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Meeting, context.Context, func(), error) {
+	cm := newChromeMeeting(mopts)
+	if !opts.Headless {
+		optsCopy := opts
+		cm.headedOpts = &optsCopy
+		browserCtx, cancelBrowser := context.WithCancel(ctx)
+		cleanup := func() {
+			cancelBrowser()
+			cm.stopHeadedBrowser()
+		}
+		return cm, browserCtx, cleanup, nil
+	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, AllocatorOptions(opts)...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cleanup := func() {
 		cancelBrowser()
 		cancelAlloc()
 	}
-	return NewMeeting(mopts), browserCtx, cleanup, nil
+	return cm, browserCtx, cleanup, nil
 }

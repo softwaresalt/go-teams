@@ -110,18 +110,14 @@ const copyAISummaryJS = `(async () => {
 	return copiedText;
 })()`
 
-// ownedFrameSet holds the frame IDs and URLs belonging to a specific page
+// ownedFrameSet holds the verified frame IDs belonging to a specific page
 // target's frame tree (obtained via Page.getFrameTree).
 type ownedFrameSet struct {
-	ids  map[string]bool
-	urls map[string]bool
+	ids map[string]bool
 }
 
 func (s ownedFrameSet) contains(t cdpTargetInfo) bool {
-	if s.ids[t.ID] {
-		return true
-	}
-	return t.URL != "" && s.urls[t.URL]
+	return t.ID != "" && s.ids[t.ID]
 }
 
 // isTargetInCaptureScope reports whether t belongs to the active capture page
@@ -155,9 +151,6 @@ func collectFrameTree(node cdpFrameTreeNode, out *ownedFrameSet) {
 	if node.Frame.ID != "" {
 		out.ids[node.Frame.ID] = true
 	}
-	if node.Frame.URL != "" {
-		out.urls[node.Frame.URL] = true
-	}
 	for _, child := range node.ChildFrames {
 		collectFrameTree(child, out)
 	}
@@ -165,8 +158,7 @@ func collectFrameTree(node cdpFrameTreeNode, out *ownedFrameSet) {
 
 func fetchOwnedFrames(ctx context.Context, pageWSURL string) ownedFrameSet {
 	out := ownedFrameSet{
-		ids:  make(map[string]bool),
-		urls: make(map[string]bool),
+		ids: make(map[string]bool),
 	}
 	if pageWSURL == "" {
 		return out

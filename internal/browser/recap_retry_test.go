@@ -131,7 +131,7 @@ func TestRecapSummaryScopedToOwningMeetingPageOnly(t *testing.T) {
 				{
 					ID:                   "other-iframe",
 					Type:                 "iframe",
-					URL:                  "https://example.invalid/other-xplatplugins.aspx",
+					URL:                  "https://example.invalid/xplatplugins.aspx",
 					WebSocketDebuggerURL: "ws" + strings.TrimPrefix(serverURL, "http") + "/other-transcript",
 				},
 				{

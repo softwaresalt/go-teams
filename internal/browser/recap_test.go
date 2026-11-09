@@ -85,20 +85,20 @@ func TestCopyAISummaryJSStructure(t *testing.T) {
 }
 
 func TestIsTargetInCaptureScope(t *testing.T) {
+	sharedIframeURL := "https://sharepoint/xplatplugins.aspx"
 	pageA := cdpTargetInfo{ID: "page-a", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/a"}
 	pageB := cdpTargetInfo{ID: "page-b", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/b"}
-	iframeA := cdpTargetInfo{ID: "iframe-a", Type: "iframe", URL: "https://sharepoint/xplatplugins.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ia"}
-	iframeB := cdpTargetInfo{ID: "iframe-b", Type: "iframe", URL: "https://sharepoint/other.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ib"}
+	iframeA := cdpTargetInfo{ID: "iframe-a", Type: "iframe", URL: sharedIframeURL, WebSocketDebuggerURL: "ws://127.0.0.1/ia"}
+	iframeB := cdpTargetInfo{ID: "iframe-b", Type: "iframe", URL: sharedIframeURL, WebSocketDebuggerURL: "ws://127.0.0.1/ib"}
 
 	frames := ownedFrameSet{
-		ids:  map[string]bool{"iframe-a": true},
-		urls: map[string]bool{"https://sharepoint/xplatplugins.aspx": true},
+		ids: map[string]bool{"iframe-a": true},
 	}
 
 	assert.True(t, isTargetInCaptureScope(pageA, "page-a", frames))
 	assert.False(t, isTargetInCaptureScope(pageB, "page-a", frames), "unrelated page tab must be excluded")
 	assert.True(t, isTargetInCaptureScope(iframeA, "page-a", frames), "child iframe in Page.getFrameTree must be included")
-	assert.False(t, isTargetInCaptureScope(iframeB, "page-a", frames), "iframe not in Page.getFrameTree must be excluded")
+	assert.False(t, isTargetInCaptureScope(iframeB, "page-a", frames), "distinct iframe ID sharing the same URL must be excluded")
 }
 
 func TestVerifyCapturePagePresentFailsClosedWhenBoundTabDisappears(t *testing.T) {

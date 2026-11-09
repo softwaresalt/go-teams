@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -160,7 +161,37 @@ func TestRootHasSubcommands(t *testing.T) {
 	for _, c := range root.Commands() {
 		names[c.Name()] = true
 	}
-	for _, want := range []string{"auth", "join", "schedule"} {
+	for _, want := range []string{"auth", "join", "captions", "schedule"} {
 		assert.Truef(t, names[want], "missing subcommand %q", want)
 	}
+}
+
+func TestJoinFallsBackToDefaultHeadedConfigWhenConfigFileMissing(t *testing.T) {
+	var gotCfg config.Config
+	rec := &captureRecorder{}
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) {
+			return config.Config{}, os.ErrNotExist
+		},
+		newRunner: func(config.Config) browser.Runner { return &fakeRunner{} },
+		newMeeting: func(ctx context.Context, cfg config.Config, url string) (browser.Meeting, context.Context, func(), error) {
+			gotCfg = cfg
+			rec.url = url
+			return nil, ctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession { return recorderSession{rec} },
+	}
+	err := runCmd(context.Background(), d, "join", "https://teams.microsoft.com/meet/123?p=abc", "--output-dir", "custom-out")
+	require.NoError(t, err)
+	assert.True(t, rec.called)
+	assert.False(t, gotCfg.Headless, "zero-config join should default to a visible (headed) browser window for user auth")
+	assert.Equal(t, "custom-out", gotCfg.OutputDir)
+}
+
+func TestCaptionsCommandDefaultsToTeamsHomeWhenNoURLGiven(t *testing.T) {
+	rec := &captureRecorder{}
+	err := runCmd(context.Background(), depsWithCapture(&fakeRunner{}, rec), "captions")
+	require.NoError(t, err)
+	assert.True(t, rec.called)
+	assert.Contains(t, rec.url, "teams.microsoft.com")
 }

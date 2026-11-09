@@ -30,6 +30,15 @@ func TestHandleCaptionPayload(t *testing.T) {
 	// Different speaker, new final -> delivered.
 	require.NoError(t, handleCaptionPayload(`{"speaker":"Bob","text":"A new sentence."}`, dedup, sink))
 	assert.Len(t, got, 2)
+
+	// Settled unpunctuated fragment (final:true) -> delivered.
+	require.NoError(t, handleCaptionPayload(`{"speaker":"Bob","text":"Sounds good to me","final":true}`, dedup, sink))
+	require.Len(t, got, 3)
+	assert.Equal(t, [2]string{"Bob", "Sounds good to me"}, got[2])
+
+	// Duplicate settled fragment after punctuation added -> suppressed.
+	require.NoError(t, handleCaptionPayload(`{"speaker":"Bob","text":"Sounds good to me."}`, dedup, sink))
+	assert.Len(t, got, 3)
 }
 
 func TestHandleCaptionPayloadInvalidJSON(t *testing.T) {

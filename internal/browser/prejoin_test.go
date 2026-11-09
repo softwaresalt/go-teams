@@ -30,6 +30,33 @@ func TestMuteRequired(t *testing.T) {
 	assert.False(t, muteRequired(""))
 }
 
+func TestMicStateRequiresMute(t *testing.T) {
+	assert.True(t, micStateRequiresMute(true, ""))
+	assert.True(t, micStateRequiresMute(false, "true"))
+	assert.False(t, micStateRequiresMute(false, "false"))
+	assert.False(t, micStateRequiresMute(false, ""))
+}
+
+func TestClassifyPreJoinState(t *testing.T) {
+	tests := []struct {
+		name                              string
+		toolbar, lobby, prejoin, launcher bool
+		want                              PreJoinState
+	}{
+		{"admitted takes highest precedence", true, true, true, true, PreJoinAdmitted},
+		{"lobby takes precedence over prejoin", false, true, true, false, PreJoinInLobby},
+		{"prejoin ready", false, false, true, true, PreJoinReady},
+		{"launcher interstitial", false, false, false, true, PreJoinLauncher},
+		{"waiting for user auth", false, false, false, false, PreJoinWaitingForUser},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyPreJoinState(tc.toolbar, tc.lobby, tc.prejoin, tc.launcher)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestExistsJS(t *testing.T) {
 	js := existsJS(`[data-tid="x"]`)
 	assert.Contains(t, js, "querySelector")

@@ -31,6 +31,7 @@ const (
 
 var (
 	meetingIDToken = regexp.MustCompile(`meeting_[A-Za-z0-9]+`)
+	meetPathToken  = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
 	unsafeIDChars  = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
@@ -45,6 +46,9 @@ type OutputConfig struct {
 	// Now is the capture start time used for naming and the header; a zero
 	// value defaults to time.Now.
 	Now time.Time
+	// CaptionsOnly skips creating the MP3 audio output file when only live
+	// captions are being captured to Markdown.
+	CaptionsOnly bool
 }
 
 // Output is the open transcript+audio file pair for a capture session.
@@ -106,6 +110,14 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		_ = os.Remove(mdPath)
 		return nil, fmt.Errorf("capture: flush transcript header: %w", err)
 	}
+	if cfg.CaptionsOnly {
+		return &Output{
+			Transcript:     w,
+			Audio:          io.Discard,
+			TranscriptPath: mdPath,
+			mdFile:         mdFile,
+		}, nil
+	}
 	mp3File, err := os.OpenFile(mp3Path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
 	if err != nil {
 		// Best-effort rollback so a failed pair leaves no partial artifacts;
@@ -158,6 +170,8 @@ func sanitizeMeetingID(rawURL string) string {
 	}
 	if token := meetingIDToken.FindString(candidate); token != "" {
 		candidate = token
+	} else if m := meetPathToken.FindStringSubmatch(candidate); len(m) == 2 {
+		candidate = "meet-" + m[1]
 	}
 	candidate = strings.ToLower(candidate)
 	candidate = unsafeIDChars.ReplaceAllString(candidate, "-")

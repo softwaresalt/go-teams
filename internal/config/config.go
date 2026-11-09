@@ -38,11 +38,13 @@ type MeetingSchedule struct {
 
 // Config is the top-level go-teams CLI configuration.
 type Config struct {
-	OutputDir  string            `yaml:"output_dir"`
-	ProfileDir string            `yaml:"profile_dir"`
-	BotName    string            `yaml:"bot_name"`
-	Headless   bool              `yaml:"headless"`
-	Meetings   []MeetingSchedule `yaml:"meetings"`
+	OutputDir    string            `yaml:"output_dir"`
+	ProfileDir   string            `yaml:"profile_dir"`
+	BotName      string            `yaml:"bot_name"`
+	Headless     bool              `yaml:"headless"`
+	CaptureAudio bool              `yaml:"capture_audio,omitempty"`
+	BrowserPath  string            `yaml:"browser_path,omitempty"`
+	Meetings     []MeetingSchedule `yaml:"meetings"`
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default

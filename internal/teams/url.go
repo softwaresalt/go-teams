@@ -5,11 +5,12 @@ package teams
 import (
 	"fmt"
 	"net/url"
+	"strings"
 )
 
-// bypassParams are the query parameters appended to a Teams meeting URL to
-// force the web client to render the meeting SPA directly, bypassing the
-// "open in the desktop app" interstitial.
+// bypassParams are the query parameters appended to a legacy Teams
+// /l/meetup-join URL to force the web client to render the meeting SPA
+// directly, bypassing the "open in the desktop app" interstitial.
 var bypassParams = map[string]string{
 	"msLaunch":         "false",
 	"type":             "meetup-join",
@@ -38,9 +39,11 @@ func ValidateMeetingURL(raw string) error {
 	return nil
 }
 
-// MutateJoinURL appends the Teams web-client bypass parameters to raw,
-// preserving any existing query parameters. It returns an error if raw is not
-// a valid absolute HTTP(S) URL.
+// MutateJoinURL normalizes a Teams meeting URL for browser navigation. For
+// legacy /l/meetup-join links it appends the web-client bypass parameters; for
+// modern /meet/ links (and other non-legacy paths) it strips any conflicting
+// legacy "type" parameter while preserving the path, passcode token ("p"),
+// unrelated query parameters, and URL fragment.
 func MutateJoinURL(raw string) (string, error) {
 	if err := ValidateMeetingURL(raw); err != nil {
 		return "", err
@@ -50,9 +53,17 @@ func MutateJoinURL(raw string) (string, error) {
 		return "", fmt.Errorf("teams: parse meeting url: %w", err)
 	}
 	q := u.Query()
-	for k, v := range bypassParams {
-		q.Set(k, v)
+	if isLegacyMeetupJoinPath(u.Path) {
+		for k, v := range bypassParams {
+			q.Set(k, v)
+		}
+	} else {
+		q.Del("type")
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+func isLegacyMeetupJoinPath(path string) bool {
+	return path == "/l/meetup-join" || strings.HasPrefix(path, "/l/meetup-join/")
 }

@@ -26,13 +26,39 @@ encoding) is scaffolded behind interfaces and lands in follow-on releases.
 ## Commands
 
 ```text
-teams-cli auth               Sign in interactively and cache the session
-teams-cli join <meeting-url> Join a meeting immediately from a URL
-teams-cli schedule           Run as a daemon, joining meetings on a cron schedule
+teams-cli captions [meeting-url] Open a browser window, wait for user auth/call, and save live captions to Markdown
+teams-cli join <meeting-url>     Join a meeting from a URL and capture live captions (and optional audio)
+teams-cli auth                   Sign in interactively and cache the session
+teams-cli schedule               Run as a daemon, joining meetings on a cron schedule
 ```
+
+### Quick Start (Interactive Live Captions MVP)
+
+Run `teams-cli captions` (with an optional meeting link) to open a browser
+window, sign in to Microsoft Teams manually, enter your call, and automatically
+enable and record live captions to a local Markdown file:
+
+```bash
+# Open Teams in a browser window, sign in, join any call, and save captions to ./transcripts:
+go run ./cmd/teams-cli captions --output-dir ./transcripts
+
+# Or navigate directly to a specific Teams meeting URL:
+go run ./cmd/teams-cli captions "https://teams.microsoft.com/meet/..." --output-dir ./transcripts
+```
+
+Flags for `captions` and `join`:
+
+* `--output-dir`, `-o`: directory where the Markdown transcript is written
+* `--profile-dir`: browser user-data directory to persist login state across runs
+* `--bot-name`: display name injected when joining as an unauthenticated guest
+* `--browser-path`: explicit Chrome, Edge, or Brave executable path (also reads `TEAMS_BROWSER_PATH`)
+* `--headed` / `--headless`: control whether the browser window is visible
+* `--audio`: also capture tab audio to an `.mp3` file alongside the `.md` transcript
 
 A `--config` flag overrides the config file path, which defaults to the
 per-user configuration directory (for example `~/.config/teams-cli/config.yaml`).
+When no config file exists on disk, `teams-cli` uses built-in defaults and opens
+a visible browser window automatically.
 
 ## Configuration
 

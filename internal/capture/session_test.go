@@ -217,6 +217,51 @@ func TestSessionRunCaptureAudioErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestSessionRunCaptionsOnlySkipsAudioAndFlushesImmediately(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.microsoft.com/meet/123456?p=token",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: true,
+	})
+	s.now = fixedTime
+
+	fm := &fakeMeeting{
+		events:  []captionPair{{"Alice", "Real-time flushed caption."}},
+		emitted: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.Run(ctx, fm) }()
+
+	<-fm.emitted
+	// Before cancel() is called, the caption must already be flushed to disk.
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected 1 markdown file while session is active, got %v (err=%v)", entries, err)
+	}
+	liveBytes, err := os.ReadFile(dir + string(os.PathSeparator) + entries[0].Name())
+	if err != nil {
+		t.Fatalf("read live transcript: %v", err)
+	}
+	if !strings.Contains(string(liveBytes), "Real-time flushed caption.") {
+		t.Fatalf("expected caption flushed to disk before session close, got:\n%s", string(liveBytes))
+	}
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	for _, call := range fm.calls() {
+		if call == "audio" {
+			t.Fatalf("CaptureAudio must not be called when CaptionsOnly is true; calls=%v", fm.calls())
+		}
+	}
+}
+
 // failWriter fails every Write with err.
 type failWriter struct{ err error }
 

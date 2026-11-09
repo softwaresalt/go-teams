@@ -16,8 +16,13 @@ import (
 	"github.com/softwaresalt/go-teams/internal/transcript"
 )
 
-// admissionPollInterval controls how often awaitAdmission re-checks the DOM.
-const admissionPollInterval = 2 * time.Second
+// admissionPollInterval controls how often pre-join and admission loops
+// re-check the DOM.
+const (
+	admissionPollInterval = 1 * time.Second
+	captionMenuStepWait   = 5 * time.Second
+	captionMenuPoll       = 150 * time.Millisecond
+)
 
 // chromeMeeting is the chromedp-backed Meeting implementation. Its methods
 // operate on a chromedp browser context supplied by the caller so that a single
@@ -31,10 +36,12 @@ func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 }
 
 // Join implements Meeting. ctx MUST be a chromedp browser context. It validates
-// the meeting URL, navigates to it, runs the pre-join sequence (enforce mute,
-// inject the bot name, click "Join now"), then polls until admitted or ctx is
-// cancelled. Navigation failures are reported separately from pre-join
-// readiness failures.
+// the meeting URL, navigates to it, waits for user authentication or launcher
+// interstitial handling as needed, runs the pre-join sequence (enforce mute,
+// inject the bot name, click "Join now") when pre-join is shown, and polls
+// until admitted or ctx is cancelled. If the user authenticates and joins a
+// call directly in the browser window, Join detects the active call toolbar and
+// returns immediately.
 func (m *chromeMeeting) Join(ctx context.Context) error {
 	if chromedp.FromContext(ctx) == nil {
 		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
@@ -45,19 +52,65 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 	if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {
 		return fmt.Errorf("browser: navigate to meeting: %w", err)
 	}
-	if err := chromedp.Run(ctx, chromedp.WaitVisible(joinNowSel, chromedp.ByQuery)); err != nil {
-		return fmt.Errorf("browser: pre-join not visible: %w", err)
+	return m.awaitPreJoinOrAdmission(ctx)
+}
+
+func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
+	ticker := time.NewTicker(admissionPollInterval)
+	defer ticker.Stop()
+	loggedWaiting := false
+	clickedLauncher := false
+
+	for {
+		var toolbar, lobby, prejoin, launcher bool
+		if err := chromedp.Run(ctx,
+			chromedp.Evaluate(existsJS(meetingToolbarSel), &toolbar),
+			chromedp.Evaluate(containsTextJS(lobbyText), &lobby),
+			chromedp.Evaluate(existsJS(joinNowSel), &prejoin),
+			chromedp.Evaluate(existsJS(joinOnWebSel), &launcher),
+		); err != nil {
+			return fmt.Errorf("browser: pre-join not visible: %w", err)
+		}
+
+		switch classifyPreJoinState(toolbar, lobby, prejoin, launcher) {
+		case PreJoinAdmitted:
+			slog.Info("browser: admitted to meeting")
+			return nil
+		case PreJoinInLobby:
+			return m.awaitAdmission(ctx)
+		case PreJoinReady:
+			if err := m.enforceMute(ctx); err != nil {
+				return err
+			}
+			if err := m.injectName(ctx); err != nil {
+				return err
+			}
+			if err := chromedp.Run(ctx, chromedp.Click(joinNowSel, chromedp.ByQuery)); err != nil {
+				return fmt.Errorf("browser: click join now: %w", err)
+			}
+			return m.awaitAdmission(ctx)
+		case PreJoinLauncher:
+			if !clickedLauncher {
+				slog.Info("browser: launcher interstitial detected; clicking join on web")
+				if err := chromedp.Run(ctx, chromedp.Click(joinOnWebSel, chromedp.ByQuery)); err != nil {
+					slog.Warn("browser: click join on web failed; retrying", "err", err)
+				} else {
+					clickedLauncher = true
+				}
+			}
+		case PreJoinWaitingForUser:
+			if !loggedWaiting {
+				slog.Info("browser: waiting for user authentication and meeting entry in browser window")
+				loggedWaiting = true
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
+		case <-ticker.C:
+		}
 	}
-	if err := m.enforceMute(ctx); err != nil {
-		return err
-	}
-	if err := m.injectName(ctx); err != nil {
-		return err
-	}
-	if err := chromedp.Run(ctx, chromedp.Click(joinNowSel, chromedp.ByQuery)); err != nil {
-		return fmt.Errorf("browser: click join now: %w", err)
-	}
-	return m.awaitAdmission(ctx)
 }
 
 // enforceMute clicks the microphone toggle if it is currently enabled so the
@@ -75,6 +128,10 @@ func (m *chromeMeeting) enforceMute(ctx context.Context) error {
 		slog.Warn("browser: mic toggle not found; assuming muted")
 		return nil
 	}
+	var checked bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(propBoolJS(micToggleSel, "checked"), &checked)); err != nil {
+		return fmt.Errorf("browser: read mic checked property: %w", err)
+	}
 	var ariaChecked string
 	var ok bool
 	if err := chromedp.Run(ctx,
@@ -82,7 +139,7 @@ func (m *chromeMeeting) enforceMute(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("browser: read mic toggle state: %w", err)
 	}
-	if ok && muteRequired(ariaChecked) {
+	if micStateRequiresMute(checked, ariaChecked) {
 		if err := chromedp.Run(ctx, chromedp.Click(micToggleSel, chromedp.ByQuery)); err != nil {
 			return fmt.Errorf("browser: mute microphone: %w", err)
 		}
@@ -91,7 +148,7 @@ func (m *chromeMeeting) enforceMute(ctx context.Context) error {
 }
 
 // injectName types the configured bot name into the display-name input when it
-// is present (unauthenticated guest flow).
+// is present and empty (unauthenticated guest flow).
 func (m *chromeMeeting) injectName(ctx context.Context) error {
 	if m.opts.BotName == "" {
 		return nil
@@ -101,6 +158,13 @@ func (m *chromeMeeting) injectName(ctx context.Context) error {
 		return fmt.Errorf("browser: probe display-name input: %w", err)
 	}
 	if !present {
+		return nil
+	}
+	var existing string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(propStringJS(displayNameInputSel, "value"), &existing)); err != nil {
+		return fmt.Errorf("browser: read display-name input: %w", err)
+	}
+	if existing != "" {
 		return nil
 	}
 	if err := chromedp.Run(ctx,
@@ -266,17 +330,121 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 }
 
 // activateCaptions clicks through the meeting menu to turn on live captions:
-// "More actions" -> "Language and speech" -> "Turn on live captions".
+// "More actions" -> (optional "Language and speech" submenu in full client) ->
+// "Turn on live captions", then waits for the caption renderer wrapper to
+// appear. If captions are already active in the DOM, it returns immediately.
 func (m *chromeMeeting) activateCaptions(ctx context.Context) error {
+	var alreadyActive bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive)); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if alreadyActive {
+		slog.Info("browser: live captions already active")
+		return nil
+	}
+
+	if err := waitAnyPresent(ctx, captionWrapperSel, moreActionsSel); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive)); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if alreadyActive {
+		return nil
+	}
+
+	if err := chromedp.Run(ctx, chromedp.Click(moreActionsSel, chromedp.ByQuery)); err != nil {
+		return fmt.Errorf("browser: activate captions (click more): %w", err)
+	}
+
+	menuCtx, cancelMenu := context.WithTimeout(ctx, captionMenuStepWait)
+	err := waitAnyPresent(menuCtx, captionWrapperSel, turnOnCaptionsSel, languageSpeechSel)
+	cancelMenu()
+	if err != nil {
+		return fmt.Errorf("browser: activate captions (menu): %w", err)
+	}
+
+	var captionsBtn, langSubmenu bool
 	if err := chromedp.Run(ctx,
-		chromedp.Click(moreActionsSel, chromedp.ByQuery),
-		chromedp.Click(languageSpeechSel, chromedp.ByQuery),
-		chromedp.Click(turnOnCaptionsSel, chromedp.ByQuery),
-		chromedp.WaitVisible(captionWrapperSel, chromedp.ByQuery),
+		chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive),
+		chromedp.Evaluate(existsJS(turnOnCaptionsSel), &captionsBtn),
+		chromedp.Evaluate(existsJS(languageSpeechSel), &langSubmenu),
 	); err != nil {
 		return fmt.Errorf("browser: activate captions: %w", err)
 	}
-	return nil
+	if alreadyActive {
+		return nil
+	}
+
+	if !captionsBtn && langSubmenu {
+		if err := chromedp.Run(ctx, chromedp.Click(languageSpeechSel, chromedp.ByQuery)); err != nil {
+			return fmt.Errorf("browser: activate captions (language submenu): %w", err)
+		}
+		subCtx, cancelSub := context.WithTimeout(ctx, captionMenuStepWait)
+		err := waitAnyPresent(subCtx, captionWrapperSel, turnOnCaptionsSel)
+		cancelSub()
+		if err != nil {
+			return fmt.Errorf("browser: activate captions (wait captions button): %w", err)
+		}
+	}
+
+	if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive)); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if !alreadyActive {
+		if err := chromedp.Run(ctx, chromedp.Click(turnOnCaptionsSel, chromedp.ByQuery)); err != nil {
+			return fmt.Errorf("browser: activate captions (click turn on captions): %w", err)
+		}
+	}
+
+	return m.awaitCaptionWrapper(ctx)
+}
+
+func (m *chromeMeeting) awaitCaptionWrapper(ctx context.Context) error {
+	ticker := time.NewTicker(captionMenuPoll)
+	defer ticker.Stop()
+	for {
+		var wrapper, langConfirm bool
+		if err := chromedp.Run(ctx,
+			chromedp.Evaluate(existsJS(captionWrapperSel), &wrapper),
+			chromedp.Evaluate(existsJS(spokenLanguageConfirmSel), &langConfirm),
+		); err != nil {
+			return fmt.Errorf("browser: activate captions: %w", err)
+		}
+		if wrapper {
+			slog.Info("browser: live captions active")
+			return nil
+		}
+		if langConfirm {
+			_ = chromedp.Run(ctx, chromedp.Click(spokenLanguageConfirmSel, chromedp.ByQuery))
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("browser: activate captions: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitAnyPresent(ctx context.Context, selectors ...string) error {
+	ticker := time.NewTicker(captionMenuPoll)
+	defer ticker.Stop()
+	for {
+		for _, sel := range selectors {
+			var ok bool
+			if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(sel), &ok)); err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // CaptureAudio implements Meeting. It registers the sendAudioToGo CDP binding,

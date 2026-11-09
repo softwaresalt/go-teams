@@ -23,6 +23,11 @@ func TestSanitizeMeetingID(t *testing.T) {
 			want: "meeting-abc123xyz",
 		},
 		{
+			name: "teams meet url extracts meet id and omits passcode",
+			url:  "https://teams.microsoft.com/meet/234567890?p=SecretPasscode123",
+			want: "meet-234567890",
+		},
+		{
 			name: "empty url falls back to meeting",
 			url:  "",
 			want: "meeting",
@@ -147,5 +152,34 @@ func TestSetupOutputCreatesMissingDir(t *testing.T) {
 	t.Cleanup(func() { _ = out.Close() })
 	if _, statErr := os.Stat(dir); statErr != nil {
 		t.Fatalf("output dir was not created: %v", statErr)
+	}
+}
+
+func TestSetupOutputCaptionsOnlyCreatesMarkdownOnly(t *testing.T) {
+	dir := t.TempDir()
+	out, err := setupOutput(OutputConfig{
+		Dir:          dir,
+		MeetingURL:   "https://teams.microsoft.com/meet/999888777?p=secret",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("setupOutput CaptionsOnly: %v", err)
+	}
+	t.Cleanup(func() { _ = out.Close() })
+
+	if out.TranscriptPath == "" {
+		t.Fatal("expected non-empty TranscriptPath")
+	}
+	if out.AudioPath != "" {
+		t.Fatalf("expected empty AudioPath when CaptionsOnly=true, got %q", out.AudioPath)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".md") {
+		t.Fatalf("expected only one .md file in output dir, got %v", entries)
 	}
 }

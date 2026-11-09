@@ -3,6 +3,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -31,25 +33,31 @@ func defaultDeps() *deps {
 			return browser.NewChromeRunner(browser.Options{
 				UserDataDir: c.ProfileDir,
 				Headless:    c.Headless,
+				ExecPath:    c.BrowserPath,
 			})
 		},
 		newMeeting: defaultNewMeeting,
 		newSession: func(c config.Config, meetingURL string) meetingSession {
 			return capture.NewSession(capture.SessionConfig{
-				OutputDir:  c.OutputDir,
-				MeetingURL: meetingURL,
-				BotName:    c.BotName,
+				OutputDir:    c.OutputDir,
+				MeetingURL:   meetingURL,
+				BotName:      c.BotName,
+				CaptionsOnly: !c.CaptureAudio,
 			})
 		},
 	}
 }
 
-// defaultNewMeeting allocates a headless Chromium context for automated capture
-// and returns a chromedp-backed Meeting bound to it. The cleanup func cancels
-// the browser and allocator contexts, terminating the spawned Chromium process.
+// defaultNewMeeting allocates a Chromium context for meeting capture and
+// returns a chromedp-backed Meeting bound to it. The cleanup func cancels the
+// browser and allocator contexts, terminating the spawned Chromium process.
 func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
 	return browser.NewLiveMeeting(ctx,
-		browser.Options{UserDataDir: c.ProfileDir, Headless: true},
+		browser.Options{
+			UserDataDir: c.ProfileDir,
+			Headless:    c.Headless,
+			ExecPath:    c.BrowserPath,
+		},
 		browser.MeetingOptions{MeetingURL: meetingURL, BotName: c.BotName})
 }
 
@@ -71,13 +79,17 @@ func newRootCommand(d *deps) *cobra.Command {
 	root.AddCommand(
 		newAuthCommand(d, &configPath),
 		newJoinCommand(d, &configPath),
+		newCaptionsCommand(d, &configPath),
 		newScheduleCommand(d, &configPath),
 	)
 	return root
 }
 
 // loadConfigFrom resolves the effective config path (falling back to the
-// default location) and loads it via the injected loader.
+// default location) and loads it via the injected loader. When no --config path
+// was explicitly specified and the default config file does not exist on disk,
+// it falls back to DefaultConfig with Headless=false so the CLI opens a visible
+// browser window for interactive user authentication out of the box.
 func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 	path := configPath
 	if path == "" {
@@ -87,5 +99,17 @@ func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 		}
 		path = p
 	}
-	return d.loadConfig(path)
+	cfg, err := d.loadConfig(path)
+	if err != nil {
+		if configPath == "" && errors.Is(err, os.ErrNotExist) {
+			def, defErr := config.DefaultConfig()
+			if defErr != nil {
+				return config.Config{}, defErr
+			}
+			def.Headless = false
+			return def, nil
+		}
+		return config.Config{}, err
+	}
+	return cfg, nil
 }

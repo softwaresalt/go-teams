@@ -6,6 +6,7 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/chromedp/chromedp"
 )
@@ -80,9 +81,15 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, allocOpts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cleanup := func() {
-		_ = chromedp.Cancel(browserCtx)
+		launched := false
+		if c := chromedp.FromContext(browserCtx); c != nil && c.Browser != nil {
+			launched = true
+		}
 		cancelBrowser()
 		cancelAlloc()
+		if launched {
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
 	return cm, browserCtx, cleanup, nil
 }

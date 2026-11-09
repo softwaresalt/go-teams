@@ -87,11 +87,26 @@ func TestCopyAISummaryJSStructure(t *testing.T) {
 func TestIsTargetInCaptureScope(t *testing.T) {
 	pageA := cdpTargetInfo{ID: "page-a", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/a"}
 	pageB := cdpTargetInfo{ID: "page-b", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/b"}
-	iframeA := cdpTargetInfo{ID: "iframe-a", ParentID: "page-a", Type: "iframe", URL: "https://sharepoint/xplatplugins.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ia"}
-	iframeB := cdpTargetInfo{ID: "iframe-b", ParentID: "page-b", Type: "iframe", URL: "https://sharepoint/xplatplugins.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ib"}
+	iframeA := cdpTargetInfo{ID: "iframe-a", Type: "iframe", URL: "https://sharepoint/xplatplugins.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ia"}
+	iframeB := cdpTargetInfo{ID: "iframe-b", Type: "iframe", URL: "https://sharepoint/other.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ib"}
 
-	assert.True(t, isTargetInCaptureScope(pageA, "page-a"))
-	assert.False(t, isTargetInCaptureScope(pageB, "page-a"), "unrelated page tab must be excluded")
-	assert.True(t, isTargetInCaptureScope(iframeA, "page-a"), "child iframe of capture page must be included")
-	assert.False(t, isTargetInCaptureScope(iframeB, "page-a"), "iframe belonging to another tab must be excluded")
+	frames := ownedFrameSet{
+		ids:  map[string]bool{"iframe-a": true},
+		urls: map[string]bool{"https://sharepoint/xplatplugins.aspx": true},
+	}
+
+	assert.True(t, isTargetInCaptureScope(pageA, "page-a", frames))
+	assert.False(t, isTargetInCaptureScope(pageB, "page-a", frames), "unrelated page tab must be excluded")
+	assert.True(t, isTargetInCaptureScope(iframeA, "page-a", frames), "child iframe in Page.getFrameTree must be included")
+	assert.False(t, isTargetInCaptureScope(iframeB, "page-a", frames), "iframe not in Page.getFrameTree must be excluded")
+}
+
+func TestVerifyCapturePagePresentFailsClosedWhenBoundTabDisappears(t *testing.T) {
+	m := &chromeMeeting{capturePageID: "created-tab"}
+	targets := []cdpTargetInfo{
+		{ID: "restored-other-tab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/other"},
+	}
+	_, ok := m.findBoundCapturePage(targets)
+	assert.False(t, ok, "must fail closed when bound capturePageID disappears rather than switching to another tab")
+	assert.Equal(t, "created-tab", m.capturePageID, "capturePageID must not be cleared or reassigned")
 }

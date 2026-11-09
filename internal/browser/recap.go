@@ -110,10 +110,24 @@ const copyAISummaryJS = `(async () => {
 	return copiedText;
 })()`
 
+// ownedFrameSet holds the frame IDs and URLs belonging to a specific page
+// target's frame tree (obtained via Page.getFrameTree).
+type ownedFrameSet struct {
+	ids  map[string]bool
+	urls map[string]bool
+}
+
+func (s ownedFrameSet) contains(t cdpTargetInfo) bool {
+	if s.ids[t.ID] {
+		return true
+	}
+	return t.URL != "" && s.urls[t.URL]
+}
+
 // isTargetInCaptureScope reports whether t belongs to the active capture page
-// (either the page tab itself or one of its child iframes) so unrelated open or
-// restored browser tabs are never scraped or attached.
-func isTargetInCaptureScope(t cdpTargetInfo, capturePageID string) bool {
+// (either the page tab itself or one of its child iframes in ownedFrames) so
+// unrelated open or restored browser tabs are never scraped or attached.
+func isTargetInCaptureScope(t cdpTargetInfo, capturePageID string, ownedFrames ownedFrameSet) bool {
 	if (t.Type != "page" && t.Type != "iframe") || t.WebSocketDebuggerURL == "" {
 		return false
 	}
@@ -126,7 +140,127 @@ func isTargetInCaptureScope(t cdpTargetInfo, capturePageID string) bool {
 	if t.Type == "page" {
 		return t.ID == capturePageID
 	}
-	return t.ParentID == capturePageID
+	return ownedFrames.contains(t)
+}
+
+type cdpFrameTreeNode struct {
+	Frame struct {
+		ID  string `json:"id"`
+		URL string `json:"url"`
+	} `json:"frame"`
+	ChildFrames []cdpFrameTreeNode `json:"childFrames"`
+}
+
+func collectFrameTree(node cdpFrameTreeNode, out *ownedFrameSet) {
+	if node.Frame.ID != "" {
+		out.ids[node.Frame.ID] = true
+	}
+	if node.Frame.URL != "" {
+		out.urls[node.Frame.URL] = true
+	}
+	for _, child := range node.ChildFrames {
+		collectFrameTree(child, out)
+	}
+}
+
+func fetchOwnedFrames(ctx context.Context, pageWSURL string) ownedFrameSet {
+	out := ownedFrameSet{
+		ids:  make(map[string]bool),
+		urls: make(map[string]bool),
+	}
+	if pageWSURL == "" {
+		return out
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, _, _, err := ws.Dial(dialCtx, pageWSURL)
+	if err != nil {
+		return out
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	req := map[string]any{
+		"id":     1,
+		"method": "Page.getFrameTree",
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return out
+	}
+	if err := wsutil.WriteClientText(conn, payload); err != nil {
+		return out
+	}
+	for {
+		msg, _, err := wsutil.ReadServerData(conn)
+		if err != nil {
+			return out
+		}
+		var resp struct {
+			ID     int `json:"id"`
+			Result struct {
+				FrameTree cdpFrameTreeNode `json:"frameTree"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == 1 {
+			collectFrameTree(resp.Result.FrameTree, &out)
+			return out
+		}
+	}
+}
+
+func createCDPPageTarget(ctx context.Context, browserWSURL, initialURL string) (string, error) {
+	if initialURL == "" {
+		initialURL = "about:blank"
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, _, _, err := ws.Dial(dialCtx, browserWSURL)
+	if err != nil {
+		return "", fmt.Errorf("browser: dial browser websocket: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	req := map[string]any{
+		"id":     1,
+		"method": "Target.createTarget",
+		"params": map[string]any{
+			"url": initialURL,
+		},
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+	if err := wsutil.WriteClientText(conn, payload); err != nil {
+		return "", err
+	}
+	for {
+		msg, _, err := wsutil.ReadServerData(conn)
+		if err != nil {
+			return "", err
+		}
+		var resp struct {
+			ID    int `json:"id"`
+			Error *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+			Result struct {
+				TargetID string `json:"targetId"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == 1 {
+			if resp.Error != nil {
+				return "", fmt.Errorf("browser: Target.createTarget error %d: %s", resp.Error.Code, resp.Error.Message)
+			}
+			if resp.Result.TargetID == "" {
+				return "", fmt.Errorf("browser: Target.createTarget returned empty targetId")
+			}
+			return resp.Result.TargetID, nil
+		}
+	}
 }
 
 func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID string) string {
@@ -169,7 +303,6 @@ func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID stri
 
 type cdpTargetInfo struct {
 	ID                   string `json:"id"`
-	ParentID             string `json:"parentId"`
 	Type                 string `json:"type"`
 	Title                string `json:"title"`
 	URL                  string `json:"url"`
@@ -322,34 +455,36 @@ func parseRecapEntriesPayload(raw string) ([]RecapTranscriptEntry, error) {
 	return out, nil
 }
 
-func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, <-chan struct{}, func(), error) {
+func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, string, <-chan struct{}, func(), error) {
 	execPath := ResolveExecPath(opts.ExecPath)
 	if execPath == "" {
-		return 0, "", nil, nil, fmt.Errorf("browser: no Chromium-based browser executable found")
+		return 0, "", "", nil, nil, fmt.Errorf("browser: no Chromium-based browser executable found")
 	}
 	var absProfile string
 	if opts.UserDataDir != "" {
 		abs, err := filepath.Abs(opts.UserDataDir)
 		if err != nil {
-			return 0, "", nil, nil, fmt.Errorf("browser: resolve profile dir: %w", err)
+			return 0, "", "", nil, nil, fmt.Errorf("browser: resolve profile dir: %w", err)
 		}
 		if err := os.MkdirAll(abs, 0o700); err != nil {
-			return 0, "", nil, nil, fmt.Errorf("browser: create profile dir: %w", err)
+			return 0, "", "", nil, nil, fmt.Errorf("browser: create profile dir: %w", err)
 		}
 		absProfile = abs
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, "", nil, nil, fmt.Errorf("browser: allocate debugging port: %w", err)
+		return 0, "", "", nil, nil, fmt.Errorf("browser: allocate debugging port: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 
-	args := cleanBrowserArgs(port, absProfile, opts.Headless, initialURL)
+	// Start with about:blank and explicitly create the capture tab via
+	// Target.createTarget so its exact targetId is known before any redirect.
+	args := cleanBrowserArgs(port, absProfile, opts.Headless, "about:blank")
 	cmd := exec.Command(execPath, args...)
 	if err := cmd.Start(); err != nil {
-		return 0, "", nil, nil, fmt.Errorf("browser: start browser: %w", err)
+		return 0, "", "", nil, nil, fmt.Errorf("browser: start browser: %w", err)
 	}
 	procDone := make(chan struct{})
 	go func() {
@@ -369,10 +504,15 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, <-c
 	wsURL, err := waitForCDPBrowserWS(port, 20*time.Second)
 	if err != nil {
 		cleanup()
-		return 0, "", nil, nil, err
+		return 0, "", "", nil, nil, err
 	}
-	slog.Info("browser: launched clean browser", "pid", cmd.Process.Pid, "cdp_port", port, "headless", opts.Headless)
-	return port, wsURL, procDone, cleanup, nil
+	targetID, err := createCDPPageTarget(context.Background(), wsURL, initialURL)
+	if err != nil {
+		cleanup()
+		return 0, "", "", nil, nil, err
+	}
+	slog.Info("browser: launched clean browser", "pid", cmd.Process.Pid, "cdp_port", port, "target_id", targetID, "headless", opts.Headless)
+	return port, wsURL, targetID, procDone, cleanup, nil
 }
 
 func waitForCDPBrowserWS(port int, timeout time.Duration) (string, error) {

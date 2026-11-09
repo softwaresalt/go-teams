@@ -119,12 +119,20 @@ func TestRecapSummaryScopedToOwningMeetingPageOnly(t *testing.T) {
 	var serverURL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/json/list" {
+			// Real Chrome /json/list descriptors do not include parentId;
+			// iframe ownership is resolved via Page.getFrameTree on target-tab.
 			targets := []cdpTargetInfo{
 				{
 					ID:                   "other-tab",
 					Type:                 "page",
 					URL:                  "https://teams.cloud.microsoft/l/meetingrecap?other=1",
 					WebSocketDebuggerURL: "ws" + strings.TrimPrefix(serverURL, "http") + "/other-summary",
+				},
+				{
+					ID:                   "other-iframe",
+					Type:                 "iframe",
+					URL:                  "https://example.invalid/other-xplatplugins.aspx",
+					WebSocketDebuggerURL: "ws" + strings.TrimPrefix(serverURL, "http") + "/other-transcript",
 				},
 				{
 					ID:                   "target-tab",
@@ -134,7 +142,6 @@ func TestRecapSummaryScopedToOwningMeetingPageOnly(t *testing.T) {
 				},
 				{
 					ID:                   "target-iframe",
-					ParentID:             "target-tab",
 					Type:                 "iframe",
 					URL:                  "https://example.invalid/xplatplugins.aspx",
 					WebSocketDebuggerURL: "ws" + strings.TrimPrefix(serverURL, "http") + "/transcript",
@@ -149,12 +156,44 @@ func TestRecapSummaryScopedToOwningMeetingPageOnly(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		if _, _, err := wsutil.ReadClientData(conn); err != nil {
+		reqBytes, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
 			t.Errorf("read: %v", err)
+			return
+		}
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(reqBytes, &req)
+		if req.Method == "Page.getFrameTree" {
+			frameTreeResp := map[string]any{
+				"id": req.ID,
+				"result": map[string]any{
+					"frameTree": map[string]any{
+						"frame": map[string]any{
+							"id":  "target-tab",
+							"url": "https://teams.cloud.microsoft/l/meetingrecap?target=1",
+						},
+						"childFrames": []map[string]any{
+							{
+								"frame": map[string]any{
+									"id":  "target-iframe",
+									"url": "https://example.invalid/xplatplugins.aspx",
+								},
+							},
+						},
+					},
+				},
+			}
+			b, _ := json.Marshal(frameTreeResp)
+			_ = wsutil.WriteServerText(conn, b)
 			return
 		}
 		var value string
 		switch r.URL.Path {
+		case "/other-transcript":
+			value = `{"entries":[{"speaker":"Wrong","timestamp":"PT1S","text":"Wrong transcript"}]}`
 		case "/transcript":
 			value = `{"entries":[{"speaker":"Presenter","timestamp":"PT1S","text":"Target transcript"}]}`
 		case "/other-summary":
@@ -163,7 +202,7 @@ func TestRecapSummaryScopedToOwningMeetingPageOnly(t *testing.T) {
 			value = "TARGET MEETING SUMMARY"
 		}
 		payload, _ := json.Marshal(map[string]any{
-			"id": 1, "result": map[string]any{"result": map[string]string{"value": value}},
+			"id": req.ID, "result": map[string]any{"result": map[string]string{"value": value}},
 		})
 		_ = wsutil.WriteServerText(conn, payload)
 	}))
@@ -176,6 +215,8 @@ func TestRecapSummaryScopedToOwningMeetingPageOnly(t *testing.T) {
 
 	m := &chromeMeeting{capturePageID: "target-tab"}
 	require.True(t, m.tryExtractRecapViaCDP(context.Background(), port))
+	require.Len(t, m.recapEntries, 1)
+	require.Equal(t, "Target transcript", m.recapEntries[0].Text)
 	require.Equal(t, "TARGET MEETING SUMMARY", m.AISummary(),
 		"AI summary must be captured strictly from the owning meeting tab, never another open tab")
 }

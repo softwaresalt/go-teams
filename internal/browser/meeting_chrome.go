@@ -87,10 +87,11 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 }
 
 func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
-	port, wsURL, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, m.opts.MeetingURL)
+	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, m.opts.MeetingURL)
 	if err != nil {
 		return err
 	}
+	m.capturePageID = targetID
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, wsURL)
 	m.headedMu.Lock()
 	m.headedStop = func() {
@@ -106,6 +107,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 	clickedLauncher := false
 	reNavigatedRecap := false
 	consecutiveListFailures := 0
+	missingTargetPolls := 0
 
 	for {
 		targets, err := listCDPTargets(port)
@@ -121,34 +123,36 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 			}
 		} else {
 			consecutiveListFailures = 0
-			m.bindCapturePageID(targets)
-			var mainPage *cdpTargetInfo
-			for i := range targets {
-				t := &targets[i]
-				if !isTargetInCaptureScope(*t, m.capturePageID) {
-					continue
+			mainPage, found := m.findBoundCapturePage(targets)
+			if !found {
+				missingTargetPolls++
+				if missingTargetPolls >= 3 {
+					return fmt.Errorf("browser: capture tab %s was closed before meeting admission", m.capturePageID)
 				}
-				if t.Type == "page" && mainPage == nil {
-					mainPage = t
-				}
+			} else {
+				missingTargetPolls = 0
+				ownedFrames := fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
+				for i := range targets {
+					t := &targets[i]
+					if !isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) {
+						continue
+					}
 
-				// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
-				// has a Meeting Recap transcript list populated.
-				if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-					if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
-						m.recapEntries = entries
-						slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
-						ownerPageID := m.resolveRecapOwnerPageID(*t)
-						if summary := captureAISummaryFromTargets(ctx, port, ownerPageID); summary != "" {
-							m.aiSummary = summary
-							slog.Info("browser: copied AI summary from meeting recap")
+					// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
+					// has a Meeting Recap transcript list populated.
+					if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
+						if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
+							m.recapEntries = entries
+							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
+							if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
+								m.aiSummary = summary
+								slog.Info("browser: copied AI summary from meeting recap")
+							}
+							return nil
 						}
-						return nil
 					}
 				}
-			}
 
-			if mainPage != nil {
 				stateRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `JSON.stringify({
 					host: location.host,
 					path: location.pathname,
@@ -216,47 +220,20 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 	}
 }
 
-func (m *chromeMeeting) bindCapturePageID(targets []cdpTargetInfo) {
-	if m.capturePageID != "" {
-		for _, t := range targets {
-			if t.Type == "page" && t.ID == m.capturePageID {
-				return
-			}
-		}
-		m.capturePageID = ""
+// findBoundCapturePage locates the page target bound to m.capturePageID. It
+// fails closed (returning nil, false without clearing or reassigning
+// m.capturePageID) if the bound tab disappears from the target list.
+func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTargetInfo, bool) {
+	if m.capturePageID == "" {
+		return nil, false
 	}
-	for _, t := range targets {
-		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
-			continue
-		}
-		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
-			continue
-		}
-		if m.opts.MeetingURL != "" && (t.URL == m.opts.MeetingURL || strings.Contains(t.URL, "/dl/launcher/")) {
-			m.capturePageID = t.ID
-			return
+	for i := range targets {
+		t := &targets[i]
+		if t.Type == "page" && t.ID == m.capturePageID && t.WebSocketDebuggerURL != "" {
+			return t, true
 		}
 	}
-	for _, t := range targets {
-		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
-			continue
-		}
-		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
-			continue
-		}
-		m.capturePageID = t.ID
-		return
-	}
-}
-
-func (m *chromeMeeting) resolveRecapOwnerPageID(t cdpTargetInfo) string {
-	if t.Type == "page" && t.ID != "" {
-		return t.ID
-	}
-	if t.ParentID != "" {
-		return t.ParentID
-	}
-	return m.capturePageID
+	return nil, false
 }
 
 func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
@@ -335,16 +312,23 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 	if err != nil {
 		return false
 	}
+	var ownedFrames ownedFrameSet
+	if m.capturePageID != "" {
+		mainPage, ok := m.findBoundCapturePage(targets)
+		if !ok {
+			return false
+		}
+		ownedFrames = fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
+	}
 	for _, t := range targets {
-		if !isTargetInCaptureScope(t, m.capturePageID) {
+		if !isTargetInCaptureScope(t, m.capturePageID, ownedFrames) {
 			continue
 		}
 		if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
 			if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
 				m.recapEntries = entries
 				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
-				ownerPageID := m.resolveRecapOwnerPageID(t)
-				if summary := captureAISummaryFromTargets(ctx, port, ownerPageID); summary != "" {
+				if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
 					m.aiSummary = summary
 					slog.Info("browser: copied AI summary from meeting recap")
 				}

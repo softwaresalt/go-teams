@@ -64,6 +64,14 @@ func TestCaptionsCommandEndToEndWritesMarkdownFile(t *testing.T) {
 
 	outDir := t.TempDir()
 	profileDir := t.TempDir()
+	t.Cleanup(func() {
+		for range 10 {
+			if os.RemoveAll(profileDir) == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

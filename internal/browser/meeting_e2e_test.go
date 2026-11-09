@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -126,6 +127,14 @@ func TestChromeMeetingEndToEnd(t *testing.T) {
 	defer srv.Close()
 
 	profileDir := t.TempDir()
+	t.Cleanup(func() {
+		for range 10 {
+			if os.RemoveAll(profileDir) == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
 	m, bctx, cleanup, err := NewLiveMeeting(
 		context.Background(),
 		Options{UserDataDir: profileDir, Headless: true},

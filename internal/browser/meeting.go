@@ -80,6 +80,7 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, allocOpts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cleanup := func() {
+		_ = chromedp.Cancel(browserCtx)
 		cancelBrowser()
 		cancelAlloc()
 	}

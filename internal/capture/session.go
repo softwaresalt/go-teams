@@ -63,13 +63,18 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		return fmt.Errorf("capture: join: %w", joinErr)
 	}
 
+	captionsOnly := s.cfg.CaptionsOnly
+	if rm, ok := m.(browser.RecapMeeting); ok && rm.IsRecap() {
+		captionsOnly = true
+	}
+
 	out, err := s.setupOutput(OutputConfig{
 		Dir:          s.cfg.OutputDir,
 		FilePath:     s.cfg.OutputFile,
 		MeetingURL:   s.cfg.MeetingURL,
 		BotName:      s.cfg.BotName,
 		Now:          s.cfg.Now,
-		CaptionsOnly: s.cfg.CaptionsOnly,
+		CaptionsOnly: captionsOnly,
 	})
 	if err != nil {
 		return err
@@ -134,7 +139,7 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 			setErr(fmt.Errorf("capture: captions: %w", e))
 		}
 	}()
-	if !s.cfg.CaptionsOnly {
+	if !captionsOnly {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

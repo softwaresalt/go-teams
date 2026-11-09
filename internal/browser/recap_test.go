@@ -79,5 +79,19 @@ func TestCopyAISummaryJSStructure(t *testing.T) {
 	assert.Contains(t, copyAISummaryJS, `data-tid="Notes"`)
 	assert.Contains(t, copyAISummaryJS, `data-tid="AINotes"`)
 	assert.Contains(t, copyAISummaryJS, `aria-label="Copy all"`)
+	assert.NotContains(t, copyAISummaryJS, `aria-label*="Copy"`,
+		"summary lookup must be restricted to the AI summary Copy all control")
 	assert.Contains(t, copyAISummaryJS, `navigator.clipboard`)
+}
+
+func TestIsTargetInCaptureScope(t *testing.T) {
+	pageA := cdpTargetInfo{ID: "page-a", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/a"}
+	pageB := cdpTargetInfo{ID: "page-b", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/b"}
+	iframeA := cdpTargetInfo{ID: "iframe-a", ParentID: "page-a", Type: "iframe", URL: "https://sharepoint/xplatplugins.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ia"}
+	iframeB := cdpTargetInfo{ID: "iframe-b", ParentID: "page-b", Type: "iframe", URL: "https://sharepoint/xplatplugins.aspx", WebSocketDebuggerURL: "ws://127.0.0.1/ib"}
+
+	assert.True(t, isTargetInCaptureScope(pageA, "page-a"))
+	assert.False(t, isTargetInCaptureScope(pageB, "page-a"), "unrelated page tab must be excluded")
+	assert.True(t, isTargetInCaptureScope(iframeA, "page-a"), "child iframe of capture page must be included")
+	assert.False(t, isTargetInCaptureScope(iframeB, "page-a"), "iframe belonging to another tab must be excluded")
 }

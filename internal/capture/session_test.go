@@ -27,6 +27,7 @@ type fakeMeeting struct {
 	joinErr   error
 	audioErr  error
 	aiSummary string
+	isRecap   bool
 
 	events []captionPair
 
@@ -38,6 +39,10 @@ type fakeMeeting struct {
 
 func (f *fakeMeeting) AISummary() string {
 	return f.aiSummary
+}
+
+func (f *fakeMeeting) IsRecap() bool {
+	return f.isRecap
 }
 
 func (f *fakeMeeting) mark(s string) {
@@ -64,6 +69,9 @@ func (f *fakeMeeting) EnableCaptions(ctx context.Context, sink browser.CaptionSi
 	}
 	if f.emitted != nil {
 		close(f.emitted)
+	}
+	if f.isRecap {
+		return nil
 	}
 	<-ctx.Done()
 	return nil
@@ -305,6 +313,39 @@ func TestSessionRunAppendsAISummaryWhenProvided(t *testing.T) {
 	md := string(b)
 	if !strings.Contains(md, "# AI Summary") || !strings.Contains(md, "Discussed key items.") {
 		t.Fatalf("expected appended AI Summary in markdown, got:\n%s", md)
+	}
+}
+
+func TestSessionRunRecapModeSkipsAudioEvenWhenCaptionsOnlyFalse(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.cloud.microsoft/l/meetingrecap?threadId=1",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: false, // Even if audio was requested, Recap mode must skip live audio capture.
+	})
+	s.now = fixedTime
+
+	fm := &fakeMeeting{
+		isRecap:        true,
+		events:         []captionPair{{"Alice", "Recap line."}},
+		aiSummary:      "Meeting notes:\nScope:\nAgreed on scope.\n",
+		audioErr:       errors.New("audio should not be called in recap mode"),
+		audioReturnNow: true,
+	}
+
+	if err := s.Run(context.Background(), fm); err != nil {
+		t.Fatalf("Run in recap mode failed: %v", err)
+	}
+	for _, call := range fm.calls() {
+		if call == "audio" {
+			t.Fatalf("CaptureAudio must not be called in recap mode; calls=%v", fm.calls())
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".md") {
+		t.Fatalf("expected only 1 .md file in recap mode, got %v", entries)
 	}
 }
 

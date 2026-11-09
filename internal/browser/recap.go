@@ -44,6 +44,13 @@ type AISummaryProvider interface {
 	AISummary() string
 }
 
+// RecapMeeting is an optional interface implemented by Meeting values that
+// report whether the joined session is a Meeting Recap export rather than a
+// live call.
+type RecapMeeting interface {
+	IsRecap() bool
+}
+
 // copyAISummaryJS navigates to the Notes -> AI summary tab on the Teams Meeting
 // Recap page, hooks clipboard writes (navigator.clipboard and document copy
 // events), clicks the "Copy all" button on the AI summary, and returns the
@@ -59,7 +66,7 @@ const copyAISummaryJS = `(async () => {
 		aiNotesTab.click();
 		await new Promise(r => setTimeout(r, 300));
 	}
-	const copyBtn = document.querySelector('button[aria-label="Copy all"], button[aria-label*="Copy" i]');
+	const copyBtn = document.querySelector('button[aria-label="Copy all"]');
 	if (!copyBtn) {
 		return '';
 	}
@@ -103,7 +110,26 @@ const copyAISummaryJS = `(async () => {
 	return copiedText;
 })()`
 
-func captureAISummaryFromTargets(ctx context.Context, port int) string {
+// isTargetInCaptureScope reports whether t belongs to the active capture page
+// (either the page tab itself or one of its child iframes) so unrelated open or
+// restored browser tabs are never scraped or attached.
+func isTargetInCaptureScope(t cdpTargetInfo, capturePageID string) bool {
+	if (t.Type != "page" && t.Type != "iframe") || t.WebSocketDebuggerURL == "" {
+		return false
+	}
+	if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+		return false
+	}
+	if capturePageID == "" {
+		return true
+	}
+	if t.Type == "page" {
+		return t.ID == capturePageID
+	}
+	return t.ParentID == capturePageID
+}
+
+func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID string) string {
 	for attempt := 0; attempt < 20; attempt++ {
 		if ctx.Err() != nil {
 			return ""
@@ -117,6 +143,9 @@ func captureAISummaryFromTargets(ctx context.Context, port int) string {
 					continue
 				}
 				if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+					continue
+				}
+				if ownerPageID != "" && t.ID != ownerPageID {
 					continue
 				}
 				if raw, err := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, copyAISummaryJS); err == nil && strings.TrimSpace(raw) != "" {
@@ -140,6 +169,7 @@ func captureAISummaryFromTargets(ctx context.Context, port int) string {
 
 type cdpTargetInfo struct {
 	ID                   string `json:"id"`
+	ParentID             string `json:"parentId"`
 	Type                 string `json:"type"`
 	Title                string `json:"title"`
 	URL                  string `json:"url"`
@@ -292,26 +322,26 @@ func parseRecapEntriesPayload(raw string) ([]RecapTranscriptEntry, error) {
 	return out, nil
 }
 
-func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, func(), error) {
+func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, <-chan struct{}, func(), error) {
 	execPath := ResolveExecPath(opts.ExecPath)
 	if execPath == "" {
-		return 0, "", nil, fmt.Errorf("browser: no Chromium-based browser executable found")
+		return 0, "", nil, nil, fmt.Errorf("browser: no Chromium-based browser executable found")
 	}
 	var absProfile string
 	if opts.UserDataDir != "" {
 		abs, err := filepath.Abs(opts.UserDataDir)
 		if err != nil {
-			return 0, "", nil, fmt.Errorf("browser: resolve profile dir: %w", err)
+			return 0, "", nil, nil, fmt.Errorf("browser: resolve profile dir: %w", err)
 		}
 		if err := os.MkdirAll(abs, 0o700); err != nil {
-			return 0, "", nil, fmt.Errorf("browser: create profile dir: %w", err)
+			return 0, "", nil, nil, fmt.Errorf("browser: create profile dir: %w", err)
 		}
 		absProfile = abs
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, "", nil, fmt.Errorf("browser: allocate debugging port: %w", err)
+		return 0, "", nil, nil, fmt.Errorf("browser: allocate debugging port: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
@@ -319,25 +349,30 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, fun
 	args := cleanBrowserArgs(port, absProfile, opts.Headless, initialURL)
 	cmd := exec.Command(execPath, args...)
 	if err := cmd.Start(); err != nil {
-		return 0, "", nil, fmt.Errorf("browser: start browser: %w", err)
+		return 0, "", nil, nil, fmt.Errorf("browser: start browser: %w", err)
 	}
+	procDone := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(procDone)
+	}()
 	cleanup := func() {
 		if cmd.Process != nil {
 			if runtime.GOOS == "windows" {
 				_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
 			}
 			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+			<-procDone
 		}
 	}
 
 	wsURL, err := waitForCDPBrowserWS(port, 20*time.Second)
 	if err != nil {
 		cleanup()
-		return 0, "", nil, err
+		return 0, "", nil, nil, err
 	}
 	slog.Info("browser: launched clean browser", "pid", cmd.Process.Pid, "cdp_port", port, "headless", opts.Headless)
-	return port, wsURL, cleanup, nil
+	return port, wsURL, procDone, cleanup, nil
 }
 
 func waitForCDPBrowserWS(port int, timeout time.Duration) (string, error) {
@@ -407,18 +442,29 @@ func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
 			return "", err
 		}
 		var resp struct {
-			ID     int `json:"id"`
+			ID    int `json:"id"`
+			Error *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
 			Result struct {
 				Result struct {
-					Value any `json:"value"`
+					Type  string `json:"type"`
+					Value any    `json:"value"`
 				} `json:"result"`
 				ExceptionDetails any `json:"exceptionDetails"`
 			} `json:"result"`
 		}
 		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == 1 {
+			if resp.Error != nil {
+				return "", fmt.Errorf("browser: cdp error %d: %s", resp.Error.Code, resp.Error.Message)
+			}
 			if resp.Result.ExceptionDetails != nil {
 				eb, _ := json.Marshal(resp.Result.ExceptionDetails)
 				return "", fmt.Errorf("browser: js exception: %s", string(eb))
+			}
+			if resp.Result.Result.Value == nil {
+				return "", nil
 			}
 			if s, ok := resp.Result.Result.Value.(string); ok {
 				return s, nil

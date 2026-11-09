@@ -55,27 +55,31 @@ const captionObserverJS = `(() => {
   };
   const inspectBlock = (el, root) => {
     const text = (el.textContent || '').trim();
-    if (!text || lastSent.get(el) === text) { return; }
+    if (!text) { return; }
     const speaker = findSpeaker(el, root);
+    const stateKey = speaker + '\x00' + text;
+    if (lastSent.get(el) === stateKey) { return; }
     if (/[.!?]$/.test(text)) {
       const prevTimer = timers.get(el);
       if (prevTimer) { clearTimeout(prevTimer); timers.delete(el); }
       pendingText.delete(el);
-      lastSent.set(el, text);
+      lastSent.set(el, stateKey);
       window.sendCaptionToGo(JSON.stringify({ speaker: speaker, text: text }));
       return;
     }
-    if (pendingText.get(el) === text && timers.has(el)) { return; }
+    if (pendingText.get(el) === stateKey && timers.has(el)) { return; }
     const prevTimer = timers.get(el);
     if (prevTimer) { clearTimeout(prevTimer); }
-    pendingText.set(el, text);
+    pendingText.set(el, stateKey);
     const timer = setTimeout(() => {
       timers.delete(el);
       pendingText.delete(el);
       const settledText = (el.textContent || '').trim();
-      if (!settledText || lastSent.get(el) === settledText) { return; }
+      if (!settledText) { return; }
       const settledSpeaker = findSpeaker(el, root) || speaker;
-      lastSent.set(el, settledText);
+      const settledKey = settledSpeaker + '\x00' + settledText;
+      if (lastSent.get(el) === settledKey) { return; }
+      lastSent.set(el, settledKey);
       window.sendCaptionToGo(JSON.stringify({ speaker: settledSpeaker, text: settledText, final: true }));
     }, 1500);
     timers.set(el, timer);

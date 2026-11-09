@@ -31,14 +31,15 @@ const (
 // operate on a chromedp browser context supplied by the caller so that a single
 // browser session spans join, captions, and audio.
 type chromeMeeting struct {
-	opts         MeetingOptions
-	headedOpts   *Options
-	cdpPort      int
-	headedMu     sync.Mutex
-	headedStop   func()
-	attachedCtx  context.Context
-	recapEntries []RecapTranscriptEntry
-	aiSummary    string
+	opts          MeetingOptions
+	headedOpts    *Options
+	cdpPort       int
+	capturePageID string
+	headedMu      sync.Mutex
+	headedStop    func()
+	attachedCtx   context.Context
+	recapEntries  []RecapTranscriptEntry
+	aiSummary     string
 }
 
 func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
@@ -48,6 +49,11 @@ func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 // AISummary implements AISummaryProvider.
 func (m *chromeMeeting) AISummary() string {
 	return m.aiSummary
+}
+
+// IsRecap implements RecapMeeting.
+func (m *chromeMeeting) IsRecap() bool {
+	return len(m.recapEntries) > 0
 }
 
 func (m *chromeMeeting) stopHeadedBrowser() {
@@ -81,7 +87,7 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 }
 
 func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
-	port, wsURL, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, m.opts.MeetingURL)
+	port, wsURL, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, m.opts.MeetingURL)
 	if err != nil {
 		return err
 	}
@@ -99,17 +105,27 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 	loggedWaiting := false
 	clickedLauncher := false
 	reNavigatedRecap := false
+	consecutiveListFailures := 0
 
 	for {
 		targets, err := listCDPTargets(port)
-		if err == nil {
+		if err != nil {
+			consecutiveListFailures++
+			select {
+			case <-procDone:
+				return fmt.Errorf("browser: browser process exited before meeting admission: %w", err)
+			default:
+			}
+			if consecutiveListFailures >= 5 {
+				return fmt.Errorf("browser: DevTools endpoint unreachable before meeting admission: %w", err)
+			}
+		} else {
+			consecutiveListFailures = 0
+			m.bindCapturePageID(targets)
 			var mainPage *cdpTargetInfo
 			for i := range targets {
 				t := &targets[i]
-				if (t.Type != "page" && t.Type != "iframe") || t.WebSocketDebuggerURL == "" {
-					continue
-				}
-				if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+				if !isTargetInCaptureScope(*t, m.capturePageID) {
 					continue
 				}
 				if t.Type == "page" && mainPage == nil {
@@ -122,7 +138,8 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
 						m.recapEntries = entries
 						slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
-						if summary := captureAISummaryFromTargets(ctx, port); summary != "" {
+						ownerPageID := m.resolveRecapOwnerPageID(*t)
+						if summary := captureAISummaryFromTargets(ctx, port, ownerPageID); summary != "" {
 							m.aiSummary = summary
 							slog.Info("browser: copied AI summary from meeting recap")
 						}
@@ -190,11 +207,56 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 		}
 
 		select {
+		case <-procDone:
+			return fmt.Errorf("browser: browser process exited before meeting admission")
 		case <-ctx.Done():
 			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+func (m *chromeMeeting) bindCapturePageID(targets []cdpTargetInfo) {
+	if m.capturePageID != "" {
+		for _, t := range targets {
+			if t.Type == "page" && t.ID == m.capturePageID {
+				return
+			}
+		}
+		m.capturePageID = ""
+	}
+	for _, t := range targets {
+		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+			continue
+		}
+		if m.opts.MeetingURL != "" && (t.URL == m.opts.MeetingURL || strings.Contains(t.URL, "/dl/launcher/")) {
+			m.capturePageID = t.ID
+			return
+		}
+	}
+	for _, t := range targets {
+		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+			continue
+		}
+		m.capturePageID = t.ID
+		return
+	}
+}
+
+func (m *chromeMeeting) resolveRecapOwnerPageID(t cdpTargetInfo) string {
+	if t.Type == "page" && t.ID != "" {
+		return t.ID
+	}
+	if t.ParentID != "" {
+		return t.ParentID
+	}
+	return m.capturePageID
 }
 
 func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
@@ -264,22 +326,25 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 }
 
 func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) bool {
+	if m.capturePageID == "" {
+		if c := chromedp.FromContext(ctx); c != nil && c.Target != nil && c.Target.TargetID != "" {
+			m.capturePageID = string(c.Target.TargetID)
+		}
+	}
 	targets, err := listCDPTargets(port)
 	if err != nil {
 		return false
 	}
 	for _, t := range targets {
-		if (t.Type != "page" && t.Type != "iframe") || t.WebSocketDebuggerURL == "" {
-			continue
-		}
-		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+		if !isTargetInCaptureScope(t, m.capturePageID) {
 			continue
 		}
 		if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
 			if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
 				m.recapEntries = entries
 				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
-				if summary := captureAISummaryFromTargets(ctx, port); summary != "" {
+				ownerPageID := m.resolveRecapOwnerPageID(t)
+				if summary := captureAISummaryFromTargets(ctx, port, ownerPageID); summary != "" {
 					m.aiSummary = summary
 					slog.Info("browser: copied AI summary from meeting recap")
 				}

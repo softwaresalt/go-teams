@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -102,6 +103,17 @@ func cleanHeadlessAllocatorOptions(opts Options) []chromedp.ExecAllocatorOption 
 		chromedp.Flag("auto-select-desktop-capture-source", "Microsoft Teams"),
 		chromedp.Flag("mute-audio", false),
 	)
+	if runtime.GOOS == "linux" {
+		// Ubuntu 24.04+ CI runners restrict unprivileged user namespaces via
+		// AppArmor, causing headless Chrome to exit during zygote initialization
+		// unless sandbox and /dev/shm flags are set on Linux.
+		out = append(out,
+			chromedp.NoSandbox,
+			chromedp.Flag("disable-setuid-sandbox", true),
+			chromedp.Flag("disable-dev-shm-usage", true),
+			chromedp.Flag("disable-gpu", true),
+		)
+	}
 	if opts.UserDataDir != "" {
 		dir := opts.UserDataDir
 		if abs, err := filepath.Abs(dir); err == nil {

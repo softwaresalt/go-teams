@@ -4,7 +4,7 @@ date: 2026-11-09
 branch: feat/mvp-live-captions
 feature: 011-F
 shipment: 011-S
-status: ready-for-pr
+status: pr-open
 ---
 
 ## Scope and authority
@@ -15,7 +15,8 @@ real-account access, or closure of `010-S` is authorized.
 
 ## Backlog
 
-Created `011-F`, `011.001-T` through `011.005-T`, and active shipment `011-S`.
+Created and completed `011-F` and `011.001-T` through `011.005-T`.
+Shipment `011-S` remains active pending approved merge.
 Tasks cover URL/browser discovery, clean launch, live captions, recap/summary,
 and explicit-output automation. Browser prerequisites and final acceptance
 dependencies are explicit. Existing implementation commits are recorded
@@ -67,10 +68,20 @@ Compaction assessed 12 memory files totaling approximately 79 KB. The
 active shipment checkpoints were preserved; no release-unit artifact was
 archived. YAML frontmatter and relative document links were validated.
 
+## Persistent outcome
+
+Implementation commit: `5d7225316fbdae259255d6e611b5eac1d640afb2`.
+The branch was pushed to `origin/feat/mvp-live-captions`, and
+[PR #29](https://github.com/softwaresalt/go-teams/pull/29) targets `main`.
+The PR contains current-HEAD Local Review Readiness with `READY`,
+`P0=0, P1=0`, successful full build evidence, and no requested shadow review.
+The completion comment on `011.005-T` associates the implementation SHA.
+The final handoff update changes documentation/backlog state only.
+
 ## Resume cursor
 
-Verification is complete with no unresolved local P0/P1 findings. Finalize
-backlog completion, commit, push, and open the PR with exact-HEAD readiness evidence.
+Verification is complete with no unresolved local P0/P1 findings.
+Check PR CI and any engaged review before presenting merge readiness.
 Keep `011-S` active until approved merge and post-merge reconciliation.
 The closure record defines real-tenant qualification, monitoring and rollback;
 those checks remain operator-assisted and are not claimed as executed.

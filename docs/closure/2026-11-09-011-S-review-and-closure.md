@@ -123,8 +123,12 @@ Source rollback requires a separately approved revert, never history rewriting.
 
 ## Handoff and remaining gates
 
-Local verification is complete. Commit and push this branch, and open a PR
-with a current-HEAD Local Review Readiness block. CI and any engaged
+Local verification is complete. Implementation commit
+`5d7225316fbdae259255d6e611b5eac1d640afb2` is pushed on the authorized branch.
+[PR #29](https://github.com/softwaresalt/go-teams/pull/29) targets `main`
+with a current-HEAD Local Review Readiness block. The handoff update changes
+documentation/backlog state only; the verified source is unchanged.
+CI and any engaged
 Copilot review remain pre-merge gates. A future approved merge must use a
 merge commit, then perform shipment reconciliation, observation recording,
 and required post-merge context compaction.

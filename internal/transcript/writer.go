@@ -148,7 +148,18 @@ func formatAISummaryMarkdown(raw string) string {
 	}
 	lines := strings.Split(strings.ReplaceAll(trimmedRaw, "\r\n", "\n"), "\n")
 	var sb strings.Builder
-	sb.WriteString("# AI Summary\n\n")
+	sb.WriteString("---\n\n# AI Summary\n\n")
+
+	ensureBlankLine := func() {
+		s := sb.String()
+		switch {
+		case strings.HasSuffix(s, "\n\n"):
+		case strings.HasSuffix(s, "\n"):
+			sb.WriteString("\n")
+		default:
+			sb.WriteString("\n\n")
+		}
+	}
 
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], " \r")
@@ -160,11 +171,13 @@ func formatAISummaryMarkdown(raw string) string {
 			continue
 		}
 		if strings.EqualFold(trimmed, "Meeting notes:") {
-			sb.WriteString("\n## Meeting notes\n\n")
+			ensureBlankLine()
+			sb.WriteString("## Meeting notes\n\n")
 			continue
 		}
 		if strings.EqualFold(trimmed, "Follow-up tasks:") {
-			sb.WriteString("\n## Follow-up tasks\n\n")
+			ensureBlankLine()
+			sb.WriteString("## Follow-up tasks\n\n")
 			continue
 		}
 		if strings.HasPrefix(line, "\t") {
@@ -190,6 +203,7 @@ func formatAISummaryMarkdown(raw string) string {
 				continue
 			}
 		}
+		ensureBlankLine()
 		sb.WriteString(fmt.Sprintf("%s\n\n", sanitizeField(trimmed)))
 	}
 	return sb.String()

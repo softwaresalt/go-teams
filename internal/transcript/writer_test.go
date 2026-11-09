@@ -188,11 +188,12 @@ func TestWriteAISummaryFormatsCopiedTeamsSummary(t *testing.T) {
 	require.NoError(t, w.Flush())
 
 	out := buf.String()
-	assert.Contains(t, out, "# AI Summary")
+	assert.Contains(t, out, "---\n\n# AI Summary\n\n")
 	assert.Contains(t, out, "## Meeting notes")
 	assert.Contains(t, out, "* **Scope Alignment:** The team aligned on the 200-hour package.")
 	assert.Contains(t, out, "  * **Phased Delivery:** Start with low-risk items first.")
 	assert.Contains(t, out, "## Follow-up tasks")
 	assert.Contains(t, out, "* **Work Scope:** Prepare a written scope document. (John)")
 	assert.NotContains(t, out, "secret=123", "recap URL with query tokens should be stripped from AI summary")
+	assert.NotContains(t, out, "\n\n\n", "markdown output must not contain multiple consecutive blank lines")
 }

@@ -182,9 +182,9 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					}
 
 					// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
-					// has a Meeting Recap transcript list populated.
+					// has a Meeting Recap transcript list populated for the requested meeting.
 					if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-						if entries, meta, pErr := parseRecapPayloadWithMeta(raw); pErr == nil && len(entries) > 0 {
+						if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPage.URL, t.URL); pErr == nil && len(entries) > 0 {
 							m.recapEntries = entries
 							if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
 								m.aiSummary = summary
@@ -321,8 +321,8 @@ func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTarge
 		candidates = append(candidates, t)
 	}
 	if m.allowSingleTabRebind && len(candidates) == 1 &&
-		candidates[0].ParentID == m.capturePageID &&
-		isTrustedSingleTabRebindURL(candidates[0].URL) {
+		isTrustedSingleTabRebindURL(candidates[0].URL) &&
+		(candidates[0].ParentID == m.capturePageID || hasPositiveMeetingIdentityMatch(m.opts.MeetingURL, candidates[0].URL)) {
 		m.capturePageID = candidates[0].ID
 		return candidates[0], true
 	}
@@ -449,12 +449,16 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 	if err != nil {
 		return false
 	}
-	var ownedFrames ownedFrameSet
+	var (
+		ownedFrames ownedFrameSet
+		mainPageURL string
+	)
 	if m.capturePageID != "" {
 		mainPage, ok := m.findBoundCapturePage(targets)
 		if !ok {
 			return false
 		}
+		mainPageURL = mainPage.URL
 		ownedFrames = fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
 	}
 	for _, t := range targets {
@@ -462,7 +466,7 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 			continue
 		}
 		if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-			if entries, meta, pErr := parseRecapPayloadWithMeta(raw); pErr == nil && len(entries) > 0 {
+			if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPageURL, t.URL); pErr == nil && len(entries) > 0 {
 				m.recapEntries = entries
 				if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
 					m.aiSummary = summary

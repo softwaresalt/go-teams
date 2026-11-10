@@ -28,9 +28,137 @@ import (
 const RecapOffsetSeparator = "\x00"
 
 var (
-	isoDurationRe = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$`)
-	colonTimeRe   = regexp.MustCompile(`^(?:(\d+):)?(\d{1,2}):(\d{2})$`)
+	isoDurationRe  = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$`)
+	colonTimeRe    = regexp.MustCompile(`^(?:(\d+):)?(\d{1,2}):(\d{2})$`)
+	meetingTokenRe = regexp.MustCompile(`(?i)meeting_[A-Za-z0-9_-]+`)
+	meetSegmentRe  = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
 )
+
+// MeetingIdentity holds the unique meeting and recording identifiers parsed
+// from a Teams meeting or Meeting Recap URL so extraction can verify that a
+// browser tab or transcript iframe belongs to the intended meeting.
+type MeetingIdentity struct {
+	ThreadID      string
+	MeetingToken  string
+	DriveItemID   string
+	DriveID       string
+	CallID        string
+	ICalUID       string
+	RecordingName string
+	MeetID        string
+}
+
+// ExtractMeetingIdentity parses unique meeting identifiers (threadId,
+// meeting_<token>, driveItemId, driveId, callId, iCalUid, fileUrl recording
+// filename, and /meet/<id>) from rawURL, checking both top-level query
+// parameters and SPA hash-fragment query parameters.
+func ExtractMeetingIdentity(rawURL string) MeetingIdentity {
+	var id MeetingIdentity
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return id
+	}
+	u, err := url.Parse(trimmed)
+	if err == nil {
+		applyQueryIdentity(&id, u.Query())
+		if u.Fragment != "" {
+			if idx := strings.Index(u.Fragment, "?"); idx >= 0 {
+				if fragVals, fErr := url.ParseQuery(u.Fragment[idx+1:]); fErr == nil {
+					applyQueryIdentity(&id, fragVals)
+				}
+			}
+		}
+	}
+	decoded := trimmed
+	if unescaped, uErr := url.QueryUnescape(trimmed); uErr == nil {
+		decoded = unescaped
+	}
+	if id.MeetingToken == "" {
+		if tok := meetingTokenRe.FindString(decoded); tok != "" {
+			id.MeetingToken = strings.ToLower(tok)
+		}
+	}
+	if id.MeetID == "" {
+		if m := meetSegmentRe.FindStringSubmatch(decoded); len(m) == 2 {
+			id.MeetID = strings.ToLower(m[1])
+		}
+	}
+	return id
+}
+
+func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
+	if v := strings.TrimSpace(vals.Get("threadId")); v != "" && id.ThreadID == "" {
+		id.ThreadID = strings.ToLower(v)
+		if tok := meetingTokenRe.FindString(v); tok != "" && id.MeetingToken == "" {
+			id.MeetingToken = strings.ToLower(tok)
+		}
+	}
+	if v := strings.TrimSpace(vals.Get("driveItemId")); v != "" && id.DriveItemID == "" {
+		id.DriveItemID = strings.ToLower(v)
+	}
+	if v := strings.TrimSpace(vals.Get("driveId")); v != "" && id.DriveID == "" {
+		id.DriveID = strings.ToLower(v)
+	}
+	if v := strings.TrimSpace(vals.Get("callId")); v != "" && id.CallID == "" {
+		id.CallID = strings.ToLower(v)
+	}
+	if v := strings.TrimSpace(vals.Get("iCalUid")); v != "" && id.ICalUID == "" {
+		id.ICalUID = strings.ToLower(v)
+	}
+	if v := strings.TrimSpace(vals.Get("fileUrl")); v != "" && id.RecordingName == "" {
+		if fu, err := url.Parse(v); err == nil && fu.Path != "" {
+			base := filepath.Base(filepath.FromSlash(fu.Path))
+			if base != "." && base != "/" {
+				id.RecordingName = strings.ToLower(base)
+			}
+		}
+	}
+}
+
+// hasPositiveMeetingIdentityMatch reports whether candidateURL carries at least
+// one unique meeting identifier that matches expectedURL and no identifiers
+// that conflict with expectedURL.
+func hasPositiveMeetingIdentityMatch(expectedURL, candidateURL string) bool {
+	exp := ExtractMeetingIdentity(expectedURL)
+	act := ExtractMeetingIdentity(candidateURL)
+	if hasMeetingIdentityConflict(exp, act) {
+		return false
+	}
+	return (exp.ThreadID != "" && exp.ThreadID == act.ThreadID) ||
+		(exp.MeetingToken != "" && exp.MeetingToken == act.MeetingToken) ||
+		(exp.DriveItemID != "" && exp.DriveItemID == act.DriveItemID) ||
+		(exp.CallID != "" && exp.CallID == act.CallID) ||
+		(exp.ICalUID != "" && exp.ICalUID == act.ICalUID) ||
+		(exp.MeetID != "" && exp.MeetID == act.MeetID)
+}
+
+func hasMeetingIdentityConflict(exp, act MeetingIdentity) bool {
+	if exp.ThreadID != "" && act.ThreadID != "" && exp.ThreadID != act.ThreadID {
+		return true
+	}
+	if exp.MeetingToken != "" && act.MeetingToken != "" && exp.MeetingToken != act.MeetingToken {
+		return true
+	}
+	if exp.DriveItemID != "" && act.DriveItemID != "" && exp.DriveItemID != act.DriveItemID {
+		return true
+	}
+	if exp.DriveID != "" && act.DriveID != "" && exp.DriveID != act.DriveID {
+		return true
+	}
+	if exp.CallID != "" && act.CallID != "" && exp.CallID != act.CallID {
+		return true
+	}
+	if exp.ICalUID != "" && act.ICalUID != "" && exp.ICalUID != act.ICalUID {
+		return true
+	}
+	if exp.RecordingName != "" && act.RecordingName != "" && exp.RecordingName != act.RecordingName {
+		return true
+	}
+	if exp.MeetID != "" && act.MeetID != "" && exp.MeetID != act.MeetID {
+		return true
+	}
+	return false
+}
 
 // RecapTranscriptEntry is a single utterance extracted from a Teams Meeting
 // Recap transcript panel.
@@ -431,6 +559,9 @@ func ParseRecapTimestamp(raw string, base time.Time) (time.Time, bool) {
 const extractRecapTranscriptJS = `(() => {
 	const fi = window.g_fileInfo || {};
 	const fileTitle = fi.title ? String(fi.title).trim() : '';
+	const fileName = fi.name ? String(fi.name).trim() : '';
+	const itemId = String(fi.id || fi.VroomItemID || fi.docId || '').trim();
+	const pageUrl = String(location.href || '');
 	const fileStart = String(fi.CreatedDateTime || fi.TimeCreated || fi.creationTime || fi.lastModifiedTime || fi.name || '').trim();
 	const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '';
 	const listEl = document.querySelector('.ms-List');
@@ -446,13 +577,13 @@ const extractRecapTranscriptJS = `(() => {
 					text: String(it.text || '').trim(),
 					type: String(it.type || 'Text')
 				}));
-				return JSON.stringify({ title: fileTitle, startTime: fileStart, timezone: tz, entries });
+				return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
 			}
 		}
 	}
 	const cells = Array.from(document.querySelectorAll('.ms-List-cell, [data-transcript-entry-id]'));
 	if (cells.length === 0) {
-		return JSON.stringify({ title: fileTitle, startTime: fileStart, timezone: tz, entries: [] });
+		return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries: [] });
 	}
 	const entries = [];
 	const seen = new Set();
@@ -474,7 +605,7 @@ const extractRecapTranscriptJS = `(() => {
 			type: 'Text'
 		});
 	}
-	return JSON.stringify({ title: fileTitle, startTime: fileStart, timezone: tz, entries });
+	return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
 })()`
 
 const extractRecapPageMetadataJS = `(() => {
@@ -490,6 +621,9 @@ const extractRecapPageMetadataJS = `(() => {
 
 type rawRecapPayload struct {
 	Title     string `json:"title"`
+	FileName  string `json:"fileName"`
+	ItemID    string `json:"itemId"`
+	PageURL   string `json:"pageUrl"`
 	StartTime string `json:"startTime"`
 	Timezone  string `json:"timezone"`
 	Entries   []struct {
@@ -500,9 +634,39 @@ type rawRecapPayload struct {
 	} `json:"entries"`
 }
 
+func verifyRecapTargetMatchesMeeting(expectedMeetingURL, pageURL, targetURL string, p rawRecapPayload) bool {
+	exp := ExtractMeetingIdentity(expectedMeetingURL)
+	for _, observedURL := range []string{pageURL, targetURL, p.PageURL} {
+		if observedURL == "" {
+			continue
+		}
+		if hasMeetingIdentityConflict(exp, ExtractMeetingIdentity(observedURL)) {
+			return false
+		}
+	}
+	if exp.RecordingName != "" && p.FileName != "" && !strings.EqualFold(exp.RecordingName, strings.TrimSpace(p.FileName)) {
+		return false
+	}
+	if exp.DriveItemID != "" && p.ItemID != "" && !strings.Contains(strings.ToLower(p.ItemID), exp.DriveItemID) {
+		return false
+	}
+	return true
+}
+
 func parseRecapEntriesPayload(raw string) ([]RecapTranscriptEntry, error) {
 	entries, _, err := parseRecapPayloadWithMeta(raw)
 	return entries, err
+}
+
+func parseRecapPayloadForMeeting(raw, expectedMeetingURL, pageURL, targetURL string) ([]RecapTranscriptEntry, MeetingMetadata, error) {
+	var p rawRecapPayload
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return nil, MeetingMetadata{}, fmt.Errorf("browser: parse recap transcript payload: %w", err)
+	}
+	if !verifyRecapTargetMatchesMeeting(expectedMeetingURL, pageURL, targetURL, p) {
+		return nil, MeetingMetadata{}, fmt.Errorf("browser: recap target does not match requested meeting identity")
+	}
+	return buildRecapEntriesAndMeta(p)
 }
 
 func parseRecapPayloadWithMeta(raw string) ([]RecapTranscriptEntry, MeetingMetadata, error) {
@@ -510,6 +674,10 @@ func parseRecapPayloadWithMeta(raw string) ([]RecapTranscriptEntry, MeetingMetad
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		return nil, MeetingMetadata{}, fmt.Errorf("browser: parse recap transcript payload: %w", err)
 	}
+	return buildRecapEntriesAndMeta(p)
+}
+
+func buildRecapEntriesAndMeta(p rawRecapPayload) ([]RecapTranscriptEntry, MeetingMetadata, error) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	out := make([]RecapTranscriptEntry, 0, len(p.Entries))
 	speakerSet := make(map[string]struct{})

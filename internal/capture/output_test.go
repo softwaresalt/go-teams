@@ -76,17 +76,19 @@ func fixedTime() time.Time {
 func TestSetupOutputCreatesPairWithHeader(t *testing.T) {
 	dir := t.TempDir()
 	out, err := setupOutput(OutputConfig{
-		Dir:        dir,
-		MeetingURL: "https://teams.microsoft.com/l/meetup-join/19%3ameeting_AbC123%40thread.v2/0",
-		BotName:    "Transcription Agent",
-		Now:        fixedTime(),
+		Dir:          dir,
+		MeetingURL:   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_AbC123%40thread.v2/0",
+		MeetingTitle: "NVD Pacific TZ Sync",
+		Category:     "WSP",
+		BotName:      "Transcription Agent",
+		Now:          fixedTime(),
 	})
 	if err != nil {
 		t.Fatalf("setupOutput: %v", err)
 	}
 	t.Cleanup(func() { _ = out.Close() })
 
-	wantBase := "meeting-abc123-20260710-150405.000"
+	wantBase := "WSP-NVDPacificTZSync-transcript-20260710"
 	if filepath.Base(out.TranscriptPath) != wantBase+".md" {
 		t.Errorf("transcript path = %q, want base %q.md", out.TranscriptPath, wantBase)
 	}
@@ -110,7 +112,7 @@ func TestSetupOutputCreatesPairWithHeader(t *testing.T) {
 		t.Fatalf("read transcript: %v", err)
 	}
 	header := string(data)
-	for _, want := range []string{"# Meeting Attendees", "**Total Attendees:**", "**Meeting Start:** 2026-07-10 15:04", "**Meeting:** meeting-abc123", "## Attendee List", "## Transcript"} {
+	for _, want := range []string{"# Meeting Attendees", "**Total Attendees:**", "**Meeting Start:** 2026-07-10 15:04", "**Meeting:** NVD Pacific TZ Sync", "**Category:** WSP", "## Attendee List", "## Transcript"} {
 		if !strings.Contains(header, want) {
 			t.Errorf("transcript header missing %q; got:\n%s", want, header)
 		}
@@ -119,6 +121,62 @@ func TestSetupOutputCreatesPairWithHeader(t *testing.T) {
 		if strings.Contains(header, unwanted) {
 			t.Errorf("transcript header should not contain %q; got:\n%s", unwanted, header)
 		}
+	}
+}
+
+func TestConcatMeetingNameAndDefaultTemplate(t *testing.T) {
+	ts := time.Date(2026, 11, 9, 8, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		category string
+		title    string
+		tmpl     string
+		want     string
+	}{
+		{
+			name:     "category and mixed-case title",
+			category: "WSP",
+			title:    "NVD Pacific TZ Sync",
+			want:     "WSP-NVDPacificTZSync-transcript-20261109.md",
+		},
+		{
+			name:     "category and uppercase title with acronyms",
+			category: "WSP",
+			title:    "FL DOE ENGINEER OPTIONS",
+			want:     "WSP-FLDOEEngineerOptions-transcript-20261109.md",
+		},
+		{
+			name:     "omits articles of speech and filler words",
+			category: "WSP",
+			title:    "Review of the Architecture and Design for a Cloud Migration in the Portal",
+			want:     "WSP-ReviewArchitectureDesignCloudMigrationPortal-transcript-20261109.md",
+		},
+		{
+			name:     "empty category omits leading hyphen",
+			category: "",
+			title:    "FL DOE ENGINEER OPTIONS",
+			want:     "FLDOEEngineerOptions-transcript-20261109.md",
+		},
+		{
+			name:     "custom filename template",
+			category: "ACME",
+			title:    "Weekly Sync for the Platform",
+			tmpl:     "<YYYY-MM-DD>-<category>-<concat-meeting-name>.md",
+			want:     "2026-11-09-ACME-WeeklySyncPlatform.md",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatTranscriptFilename(tc.tmpl, OutputConfig{
+				Category:     tc.category,
+				MeetingTitle: tc.title,
+			}, ts, "meeting-fallback")
+			if got != tc.want {
+				t.Fatalf("FormatTranscriptFilename() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

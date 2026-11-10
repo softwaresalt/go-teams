@@ -27,13 +27,35 @@ const (
 	// timestampLayout includes milliseconds so concurrent captures that share a
 	// sanitized meeting id do not collide on the same output file name.
 	timestampLayout = "20060102-150405.000"
+	// DefaultFilenameTemplate is the default transcript filename pattern used
+	// when only an output directory is provided.
+	DefaultFilenameTemplate = "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 )
 
 var (
-	meetingIDToken = regexp.MustCompile(`meeting_[A-Za-z0-9]+`)
-	meetPathToken  = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
-	unsafeIDChars  = regexp.MustCompile(`[^a-z0-9]+`)
+	meetingIDToken  = regexp.MustCompile(`meeting_[A-Za-z0-9]+`)
+	meetPathToken   = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
+	unsafeIDChars   = regexp.MustCompile(`[^a-z0-9]+`)
+	wordTokenRe     = regexp.MustCompile(`[A-Za-z0-9]+`)
+	unsafeFileChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+	multiHyphenRe   = regexp.MustCompile(`-+`)
 )
+
+// fillerWords is the set of English articles of speech, prepositions,
+// conjunctions, auxiliaries, and conversational filler words omitted when
+// constructing <concat-meeting-name>.
+var fillerWords = map[string]struct{}{
+	"a": {}, "an": {}, "the": {},
+	"and": {}, "or": {}, "but": {}, "nor": {}, "so": {}, "yet": {},
+	"of": {}, "in": {}, "on": {}, "at": {}, "to": {}, "for": {}, "with": {}, "by": {}, "from": {},
+	"about": {}, "as": {}, "into": {}, "like": {}, "through": {}, "after": {}, "over": {},
+	"between": {}, "out": {}, "against": {}, "during": {}, "without": {}, "before": {},
+	"under": {}, "around": {}, "among": {},
+	"is": {}, "are": {}, "was": {}, "were": {}, "be": {}, "been": {}, "being": {},
+	"have": {}, "has": {}, "had": {}, "do": {}, "does": {}, "did": {},
+	"this": {}, "that": {}, "these": {}, "those": {}, "it": {}, "its": {},
+	"uh": {}, "um": {}, "er": {}, "ah": {},
+}
 
 // OutputConfig configures creation of the transcript+audio file pair.
 type OutputConfig struct {
@@ -44,6 +66,10 @@ type OutputConfig struct {
 	// transcript file. When set, the transcript is written directly to
 	// FilePath (creating parent directories as needed).
 	FilePath string
+	// FilenameTemplate is the pattern used to construct the transcript file
+	// name inside Dir when FilePath is empty. An empty value defaults to
+	// DefaultFilenameTemplate.
+	FilenameTemplate string
 	// MeetingURL is used to derive the sanitized meeting id in the file names
 	// and the Source link in the transcript header.
 	MeetingURL string
@@ -89,7 +115,8 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		now = time.Now()
 	}
 	id := sanitizeMeetingID(cfg.MeetingURL)
-	base := fmt.Sprintf("%s-%s", id, now.Format(timestampLayout))
+	mdFilename := FormatTranscriptFilename(cfg.FilenameTemplate, cfg, now, id)
+	base := strings.TrimSuffix(mdFilename, filepath.Ext(mdFilename))
 
 	explicitFile := cfg.FilePath
 	var (
@@ -124,8 +151,11 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		if err := os.MkdirAll(dir, dirPerm); err != nil {
 			return nil, fmt.Errorf("capture: create output dir %s: %w", dir, err)
 		}
-		mdPath = filepath.Join(dir, base+".md")
+		mdPath = filepath.Join(dir, mdFilename)
 		mp3Path = filepath.Join(dir, base+".mp3")
+		if cfg.CaptionsOnly {
+			openFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		}
 	}
 
 	if !cfg.CaptionsOnly {
@@ -241,4 +271,127 @@ func sanitizeMeetingID(rawURL string) string {
 		return "meeting"
 	}
 	return candidate
+}
+
+// ConcatMeetingName builds the <concat-meeting-name> token by extracting
+// alphanumeric words from title (or fallbackID when title is empty), omitting
+// English articles of speech and filler words, and concatenating the remaining
+// words without spaces or hyphens.
+func ConcatMeetingName(title, fallbackID string) string {
+	source := strings.TrimSpace(title)
+	words := wordTokenRe.FindAllString(source, -1)
+	if len(words) == 0 {
+		source = strings.TrimSpace(fallbackID)
+		words = wordTokenRe.FindAllString(source, -1)
+	}
+	if len(words) == 0 {
+		return "Meeting"
+	}
+
+	filtered := make([]string, 0, len(words))
+	for _, w := range words {
+		if _, isFiller := fillerWords[strings.ToLower(w)]; !isFiller {
+			filtered = append(filtered, w)
+		}
+	}
+	if len(filtered) == 0 {
+		filtered = words
+	}
+
+	allUpperTitle := source != "" && source == strings.ToUpper(source) && source != strings.ToLower(source)
+	var b strings.Builder
+	for _, w := range filtered {
+		if allUpperTitle {
+			if len(w) <= 3 {
+				b.WriteString(strings.ToUpper(w))
+			} else {
+				b.WriteString(strings.ToUpper(w[:1]) + strings.ToLower(w[1:]))
+			}
+			continue
+		}
+		b.WriteString(strings.ToUpper(w[:1]) + w[1:])
+	}
+	out := b.String()
+	if len(out) > maxMeetingIDLen {
+		out = out[:maxMeetingIDLen]
+	}
+	if out == "" {
+		return "Meeting"
+	}
+	return out
+}
+
+// FormatTranscriptFilename expands tmpl (defaulting to
+// DefaultFilenameTemplate) using the meeting's Category, ConcatMeetingName,
+// and date/timestamp placeholders, returning a filesystem-safe .md filename.
+func FormatTranscriptFilename(tmpl string, cfg OutputConfig, now time.Time, fallbackID string) string {
+	pattern := strings.TrimSpace(tmpl)
+	if pattern == "" {
+		pattern = DefaultFilenameTemplate
+	}
+	if fallbackID == "" {
+		fallbackID = sanitizeMeetingID(cfg.MeetingURL)
+	}
+	cat := sanitizeFilenameToken(cfg.Category)
+	concatName := ConcatMeetingName(cfg.MeetingTitle, fallbackID)
+	meetingName := sanitizeFilenameToken(cfg.MeetingTitle)
+	if meetingName == "" {
+		meetingName = fallbackID
+	}
+	dateYYYYMMDD := now.Format("20060102")
+	dateISO := now.Format("2006-01-02")
+	timeHHMMSS := now.Format("150405")
+	tsFull := now.Format(timestampLayout)
+
+	r := strings.NewReplacer(
+		"<category>", cat,
+		"<Category>", cat,
+		"{{category}}", cat,
+		"<concat-meeting-name>", concatName,
+		"{{concat-meeting-name}}", concatName,
+		"{{concat_meeting_name}}", concatName,
+		"<meeting-name>", meetingName,
+		"{{meeting-name}}", meetingName,
+		"{{meeting_name}}", meetingName,
+		"<meeting-id>", fallbackID,
+		"{{meeting-id}}", fallbackID,
+		"{{meeting_id}}", fallbackID,
+		"<YYYYMMDD>", dateYYYYMMDD,
+		"<yyyymmdd>", dateYYYYMMDD,
+		"<date>", dateYYYYMMDD,
+		"{{YYYYMMDD}}", dateYYYYMMDD,
+		"{{yyyymmdd}}", dateYYYYMMDD,
+		"{{date}}", dateYYYYMMDD,
+		"<YYYY-MM-DD>", dateISO,
+		"<yyyy-mm-dd>", dateISO,
+		"{{YYYY-MM-DD}}", dateISO,
+		"{{yyyy-mm-dd}}", dateISO,
+		"<HHMMSS>", timeHHMMSS,
+		"<hhmmss>", timeHHMMSS,
+		"{{HHMMSS}}", timeHHMMSS,
+		"{{hhmmss}}", timeHHMMSS,
+		"<YYYYMMDD-HHMMSS>", dateYYYYMMDD+"-"+timeHHMMSS,
+		"<timestamp>", tsFull,
+		"{{timestamp}}", tsFull,
+	)
+	expanded := r.Replace(pattern)
+	lower := strings.ToLower(expanded)
+	switch {
+	case strings.HasSuffix(lower, ".markdown"):
+		expanded = expanded[:len(expanded)-len(".markdown")]
+	case strings.HasSuffix(lower, ".md"):
+		expanded = expanded[:len(expanded)-len(".md")]
+	}
+	stem := sanitizeFilenameToken(expanded)
+	if stem == "" {
+		stem = concatName + "-transcript-" + dateYYYYMMDD
+	}
+	return stem + ".md"
+}
+
+func sanitizeFilenameToken(raw string) string {
+	cleaned := unsafeFileChars.ReplaceAllString(strings.TrimSpace(raw), "-")
+	cleaned = strings.ReplaceAll(cleaned, "..", "-")
+	cleaned = multiHyphenRe.ReplaceAllString(cleaned, "-")
+	return strings.Trim(cleaned, "-_.")
 }

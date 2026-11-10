@@ -1,0 +1,46 @@
+# Example customer YAML configuration for teams-cli.
+# Copy this file to config.yaml (in the current directory or next to teams-cli.exe)
+# or pass a per-customer file via:
+#   teams-cli.exe --config wsp.yaml "https://teams.cloud.microsoft/l/meetingrecap?..."
+
+# Customer or project category used in the "# Meeting Attendees" header
+# (**Category:**) and in the <category> filename placeholder.
+category: "WSP"
+
+# Default directory where transcripts are written when no explicit .md file path
+# is passed on the command line.
+output_dir: "C:\\Transcripts\\WSP"
+
+# Naming convention template used when writing to output_dir.
+# Supported placeholders:
+#   <category>            - value of category (omitted cleanly if empty)
+#   <concat-meeting-name> - meeting title with articles/filler words removed and words concatenated
+#   <meeting-name>        - hyphen-separated meeting title
+#   <meeting-id>          - sanitized Teams meeting identifier
+#   <YYYYMMDD>            - meeting date as 20261109
+#   <YYYY-MM-DD>          - meeting date as 2026-11-09
+#   <HHMMSS>              - meeting start time as 080000
+filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
+
+# Optional explicit output file path (overrides output_dir + filename_template).
+# output_file: "C:\\Transcripts\\WSP\\custom-output.md"
+
+# Optional default meeting or recap URL (can be overridden on the command line).
+# meeting_url: "https://teams.cloud.microsoft/l/meetingrecap?..."
+
+# Optional path to Microsoft Edge or Google Chrome executable.
+# When omitted on Windows, Microsoft Edge (msedge.exe) is discovered automatically.
+# browser_path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+
+# Browser profile directory for persisting Microsoft 365 authentication cookies/tokens.
+profile_dir: "bin\\profile"
+
+# Run the browser in headless mode (true for background automation after initial sign-in,
+# false to open a visible browser window for interactive login).
+headless: true
+
+# Display name used only when joining an unauthenticated guest pre-join screen.
+bot_name: "Transcription Agent"
+
+# Whether to capture live meeting audio to an MP3 file (ignored for Meeting Recap exports).
+capture_audio: false

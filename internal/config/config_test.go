@@ -67,10 +67,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	want := Config{
-		OutputDir:  filepath.Join(dir, "out"),
-		ProfileDir: filepath.Join(dir, "prof"),
-		BotName:    "Bot",
-		Headless:   false,
+		OutputDir:        filepath.Join(dir, "out"),
+		FilenameTemplate: DefaultFilenameTemplate,
+		ProfileDir:       filepath.Join(dir, "prof"),
+		BotName:          "Bot",
+		Headless:         false,
 		Meetings: []MeetingSchedule{
 			{Name: "standup", URL: "https://teams.microsoft.com/l/meetup-join/x", Cron: "0 9 * * 1-5"},
 		},
@@ -127,4 +128,29 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Equal(t, "Custom", got.BotName)
 	assert.NotEmpty(t, got.OutputDir)
 	assert.NotEmpty(t, got.ProfileDir)
+	assert.Equal(t, DefaultFilenameTemplate, got.FilenameTemplate)
+}
+
+func TestLoadCustomerYAMLWithTemplateAndAliases(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wsp.yaml")
+	yamlContent := `
+category: WSP
+default_path: C:\Transcripts\WSP
+name_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
+browser_path: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+profile_dir: C:\Transcripts\profile
+url: https://teams.cloud.microsoft/l/meetingrecap?threadId=1
+headless: true
+`
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0o600))
+	got, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "WSP", got.Category)
+	assert.Equal(t, `C:\Transcripts\WSP`, got.OutputDir)
+	assert.Equal(t, "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md", got.FilenameTemplate)
+	assert.Equal(t, `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, got.BrowserPath)
+	assert.Equal(t, `C:\Transcripts\profile`, got.ProfileDir)
+	assert.Equal(t, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", got.MeetingURL)
+	assert.True(t, got.Headless)
 }

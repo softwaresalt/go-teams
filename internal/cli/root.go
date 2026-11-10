@@ -41,12 +41,13 @@ func defaultDeps() *deps {
 		newMeeting: defaultNewMeeting,
 		newSession: func(c config.Config, meetingURL string) meetingSession {
 			return capture.NewSession(capture.SessionConfig{
-				OutputDir:    c.OutputDir,
-				OutputFile:   c.OutputFile,
-				MeetingURL:   meetingURL,
-				Category:     c.Category,
-				BotName:      c.BotName,
-				CaptionsOnly: !c.CaptureAudio,
+				OutputDir:        c.OutputDir,
+				OutputFile:       c.OutputFile,
+				FilenameTemplate: c.FilenameTemplate,
+				MeetingURL:       meetingURL,
+				Category:         c.Category,
+				BotName:          c.BotName,
+				CaptionsOnly:     !c.CaptureAudio,
 			})
 		},
 	}
@@ -85,23 +86,23 @@ func newRootCommand(d *deps) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rawURL := flags.meetingURL
+			cfg, err := loadConfigFrom(d, configPath)
+			if err != nil {
+				return err
+			}
+			applyCaptureFlags(cmd, &cfg, flags)
+			if len(args) >= 2 {
+				applyOutputTarget(&cfg, args[1])
+			}
+			rawURL := cfg.MeetingURL
+			if flags.meetingURL != "" {
+				rawURL = flags.meetingURL
+			}
 			if len(args) >= 1 {
 				rawURL = args[0]
 			}
 			if rawURL == "" {
 				return cmd.Help()
-			}
-			cfg, err := loadConfigFrom(d, configPath)
-			if err != nil {
-				return err
-			}
-			if !cmd.Flags().Changed("headless") {
-				cfg.Headless = false
-			}
-			applyCaptureFlags(cmd, &cfg, flags)
-			if len(args) >= 2 {
-				applyOutputTarget(&cfg, args[1])
 			}
 			mutated, err := teams.MutateJoinURL(rawURL)
 			if err != nil {
@@ -110,8 +111,8 @@ func newRootCommand(d *deps) *cobra.Command {
 			return runCapture(cmd.Context(), d, cfg, mutated)
 		},
 	}
-	root.PersistentFlags().StringVar(&configPath, "config", "",
-		"path to the config file (default: user config directory)")
+	root.PersistentFlags().StringVarP(&configPath, "config", "f", "",
+		"path to the YAML config file (default: ./config.yaml or user config directory)")
 	bindCaptureFlags(root, &flags)
 	root.AddCommand(
 		newAuthCommand(d, &configPath),
@@ -130,7 +131,7 @@ func newRootCommand(d *deps) *cobra.Command {
 func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 	path := configPath
 	if path == "" {
-		p, err := config.DefaultConfigPath()
+		p, err := resolveDefaultConfigPath()
 		if err != nil {
 			return config.Config{}, err
 		}
@@ -153,26 +154,24 @@ func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 	return cfg, nil
 }
 
+func resolveDefaultConfigPath() (string, error) {
+	candidates := []string{"config.yaml"}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates, filepath.Join(exeDir, "config.yaml"))
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return c, nil
+		}
+	}
+	return config.DefaultConfigPath()
+}
+
 // resolveDefaultProfileDir prefers an existing workspace/executable-relative
 // profile directory (e.g. bin/profile next to teams-cli.exe or in the current
 // working directory) so automation runs work regardless of the caller's working
 // directory.
 func resolveDefaultProfileDir(fallback string) string {
-	candidates := []string{filepath.Join("bin", "profile")}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		candidates = append([]string{
-			filepath.Join(exeDir, "profile"),
-			filepath.Join(exeDir, "bin", "profile"),
-		}, candidates...)
-	}
-	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && info.IsDir() {
-			if abs, absErr := filepath.Abs(c); absErr == nil {
-				return abs
-			}
-			return c
-		}
-	}
-	return filepath.Join("bin", "profile")
+	return config.ResolveDefaultProfileDir(fallback)
 }

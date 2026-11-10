@@ -15,17 +15,19 @@ import (
 const defaultTeamsCaptureURL = "https://teams.microsoft.com/v2/"
 
 type captureFlags struct {
-	meetingURL  string
-	output      string
-	outputFile  string
-	outputDir   string
-	profileDir  string
-	botName     string
-	category    string
-	browserPath string
-	headless    bool
-	headed      bool
-	audio       bool
+	meetingURL       string
+	output           string
+	outputFile       string
+	outputDir        string
+	filenameTemplate string
+	nameTemplate     string
+	profileDir       string
+	botName          string
+	category         string
+	browserPath      string
+	headless         bool
+	headed           bool
+	audio            bool
 }
 
 func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
@@ -33,9 +35,11 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().StringVarP(&f.output, "output", "o", "", "output Markdown file path (.md) or directory")
 	cmd.Flags().StringVar(&f.outputFile, "output-file", "", "explicit output Markdown file path (.md)")
 	cmd.Flags().StringVar(&f.outputDir, "output-dir", "", "directory where the Markdown transcript is saved")
+	cmd.Flags().StringVar(&f.filenameTemplate, "filename-template", "", "filename template when writing to a directory (default: <category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md)")
+	cmd.Flags().StringVar(&f.nameTemplate, "name-template", "", "alias for --filename-template")
 	cmd.Flags().StringVar(&f.profileDir, "profile-dir", "", "browser user-data directory for session persistence")
 	cmd.Flags().StringVar(&f.botName, "bot-name", "", "display name injected on guest pre-join")
-	cmd.Flags().StringVarP(&f.category, "category", "c", "", "optional meeting category for the transcript header")
+	cmd.Flags().StringVarP(&f.category, "category", "c", "", "optional meeting category for the transcript header and filename")
 	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
 	cmd.Flags().BoolVar(&f.headless, "headless", false, "run browser in headless mode")
 	cmd.Flags().BoolVar(&f.headed, "headed", false, "open a visible browser window for interactive authentication")
@@ -71,6 +75,12 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if f.outputFile != "" {
 		cfg.OutputFile = f.outputFile
 	}
+	if f.nameTemplate != "" {
+		cfg.FilenameTemplate = f.nameTemplate
+	}
+	if f.filenameTemplate != "" {
+		cfg.FilenameTemplate = f.filenameTemplate
+	}
 	if f.profileDir != "" {
 		cfg.ProfileDir = f.profileDir
 	}
@@ -101,13 +111,6 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 		Short: "Join a Teams meeting and capture its live captions to a Markdown file",
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rawURL := flags.meetingURL
-			if len(args) >= 1 {
-				rawURL = args[0]
-			}
-			if rawURL == "" {
-				return fmt.Errorf("cli: join requires a <meeting-url> argument or --url flag")
-			}
 			cfg, err := loadConfigFrom(d, *configPath)
 			if err != nil {
 				return err
@@ -115,6 +118,16 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 			applyCaptureFlags(cmd, &cfg, flags)
 			if len(args) >= 2 {
 				applyOutputTarget(&cfg, args[1])
+			}
+			rawURL := cfg.MeetingURL
+			if flags.meetingURL != "" {
+				rawURL = flags.meetingURL
+			}
+			if len(args) >= 1 {
+				rawURL = args[0]
+			}
+			if rawURL == "" {
+				return fmt.Errorf("cli: join requires a <meeting-url> argument, --url flag, or meeting_url in config")
 			}
 			mutated, err := teams.MutateJoinURL(rawURL)
 			if err != nil {
@@ -141,13 +154,11 @@ func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// captions defaults to a visible browser window for interactive auth
-			// unless --headless was explicitly passed.
-			if !cmd.Flags().Changed("headless") {
-				cfg.Headless = false
-			}
 			applyCaptureFlags(cmd, &cfg, flags)
 			rawURL := defaultTeamsCaptureURL
+			if cfg.MeetingURL != "" {
+				rawURL = cfg.MeetingURL
+			}
 			if flags.meetingURL != "" {
 				rawURL = flags.meetingURL
 			}

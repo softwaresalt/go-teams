@@ -21,6 +21,8 @@ type SessionConfig struct {
 	// OutputFile is an optional explicit destination path for the Markdown
 	// transcript file.
 	OutputFile string
+	// FilenameTemplate is the naming pattern used when writing to OutputDir.
+	FilenameTemplate string
 	// MeetingURL is the mutated Teams meeting URL (used for output naming).
 	MeetingURL string
 	// Category is an optional meeting category written to the transcript header.
@@ -71,13 +73,14 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	}
 
 	outCfg := OutputConfig{
-		Dir:          s.cfg.OutputDir,
-		FilePath:     s.cfg.OutputFile,
-		MeetingURL:   s.cfg.MeetingURL,
-		Category:     s.cfg.Category,
-		BotName:      s.cfg.BotName,
-		Now:          s.cfg.Now,
-		CaptionsOnly: captionsOnly,
+		Dir:              s.cfg.OutputDir,
+		FilePath:         s.cfg.OutputFile,
+		FilenameTemplate: s.cfg.FilenameTemplate,
+		MeetingURL:       s.cfg.MeetingURL,
+		Category:         s.cfg.Category,
+		BotName:          s.cfg.BotName,
+		Now:              s.cfg.Now,
+		CaptionsOnly:     captionsOnly,
 	}
 	if mp, ok := m.(browser.MetadataProvider); ok {
 		meta := mp.MeetingMetadata()

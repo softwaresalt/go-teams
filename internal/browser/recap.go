@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -106,9 +107,10 @@ func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
 		id.ICalUID = strings.ToLower(v)
 	}
 	if v := strings.TrimSpace(vals.Get("fileUrl")); v != "" && id.RecordingName == "" {
-		if fu, err := url.Parse(v); err == nil && fu.Path != "" {
+		if fu, err := url.Parse(v); err == nil && fu.Path != "" && !strings.Contains(fu.Path, "/:") {
 			base := filepath.Base(filepath.FromSlash(fu.Path))
-			if base != "." && base != "/" {
+			ext := strings.ToLower(filepath.Ext(base))
+			if base != "." && base != "/" && (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" || ext == ".m4a") {
 				id.RecordingName = strings.ToLower(base)
 			}
 		}
@@ -504,15 +506,81 @@ func hasHTTPSHostSuffix(rawURL string, domains ...string) bool {
 func isAuthRedirectURL(rawURL string) bool {
 	return hasHTTPSHostSuffix(rawURL,
 		"login.microsoftonline.com",
+		"login.microsoft.com",
 		"login.live.com",
+		"account.live.com",
 		"login.windows.net",
+		"login.microsoftonline.us",
 		"autologon.microsoftazuread-sso.com",
 		"device.login.microsoftonline.com",
+		"account.activedirectory.windowsazure.com",
+		"mysignins.microsoft.com",
+		"fpt.microsoft.com",
 		"aadcdn.msftauth.net",
+		"msftauth.net",
 		"msauth.net",
 		"duosecurity.com",
 		"okta.com",
+		"pingidentity.com",
+		"onelogin.com",
+		"auth0.com",
 	)
+}
+
+func isTeamsHostURL(rawURL string) bool {
+	return hasHTTPSHostSuffix(rawURL,
+		"teams.cloud.microsoft",
+		"teams.microsoft.com",
+		"teams.live.com",
+	)
+}
+
+func isMicrosoftTeamsRecapURL(rawURL string) bool {
+	return isTeamsHostURL(rawURL) && strings.Contains(strings.ToLower(rawURL), "meetingrecap")
+}
+
+// hasTeamsSessionInProfile reports whether profileDir already contains a
+// persisted Microsoft Teams web session in Chromium's Default Local Storage.
+// When false on a cold or newly configured profile directory, headed recap
+// capture bootstraps authentication at https://teams.cloud.microsoft/v2/ first
+// to avoid Teams' cold-profile /l/meetingrecap OAuth redirect loop.
+func hasTeamsSessionInProfile(profileDir string) bool {
+	trimmed := strings.TrimSpace(profileDir)
+	if trimmed == "" {
+		return false
+	}
+	abs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return false
+	}
+	leveldbDir := filepath.Join(abs, "Default", "Local Storage", "leveldb")
+	entries, err := os.ReadDir(leveldbDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if !strings.HasSuffix(name, ".ldb") && !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.Size() <= 0 || info.Size() > 16*1024*1024 {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(leveldbDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(data, []byte("SKYPE-TOKEN")) ||
+			bytes.Contains(data, []byte("UserAuthState")) ||
+			bytes.Contains(data, []byte("msal.2.account.keys")) {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanHeadedBrowserArgs(port int, profileDir, initialURL string) []string {
@@ -647,7 +715,7 @@ func verifyRecapTargetMatchesMeeting(expectedMeetingURL, pageURL, targetURL stri
 	if exp.RecordingName != "" && p.FileName != "" && !strings.EqualFold(exp.RecordingName, strings.TrimSpace(p.FileName)) {
 		return false
 	}
-	if exp.DriveItemID != "" && p.ItemID != "" && !strings.Contains(strings.ToLower(p.ItemID), exp.DriveItemID) {
+	if exp.DriveItemID != "" && p.ItemID != "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(p.ItemID)), "01") && !strings.Contains(strings.ToLower(p.ItemID), exp.DriveItemID) {
 		return false
 	}
 	return true

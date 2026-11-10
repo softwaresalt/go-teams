@@ -21,10 +21,11 @@ func TestWriteEventCollapsesLineBreaks(t *testing.T) {
 	require.NoError(t, w.Flush())
 
 	body := strings.TrimSuffix(buf.String(), "\n\n")
-	// The embedded CR/LF must be gone (proving collapse, not just that # is escaped).
-	assert.NotContains(t, body, "\n", "embedded newline must be collapsed")
+	// Only the single newline separating the speaker header from the blockquote line is allowed;
+	// the embedded CR/LF inside the caption text must be collapsed.
+	assert.Equal(t, 1, strings.Count(body, "\n"), "embedded newline must be collapsed")
 	assert.NotContains(t, body, "\r", "embedded carriage return must be collapsed")
-	assert.Equal(t, `**Bob (13:06:05):** hi  \# Injected`, body)
+	assert.Equal(t, "**Bob** (13:06:05):\n> hi  \\# Injected", body)
 }
 
 func TestWriteEventDefusesBareAutolink(t *testing.T) {
@@ -109,6 +110,41 @@ func TestWriteEventEscapesMarkdownInjection(t *testing.T) {
 			text:    "a\u2029- item",
 			absent:  []string{"\u2029"},
 		},
+		{
+			name:     "leading thematic break escaped in blockquote",
+			speaker:  "Bob",
+			text:     "---",
+			contains: []string{"> \\---"},
+			absent:   []string{"> ---"},
+		},
+		{
+			name:     "leading unordered list dash escaped in blockquote",
+			speaker:  "Bob",
+			text:     "- bullet item",
+			contains: []string{"> \\- bullet item"},
+			absent:   []string{"> - bullet item"},
+		},
+		{
+			name:     "leading unordered list plus escaped in blockquote",
+			speaker:  "Bob",
+			text:     "+ plus item",
+			contains: []string{"> \\+ plus item"},
+			absent:   []string{"> + plus item"},
+		},
+		{
+			name:     "leading ordered list period escaped in blockquote",
+			speaker:  "Bob",
+			text:     "1. first item",
+			contains: []string{"> 1\\. first item"},
+			absent:   []string{"> 1. first item"},
+		},
+		{
+			name:     "leading ordered list paren escaped in blockquote",
+			speaker:  "Bob",
+			text:     "2) second item",
+			contains: []string{"> 2\\) second item"},
+			absent:   []string{"> 2) second item"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,7 +203,7 @@ func TestWriterEvent(t *testing.T) {
 	require.NoError(t, w.Flush())
 
 	assert.Equal(t,
-		"**Alice (13:06:05):** The architecture requires a standalone binary.\n\n",
+		"**Alice** (13:06:05):\n> The architecture requires a standalone binary.\n\n",
 		buf.String())
 }
 

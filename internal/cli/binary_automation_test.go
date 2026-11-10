@@ -77,8 +77,7 @@ func TestCompiledBinaryCapturesRecapToExplicitOutput(t *testing.T) {
 			}
 			content, err := os.ReadFile(output)
 			require.NoError(t, err)
-			require.Contains(t, string(content), "**Presenter (00:00:03):**")
-			require.Contains(t, string(content), "Synthetic compiled binary transcript.")
+			require.Contains(t, string(content), "**Presenter** (00:00:03):\n> Synthetic compiled binary transcript.")
 			require.Contains(t, string(content), "\n---\n")
 			require.Contains(t, string(content), "Synthetic compiled binary AI summary.")
 		})

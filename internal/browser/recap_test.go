@@ -1,6 +1,8 @@
 package browser
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -218,4 +220,255 @@ func TestExtractMeetingIdentityAndVerifyRecapTargetMatchesMeeting(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "ARCHITECTURE SYNC OPTIONS", meta.Title)
+
+	// SharePoint /:v:/p/ sharing links in fileUrl carry an opaque sharing token, not an .mp4 filename;
+	// verifyRecapTargetMatchesMeeting must not reject the real .mp4 filename in g_fileInfo.name.
+	sharingLinkURL := "https://teams.microsoft.com/l/meetingrecap?driveId=b%21syntheticDriveId&driveItemId=0153RCEHUPKMC42MOY75E2K7UM6XPTXKBA&fileUrl=https%3A%2F%2Fcontoso-my.sharepoint.com%2F%3Av%3A%2Fp%2Fpresenter%2FIQCPUwXNMdj_SaV-jPXfO6ggAU7_E5VW7OxYAZmKSEjRQo8&threadId=19%3Ameeting_ZWM5NTU3NjctYWE3Yi00ZTQwLTg4ODEtNTZmZTg0NmEyODA3%40thread.v2&subType=RecapSharingLink_RecapChiclet&recapType=RecordingAndTranscript"
+	sharingID := ExtractMeetingIdentity(sharingLinkURL)
+	assert.Empty(t, sharingID.RecordingName, "opaque SharePoint /:v:/p/ sharing token must not be treated as a recording filename")
+	sharingPayload := `{
+		"title": "All the Vibes: Hack & Furious",
+		"fileName": "All the Vibes Hack _ Furious-20261110_175804UTC-Meeting Recording.mp4",
+		"entries": [{"speaker": "Presenter A", "timestamp": "PT5S", "text": "Welcome everyone.", "type": "Text"}]
+	}`
+	sharingEntries, sharingMeta, err := parseRecapPayloadForMeeting(sharingPayload, sharingLinkURL, "https://teams.microsoft.com/v2/", "https://contoso-my.sharepoint.com/personal/presenter/_layouts/15/xplatplugins.aspx?uniqueId=cd05538f")
+	require.NoError(t, err)
+	require.Len(t, sharingEntries, 1)
+	assert.Equal(t, "All the Vibes: Hack & Furious", sharingMeta.Title)
+}
+
+func TestIsAuthRedirectURLIncludesMicrosoftLoginHosts(t *testing.T) {
+	for _, u := range []string{
+		"https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+		"https://login.microsoft.com/consumers/fido/get",
+		"https://account.live.com/proofs/Manage",
+		"https://mysignins.microsoft.com/security-info",
+		"https://account.activedirectory.windowsazure.com/RelyingPartyStrongAuthentication",
+		"https://aadcdn.msftauth.net/shared/1.0/content/js/ConvergedLogin.js",
+	} {
+		assert.Truef(t, isAuthRedirectURL(u), "expected auth redirect URL: %s", u)
+	}
+}
+
+func TestHasTeamsSessionInProfile(t *testing.T) {
+	assert.False(t, hasTeamsSessionInProfile(""), "empty path must return false")
+	dir := t.TempDir()
+	assert.False(t, hasTeamsSessionInProfile(dir), "new directory without Default/Local Storage/leveldb must return false")
+
+	leveldbDir := filepath.Join(dir, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(leveldbDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(leveldbDir, "000001.log"), []byte("https://login.microsoftonline.com some-other-key"), 0o600))
+	assert.False(t, hasTeamsSessionInProfile(dir), "profile with only login page storage and no Teams tokens must return false")
+
+	require.NoError(t, os.WriteFile(filepath.Join(leveldbDir, "000002.ldb"), []byte("_https://teams.cloud.microsoft\x00\x01SKYPE-TOKEN-value"), 0o600))
+	assert.True(t, hasTeamsSessionInProfile(dir), "profile containing SKYPE-TOKEN in leveldb must return true")
+}
+
+func TestHeadedAuthTrackerColdProfileBootstrapsTeamsV2AndDoesNotLoopDuringLogin(t *testing.T) {
+	recapURL := "https://teams.cloud.microsoft/l/meetingrecap?driveId=b%21123&driveItemId=01ABC&threadId=19%3Ameeting_XYZ%40thread.v2"
+
+	tracker, initialURL := newHeadedAuthTracker(recapURL, true)
+	assert.Equal(t, teamsV2BootstrapURL, initialURL, "cold profile for meetingrecap URL must bootstrap at /v2/ first")
+
+	_, msInitialURL := newHeadedAuthTracker("https://teams.microsoft.com/l/meetingrecap?threadId=19%3Ameeting_XYZ%40thread.v2", true)
+	assert.Equal(t, "https://teams.microsoft.com/v2/", msInitialURL, "cold profile for teams.microsoft.com recap URL must bootstrap on the same teams.microsoft.com/v2/ origin")
+
+	// Simulate multi-host interactive login (login.microsoftonline.com -> login.microsoft.com -> login.microsoftonline.com)
+	// and extended user MFA wait (15 polls): must never yank the browser away from the login flow.
+	assert.Empty(t, tracker.onAuthRedirect("https://login.microsoftonline.com/common/oauth2/v2.0/authorize"))
+	assert.Empty(t, tracker.onAuthRedirect("https://login.microsoft.com/consumers/fido/get"))
+	for range 15 {
+		assert.Empty(t, tracker.onAuthRedirect("https://login.microsoftonline.com/common/SAS/ProcessAuth"))
+	}
+
+	// Simulate redirect back to teams.cloud.microsoft/v2/#code=... while OAuth code exchange is in flight.
+	for range 5 {
+		nav := tracker.onNonAuthPage(headedPageState{
+			PageURL:      "https://teams.cloud.microsoft/v2/#code=0.AXIA...",
+			Host:         "teams.cloud.microsoft",
+			Path:         "/v2/",
+			Hash:         "#code=0.AXIA...",
+			ReadyState:   "complete",
+			AuthInFlight: true,
+			MsalReady:    true,
+		})
+		assert.Empty(t, nav, "must never navigate while OAuth callback code exchange is in flight")
+	}
+
+	// Simulate Teams splash screen where msal.2.account.keys exists but neither SKYPE-TOKEN nor the app shell (>15 data-tid) is ready.
+	for range 5 {
+		nav := tracker.onNonAuthPage(headedPageState{
+			PageURL:      "https://teams.cloud.microsoft/v2/",
+			Host:         "teams.cloud.microsoft",
+			Path:         "/v2/",
+			ReadyState:   "complete",
+			AuthInFlight: false,
+			MsalReady:    true,
+			SkypeReady:   false,
+			TidCount:     3,
+		})
+		assert.Empty(t, nav, "must not navigate while Teams splash screen is still acquiring tokens")
+	}
+
+	// Once Teams v2 shell and Skype token are ready on /v2/, wait 3 polls to settle, then navigate ONCE to recapURL.
+	settledV2 := headedPageState{
+		PageURL:    "https://teams.cloud.microsoft/v2/",
+		Host:       "teams.cloud.microsoft",
+		Path:       "/v2/",
+		ReadyState: "complete",
+		MsalReady:  true,
+		SkypeReady: true,
+		TidCount:   42,
+	}
+	assert.Empty(t, tracker.onNonAuthPage(settledV2))
+	assert.Empty(t, tracker.onNonAuthPage(settledV2))
+	assert.Equal(t, recapURL, tracker.onNonAuthPage(settledV2), "third settled poll on /v2/ must navigate to the target recap URL")
+
+	// While the recap page is loading (even if it takes 15 polls / 22.5s before RecapHeader or xplatplugins.aspx mounts),
+	// it must NOT re-navigate in a 3s/9s loop.
+	loadingRecap := headedPageState{
+		PageURL:    recapURL,
+		Host:       "teams.cloud.microsoft",
+		Path:       "/l/meetingrecap",
+		ReadyState: "complete",
+		MsalReady:  true,
+		SkypeReady: true,
+		TidCount:   30,
+	}
+	for range 15 {
+		assert.Empty(t, tracker.onNonAuthPage(loadingRecap), "must not interrupt recap page while it is loading")
+	}
+
+	// Warm profile launched directly at recapURL (reNavigateAttempts == 0) must also allow at least
+	// 15 polls (22.5s) of on-target recap loading without interrupting it.
+	warmTracker, warmInitialURL := newHeadedAuthTracker(recapURL, false)
+	assert.Equal(t, recapURL, warmInitialURL)
+	for range 15 {
+		assert.Empty(t, warmTracker.onNonAuthPage(loadingRecap), "warm profile must not reload recapURL mid-load")
+	}
+}
+
+func TestHeadedAuthTrackerBreaksRapidRecapAuthBounceLoopViaTeamsV2(t *testing.T) {
+	recapURL := "https://teams.cloud.microsoft/l/meetingrecap?driveId=b%21123&driveItemId=01ABC&threadId=19%3Ameeting_XYZ%40thread.v2"
+
+	// Warm-disk profile launches directly at recapURL, but session is unauthenticated and /l/meetingrecap bounces rapidly.
+	tracker, initialURL := newHeadedAuthTracker(recapURL, false)
+	assert.Equal(t, recapURL, initialURL)
+
+	unsettledRecap := headedPageState{
+		PageURL:    recapURL,
+		Host:       "teams.cloud.microsoft",
+		Path:       "/l/meetingrecap",
+		ReadyState: "complete",
+	}
+	// Bounce 1: Teams -> Auth
+	assert.Empty(t, tracker.onNonAuthPage(unsettledRecap))
+	assert.Empty(t, tracker.onAuthRedirect("https://login.microsoftonline.com/common/oauth2/v2.0/authorize"))
+	// Bounce 2: Teams -> Auth
+	assert.Empty(t, tracker.onNonAuthPage(unsettledRecap))
+	assert.Empty(t, tracker.onAuthRedirect("https://login.microsoftonline.com/common/oauth2/v2.0/authorize"))
+	// Bounce 3: Teams -> Auth (rapid bounce loop detected on second poll of 3rd bounce)
+	assert.Empty(t, tracker.onNonAuthPage(unsettledRecap))
+	assert.Empty(t, tracker.onAuthRedirect("https://login.microsoftonline.com/common/oauth2/v2.0/authorize"))
+	gotNav := tracker.onAuthRedirect("https://login.microsoftonline.com/common/oauth2/v2.0/authorize")
+	assert.Equal(t, teamsV2BootstrapURL, gotNav, "rapid /l/meetingrecap auth bounce loop must escape to /v2/ bootstrap URL, not re-apply the looping recap URL")
+}
+
+func TestFindBoundCapturePageRebindsSingleTabAcrossAuthAndTeamsHostsWithoutSwitchingToConcurrentTab(t *testing.T) {
+	recapURL := "https://teams.cloud.microsoft/l/meetingrecap?driveId=b%21123&driveItemId=01ABC&threadId=19%3Ameeting_XYZ%40thread.v2"
+	m := &chromeMeeting{
+		opts:                 MeetingOptions{MeetingURL: recapURL},
+		capturePageID:        "tab-1",
+		allowSingleTabRebind: true,
+	}
+
+	// COOP targetId swap onto login.microsoftonline.com (ParentID is empty on page targets in /json/list).
+	rebound, ok := m.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-2-auth", Type: "page", URL: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize", WebSocketDebuggerURL: "ws://127.0.0.1/2"},
+	})
+	require.True(t, ok, "must follow single-tab COOP swap onto login.microsoftonline.com")
+	assert.Equal(t, "tab-2-auth", rebound.ID)
+
+	// COOP targetId swap onto login.microsoft.com.
+	rebound, ok = m.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-3-mslogin", Type: "page", URL: "https://login.microsoft.com/consumers/fido/get", WebSocketDebuggerURL: "ws://127.0.0.1/3"},
+	})
+	require.True(t, ok, "must follow single-tab COOP swap onto login.microsoft.com")
+	assert.Equal(t, "tab-3-mslogin", rebound.ID)
+
+	// COOP targetId swap back onto generic teams.cloud.microsoft/v2/ landing page (no threadId in URL yet).
+	rebound, ok = m.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-4-teams-home", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/4"},
+	})
+	require.True(t, ok, "must follow single-tab COOP swap onto teams.cloud.microsoft/v2/ post-auth landing page")
+	assert.Equal(t, "tab-4-teams-home", rebound.ID)
+
+	// Now suppose a second concurrent tab ("concurrent-other-tab") is opened while tab-4-teams-home is still present.
+	rebound, ok = m.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-4-teams-home", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/4"},
+		{ID: "concurrent-other-tab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/other"},
+	})
+	require.True(t, ok)
+	assert.Equal(t, "tab-4-teams-home", rebound.ID)
+
+	// If tab-4-teams-home is then closed, leaving only concurrent-other-tab, findBoundCapturePage must fail closed.
+	_, ok = m.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "concurrent-other-tab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/other"},
+	})
+	assert.False(t, ok, "must fail closed when bound tab closes and remaining tab was a known concurrent tab")
+
+	// Ambiguous missing-target poll with two candidates (B and C) followed by only C must also fail closed.
+	m2 := &chromeMeeting{
+		opts:                 MeetingOptions{MeetingURL: recapURL},
+		capturePageID:        "tab-a",
+		allowSingleTabRebind: true,
+	}
+	_, ok = m2.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-b", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/b"},
+		{ID: "tab-c", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/c"},
+	})
+	assert.False(t, ok)
+	_, ok = m2.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-c", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/c"},
+	})
+	assert.False(t, ok, "candidate seen in ambiguous multi-tab missing-target poll must not be rebound later")
+
+	// Concurrent tab initially at edge://newtab/ alongside capture tab A must be remembered so it cannot be rebound later.
+	m3 := &chromeMeeting{
+		opts:                 MeetingOptions{MeetingURL: recapURL},
+		capturePageID:        "tab-a",
+		allowSingleTabRebind: true,
+	}
+	_, ok = m3.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-a", Type: "page", URL: recapURL, WebSocketDebuggerURL: "ws://127.0.0.1/a"},
+		{ID: "tab-edge-newtab", Type: "page", URL: "edge://newtab/", WebSocketDebuggerURL: "ws://127.0.0.1/newtab"},
+	})
+	require.True(t, ok)
+	_, ok = m3.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-edge-newtab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/newtab"},
+	})
+	assert.False(t, ok, "concurrent edge:// tab that later navigates to Teams /v2/ must not be rebound")
+
+	// Candidate with a nonempty ParentID pointing to a different page must be rejected by the identity-free fallback.
+	m4 := &chromeMeeting{
+		opts:                 MeetingOptions{MeetingURL: recapURL},
+		capturePageID:        "tab-a",
+		allowSingleTabRebind: true,
+	}
+	_, ok = m4.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-child-of-b", ParentID: "tab-b", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/child"},
+	})
+	assert.False(t, ok, "candidate whose nonempty ParentID points to a different page must be rejected")
+
+	// Outer page URL containing sharepoint.com in its fileUrl query must not be classified as a recap iframe.
+	assert.False(t, isRecapIframeTarget(cdpTargetInfo{
+		ID:   "main-page",
+		Type: "page",
+		URL:  "https://teams.microsoft.com/l/meetingrecap?fileUrl=https%3A%2F%2Fcontoso-my.sharepoint.com%2Fvideo.mp4",
+	}))
+	assert.True(t, isRecapIframeTarget(cdpTargetInfo{
+		ID:   "sp-iframe",
+		Type: "iframe",
+		URL:  "https://contoso-my.sharepoint.com/personal/user/_layouts/15/xplatplugins.aspx",
+	}))
 }

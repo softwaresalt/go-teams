@@ -167,7 +167,7 @@ func sanitizeSourceURL(raw string) string {
 // participant-controlled speaker and text are sanitized to prevent Markdown or
 // HTML injection into the rendered transcript.
 func (w *Writer) WriteEvent(ev CaptionEvent) error {
-	line := fmt.Sprintf("**%s (%s):** %s\n\n",
+	line := fmt.Sprintf("**%s** (%s):\n> %s\n\n",
 		sanitizeField(ev.Speaker), ev.Timestamp.Format("15:04:05"), sanitizeField(ev.Text))
 	if _, err := w.bw.WriteString(line); err != nil {
 		return fmt.Errorf("transcript: write event: %w", err)

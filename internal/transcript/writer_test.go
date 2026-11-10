@@ -21,10 +21,11 @@ func TestWriteEventCollapsesLineBreaks(t *testing.T) {
 	require.NoError(t, w.Flush())
 
 	body := strings.TrimSuffix(buf.String(), "\n\n")
-	// The embedded CR/LF must be gone (proving collapse, not just that # is escaped).
-	assert.NotContains(t, body, "\n", "embedded newline must be collapsed")
+	// Only the single newline separating the speaker header from the blockquote line is allowed;
+	// the embedded CR/LF inside the caption text must be collapsed.
+	assert.Equal(t, 1, strings.Count(body, "\n"), "embedded newline must be collapsed")
 	assert.NotContains(t, body, "\r", "embedded carriage return must be collapsed")
-	assert.Equal(t, `**Bob (13:06:05):** hi  \# Injected`, body)
+	assert.Equal(t, "**Bob** (13:06:05):\n> hi  \\# Injected", body)
 }
 
 func TestWriteEventDefusesBareAutolink(t *testing.T) {
@@ -167,7 +168,7 @@ func TestWriterEvent(t *testing.T) {
 	require.NoError(t, w.Flush())
 
 	assert.Equal(t,
-		"**Alice (13:06:05):** The architecture requires a standalone binary.\n\n",
+		"**Alice** (13:06:05):\n> The architecture requires a standalone binary.\n\n",
 		buf.String())
 }
 

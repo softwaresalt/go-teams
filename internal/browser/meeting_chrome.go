@@ -36,6 +36,7 @@ type chromeMeeting struct {
 	cdpPort              int
 	capturePageID        string
 	allowSingleTabRebind bool
+	otherPageIDs         map[string]bool
 	headedMu             sync.Mutex
 	headedStop           func()
 	attachedCtx          context.Context
@@ -93,8 +94,191 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 	return m.awaitPreJoinOrAdmission(ctx)
 }
 
+const teamsV2BootstrapURL = "https://teams.cloud.microsoft/v2/"
+
+func teamsV2BootstrapURLFor(meetingURL string) string {
+	if hasHTTPSHostSuffix(meetingURL, "teams.microsoft.com") {
+		return "https://teams.microsoft.com/v2/"
+	}
+	return teamsV2BootstrapURL
+}
+
+type headedPageState struct {
+	PageURL        string `json:"-"`
+	Host           string `json:"host"`
+	Path           string `json:"path"`
+	Hash           string `json:"hash"`
+	ReadyState     string `json:"readyState"`
+	Toolbar        bool   `json:"toolbar"`
+	Lobby          bool   `json:"lobby"`
+	Prejoin        bool   `json:"prejoin"`
+	Launcher       bool   `json:"launcher"`
+	RecapHeader    bool   `json:"recapHeader"`
+	TidCount       int    `json:"tidCount"`
+	AuthInFlight   bool   `json:"authInFlight"`
+	MsalReady      bool   `json:"msalReady"`
+	SkypeReady     bool   `json:"skypeReady"`
+	HasRecapIframe bool   `json:"-"`
+}
+
+// headedAuthTracker manages post-authentication URL restoration and cold-profile
+// bootstrap state so headed capture neither gets stuck in a /l/meetingrecap
+// OAuth redirect loop nor interrupts in-progress user sign-in or page loads.
+type headedAuthTracker struct {
+	meetingURL                string
+	needsPostAuthMeetingNav   bool
+	appliedPostAuthMeetingURL bool
+	bootstrappedTeamsHome     bool
+	sawAuthRedirect           bool
+	lastWasTeams              bool
+	rapidAuthBounces          int
+	authStayPolls             int
+	teamsStayPolls            int
+	settledPolls              int
+	reNavigateAttempts        int
+}
+
+func newHeadedAuthTracker(meetingURL string, coldProfile bool) (*headedAuthTracker, string) {
+	t := &headedAuthTracker{meetingURL: meetingURL}
+	if coldProfile && isMicrosoftTeamsRecapURL(meetingURL) {
+		t.needsPostAuthMeetingNav = true
+		t.bootstrappedTeamsHome = true
+		return t, teamsV2BootstrapURLFor(meetingURL)
+	}
+	return t, meetingURL
+}
+
+func (t *headedAuthTracker) onAuthRedirect(_ string) string {
+	t.sawAuthRedirect = true
+	t.settledPolls = 0
+	if t.lastWasTeams {
+		t.lastWasTeams = false
+		t.authStayPolls = 1
+		if t.teamsStayPolls > 0 && t.teamsStayPolls <= 3 {
+			t.rapidAuthBounces++
+		} else {
+			t.rapidAuthBounces = 1
+		}
+		t.teamsStayPolls = 0
+	} else {
+		t.authStayPolls++
+		if t.authStayPolls > 4 {
+			// User is stationary on the login/MFA/KMSI screen; never treat user
+			// interaction time as an automatic redirect bounce loop.
+			t.rapidAuthBounces = 0
+		}
+	}
+	if t.rapidAuthBounces >= 3 && t.authStayPolls >= 2 && t.reNavigateAttempts < 2 {
+		t.rapidAuthBounces = 0
+		t.authStayPolls = 0
+		t.reNavigateAttempts++
+		if isMicrosoftTeamsRecapURL(t.meetingURL) && !t.bootstrappedTeamsHome {
+			t.bootstrappedTeamsHome = true
+			t.needsPostAuthMeetingNav = true
+			t.appliedPostAuthMeetingURL = false
+			return teamsV2BootstrapURLFor(t.meetingURL)
+		}
+		t.appliedPostAuthMeetingURL = true
+		return t.meetingURL
+	}
+	return ""
+}
+
+func (t *headedAuthTracker) onNonAuthPage(st headedPageState) string {
+	hostLower := strings.ToLower(st.Host)
+	if !strings.Contains(hostLower, "teams.cloud.microsoft") &&
+		!strings.Contains(hostLower, "teams.microsoft.com") &&
+		!strings.Contains(hostLower, "teams.live.com") {
+		// External federated SSO/IdP host during login; do not count as Teams.
+		t.settledPolls = 0
+		return ""
+	}
+	t.lastWasTeams = true
+	t.authStayPolls = 0
+	t.teamsStayPolls++
+	if t.teamsStayPolls > 3 {
+		t.rapidAuthBounces = 0
+	}
+	if st.Launcher || st.Toolbar || st.Lobby || st.Prejoin || st.RecapHeader || st.HasRecapIframe {
+		t.settledPolls = 0
+		return ""
+	}
+	if st.AuthInFlight || (st.ReadyState != "" && st.ReadyState != "complete") || !st.MsalReady {
+		t.settledPolls = 0
+		return ""
+	}
+	if !st.SkypeReady && st.TidCount <= 15 {
+		t.settledPolls = 0
+		return ""
+	}
+
+	t.settledPolls++
+	onTarget := isOnTargetMeetingOrRecapURL(t.meetingURL, st.PageURL, st.Path, st.Hash)
+	if (!onTarget || strings.Contains(strings.ToLower(st.Hash), "launchagent=join_launcher_web")) &&
+		!t.appliedPostAuthMeetingURL &&
+		(t.needsPostAuthMeetingNav || t.sawAuthRedirect || hasSpecificMeetingOrRecapTarget(t.meetingURL)) {
+		threshold := 5
+		if st.TidCount > 15 && st.SkypeReady {
+			threshold = 3
+		}
+		if t.settledPolls >= threshold {
+			t.needsPostAuthMeetingNav = false
+			t.appliedPostAuthMeetingURL = true
+			t.settledPolls = 0
+			t.reNavigateAttempts++
+			return t.meetingURL
+		}
+		return ""
+	}
+
+	if t.settledPolls >= 20 && t.reNavigateAttempts < 2 && hasSpecificMeetingOrRecapTarget(t.meetingURL) {
+		t.settledPolls = 0
+		t.reNavigateAttempts++
+		t.appliedPostAuthMeetingURL = true
+		return t.meetingURL
+	}
+	return ""
+}
+
+func hasSpecificMeetingOrRecapTarget(meetingURL string) bool {
+	lower := strings.ToLower(strings.TrimSpace(meetingURL))
+	if strings.Contains(lower, "meetingrecap") ||
+		strings.Contains(lower, "meetup-join") ||
+		strings.Contains(lower, "/meet/") {
+		return true
+	}
+	id := ExtractMeetingIdentity(meetingURL)
+	return id.ThreadID != "" || id.MeetingToken != "" || id.DriveItemID != "" || id.CallID != "" || id.ICalUID != "" || id.MeetID != ""
+}
+
+func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
+	if !hasSpecificMeetingOrRecapTarget(meetingURL) {
+		return true
+	}
+	if hasPositiveMeetingIdentityMatch(meetingURL, pageURL) {
+		return true
+	}
+	lowerMeeting := strings.ToLower(meetingURL)
+	combined := strings.ToLower(pageURL + " " + path + " " + hash)
+	switch {
+	case strings.Contains(lowerMeeting, "meetingrecap"):
+		return strings.Contains(combined, "meetingrecap")
+	case strings.Contains(lowerMeeting, "meetup-join"):
+		return strings.Contains(combined, "meetup-join")
+	case strings.Contains(lowerMeeting, "/meet/"):
+		return strings.Contains(combined, "/meet/")
+	default:
+		return strings.TrimRight(strings.ToLower(pageURL), "/") == strings.TrimRight(lowerMeeting, "/")
+	}
+}
+
 func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
-	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, m.opts.MeetingURL)
+	coldProfile := !hasTeamsSessionInProfile(m.headedOpts.UserDataDir)
+	authTracker, initialURL := newHeadedAuthTracker(m.opts.MeetingURL, coldProfile)
+	if initialURL != m.opts.MeetingURL {
+		slog.Info("browser: new or unauthenticated profile detected; bootstrapping Teams session at /v2/ before opening meeting recap")
+	}
+	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, initialURL)
 	if err != nil {
 		return err
 	}
@@ -113,12 +297,6 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 
 	loggedWaiting := false
 	clickedLauncher := false
-	reNavigateAttempts := 0
-	hydratedWithoutRecapPolls := 0
-	sawAuthRedirect := false
-	lastWasAuth := false
-	authBounceCount := 0
-	authLoopPolls := 0
 	consecutiveListFailures := 0
 	missingTargetPolls := 0
 
@@ -144,32 +322,17 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 				}
 			} else if isAuthRedirectURL(mainPage.URL) {
 				missingTargetPolls = 0
-				sawAuthRedirect = true
-				if !lastWasAuth {
-					authBounceCount++
-					lastWasAuth = true
-				}
-				authLoopPolls++
 				if !loggedWaiting {
 					slog.Info("browser: waiting for user authentication in browser window")
 					loggedWaiting = true
 				}
-				// If the browser is bouncing repeatedly between Teams and the
-				// login page (auth redirect loop after initial token setup),
-				// override the loop by navigating the address bar directly to
-				// the original meeting URL via Page.navigate.
-				if authBounceCount >= 2 && authLoopPolls >= 3 && reNavigateAttempts < 4 {
-					reNavigateAttempts++
-					authBounceCount = 0
-					authLoopPolls = 0
+				if navURL := authTracker.onAuthRedirect(mainPage.URL); navURL != "" {
 					clickedLauncher = false
-					slog.Info("browser: detected auth redirect loop; re-navigating to original meeting URL", "attempt", reNavigateAttempts)
-					_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, m.opts.MeetingURL)
+					slog.Info("browser: detected rapid auth redirect bounce loop; navigating to break loop", "target", navURL, "attempt", authTracker.reNavigateAttempts)
+					_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, navURL)
 				}
 			} else {
 				missingTargetPolls = 0
-				lastWasAuth = false
-				authLoopPolls = 0
 				ownedFrames := fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
 				hasRecapIframe := false
 				for i := range targets {
@@ -177,7 +340,9 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					if !isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) {
 						continue
 					}
-					if strings.Contains(t.URL, "xplatplugins.aspx") || strings.Contains(t.URL, "streamembed.aspx") {
+					if strings.Contains(t.URL, "xplatplugins.aspx") ||
+						strings.Contains(t.URL, "streamembed.aspx") ||
+						strings.Contains(t.URL, "sharepoint.com") {
 						hasRecapIframe = true
 					}
 
@@ -202,17 +367,50 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					host: location.host,
 					path: location.pathname,
 					hash: location.hash,
+					readyState: document.readyState || '',
 					toolbar: document.querySelector('#hangup-button, [data-tid="hangup-button"], [data-tid="hangup-main-btn"]') !== null,
 					lobby: document.body !== null && document.body.innerText.includes("Someone will let you in shortly"),
 					prejoin: document.querySelector('[data-tid="prejoin-join-button"]') !== null,
 					launcher: document.querySelector('#openTeamsClientInBrowser, button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]') !== null,
 					recapHeader: document.querySelector('[data-tid="intelligent-recap-header"]') !== null,
 					tidCount: document.querySelectorAll('[data-tid]').length,
+					authInFlight: (() => {
+						try {
+							const h = (location.hash || '') + '&' + (location.search || '');
+							if (/(?:^|[#?&])(code|id_token|access_token|session_state|client_info|error)=/i.test(h)) {
+								return true;
+							}
+							for (const store of [window.sessionStorage, window.localStorage]) {
+								if (!store) continue;
+								for (let i = 0; i < store.length; i++) {
+									const k = store.key(i) || '';
+									if (k.endsWith('interaction.status') && store.getItem(k) === 'interaction_in_progress') {
+										return true;
+									}
+								}
+							}
+							return false;
+						} catch (_) {
+							return false;
+						}
+					})(),
 					msalReady: (() => {
 						try {
 							return Boolean(
 								localStorage.getItem('msal.2.account.keys') ||
+								localStorage.getItem('msal.account.keys') ||
 								Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
+							);
+						} catch (_) {
+							return false;
+						}
+					})(),
+					skypeReady: (() => {
+						try {
+							return Object.keys(localStorage).some(k =>
+								k.includes('SKYPE-TOKEN') ||
+								k.includes('UserAuthState') ||
+								k.includes('msal.2.token.keys')
 							);
 						} catch (_) {
 							return false;
@@ -220,22 +418,13 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					})()
 				})`)
 				if evalErr == nil {
-					var st struct {
-						Host        string `json:"host"`
-						Path        string `json:"path"`
-						Hash        string `json:"hash"`
-						Toolbar     bool   `json:"toolbar"`
-						Lobby       bool   `json:"lobby"`
-						Prejoin     bool   `json:"prejoin"`
-						Launcher    bool   `json:"launcher"`
-						RecapHeader bool   `json:"recapHeader"`
-						TidCount    int    `json:"tidCount"`
-						MsalReady   bool   `json:"msalReady"`
-					}
+					var st headedPageState
 					_ = json.Unmarshal([]byte(stateRaw), &st)
+					st.PageURL = mainPage.URL
+					st.HasRecapIframe = hasRecapIframe
 
 					if st.Launcher {
-						hydratedWithoutRecapPolls = 0
+						authTracker.settledPolls = 0
 						if !clickedLauncher {
 							slog.Info("browser: launcher interstitial detected; clicking use web app")
 							_, _ = evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `(() => {
@@ -253,32 +442,12 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 							m.attachedCtx = tCtx
 							return m.awaitPreJoinOrAdmission(tCtx)
 						}
-						if strings.Contains(st.Host, "teams.cloud.microsoft") &&
-							!st.RecapHeader &&
-							!hasRecapIframe &&
-							(st.MsalReady || sawAuthRedirect || st.TidCount > 15) &&
-							reNavigateAttempts < 4 {
-							hydratedWithoutRecapPolls++
-							// Wait 2 polls (3s) on the first post-auth landing,
-							// or 6 polls (9s) on subsequent retries, then
-							// re-apply the original meeting URL via Page.navigate
-							// (equivalent to pasting the URL into the address bar).
-							threshold := 2
-							if reNavigateAttempts > 0 {
-								threshold = 6
-							}
-							if hydratedWithoutRecapPolls >= threshold {
-								reNavigateAttempts++
-								hydratedWithoutRecapPolls = 0
-								slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
-								_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, m.opts.MeetingURL)
-							}
-						} else {
-							hydratedWithoutRecapPolls = 0
-							if !loggedWaiting {
-								slog.Info("browser: waiting for user authentication and meeting/recap load in browser window")
-								loggedWaiting = true
-							}
+						if navURL := authTracker.onNonAuthPage(st); navURL != "" {
+							slog.Info("browser: Teams session ready; navigating to target meeting URL", "attempt", authTracker.reNavigateAttempts)
+							_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, navURL)
+						} else if !loggedWaiting {
+							slog.Info("browser: waiting for user authentication and meeting/recap load in browser window")
+							loggedWaiting = true
 						}
 					}
 				}
@@ -307,6 +476,7 @@ func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTarge
 		return nil, false
 	}
 	var candidates []*cdpTargetInfo
+	var boundTarget *cdpTargetInfo
 	for i := range targets {
 		t := &targets[i]
 		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
@@ -316,13 +486,26 @@ func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTarge
 			continue
 		}
 		if t.ID == m.capturePageID {
-			return t, true
+			boundTarget = t
+			continue
 		}
 		candidates = append(candidates, t)
 	}
+	if boundTarget != nil {
+		if m.otherPageIDs == nil {
+			m.otherPageIDs = make(map[string]bool)
+		}
+		for _, c := range candidates {
+			m.otherPageIDs[c.ID] = true
+		}
+		return boundTarget, true
+	}
 	if m.allowSingleTabRebind && len(candidates) == 1 &&
+		!m.otherPageIDs[candidates[0].ID] &&
 		isTrustedSingleTabRebindURL(candidates[0].URL) &&
-		(candidates[0].ParentID == m.capturePageID || hasPositiveMeetingIdentityMatch(m.opts.MeetingURL, candidates[0].URL)) {
+		(candidates[0].ParentID == m.capturePageID ||
+			hasPositiveMeetingIdentityMatch(m.opts.MeetingURL, candidates[0].URL) ||
+			(m.opts.MeetingURL != "" && !hasMeetingIdentityConflict(ExtractMeetingIdentity(m.opts.MeetingURL), ExtractMeetingIdentity(candidates[0].URL)))) {
 		m.capturePageID = candidates[0].ID
 		return candidates[0], true
 	}
@@ -396,33 +579,38 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 			}
 		case PreJoinWaitingForUser:
 			clickedLauncher = false
-			if reNavigateAttempts < 4 {
-				var stalledAfterAuth bool
+			if reNavigateAttempts < 1 && hasSpecificMeetingOrRecapTarget(m.opts.MeetingURL) {
+				var stalledOffTargetAfterAuth bool
 				_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => {
 					try {
-						if (!location.host.includes('teams.cloud.microsoft')) return false;
+						if (!location.host.includes('teams.cloud.microsoft') && !location.host.includes('teams.microsoft.com')) return false;
+						if (document.readyState && document.readyState !== 'complete') return false;
+						const h = (location.hash || '') + '&' + (location.search || '');
+						if (/(?:^|[#?&])(code|id_token|access_token|session_state|client_info|error)=/i.test(h)) return false;
+						const route = (location.pathname + ' ' + location.hash).toLowerCase();
+						if (route.includes('meetingrecap') || route.includes('meetup-join') || route.includes('/meet/')) return false;
 						if (document.querySelector('[data-tid="intelligent-recap-header"]')) return false;
+						if (document.querySelector('iframe[src*="xplatplugins.aspx"], iframe[src*="streamembed.aspx"], iframe[src*="sharepoint.com"]')) return false;
 						const msal = Boolean(
 							localStorage.getItem('msal.2.account.keys') ||
+							localStorage.getItem('msal.account.keys') ||
 							Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
 						);
-						return msal || document.querySelectorAll('[data-tid]').length > 15;
+						return msal && document.querySelectorAll('[data-tid]').length > 15;
 					} catch (_) {
 						return false;
 					}
-				})()`, &stalledAfterAuth))
-				if stalledAfterAuth {
+				})()`, &stalledOffTargetAfterAuth))
+				if stalledOffTargetAfterAuth {
 					coldRecapPolls++
-					threshold := 2
-					if reNavigateAttempts > 0 {
-						threshold = 6
-					}
-					if coldRecapPolls >= threshold {
+					if coldRecapPolls >= 5 {
 						reNavigateAttempts++
 						coldRecapPolls = 0
 						slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
 						_ = chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL))
 					}
+				} else {
+					coldRecapPolls = 0
 				}
 			}
 			if !loggedWaiting {

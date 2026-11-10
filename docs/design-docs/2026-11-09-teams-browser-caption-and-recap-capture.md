@@ -23,11 +23,17 @@ optional user-data directory, and `--headless=new` only when requested.
 Clean capture launch omits `AutomationControlled` and `--no-sandbox`.
 This does not redefine the separate legacy authentication allocator.
 
-Headed mode supports operator sign-in and meeting admission. Headless mode
-requires an already usable profile and authorized access. A zero-config run
-prefers an existing profile beside the executable, then working-directory
-`bin\profile`; automation should supply `--profile-dir` explicitly.
-Browser profiles contain credentials and must never be committed or shared.
+Headed mode supports operator sign-in and meeting admission. When a profile
+directory lacks an initialized Teams Local Storage session, headed Meeting
+Recap capture bootstraps authentication at the matching `/v2/` origin
+(`https://teams.microsoft.com/v2/` or `https://teams.cloud.microsoft/v2/`)
+before navigating to the recap URL, and tracks OAuth callback completion and
+single-tab COOP `targetId` swaps across Microsoft identity hosts without
+rebinding to concurrent tabs. Headless mode requires an already usable profile
+and authorized access. A zero-config run prefers an existing profile beside
+the executable, then working-directory `bin\profile`; automation should supply
+`--profile-dir` explicitly. Browser profiles contain credentials and must
+never be committed or shared.
 
 ## Live caption path
 
@@ -50,8 +56,12 @@ item collection to avoid limiting export to currently rendered virtualized
 rows. A DOM fallback reads transcript cells, speaker names, timestamps, and
 text. The fallback can be incomplete when virtualization hides entries.
 
-ISO duration or colon-separated recording offsets become `HH:MM:SS` labels.
-Empty transcript events are omitted. Recap captions are finite, so this path
+ISO duration or colon-separated recording offsets become `HH:MM:SS` labels,
+and `Writer.WriteEvent` renders each utterance with a bold speaker header and
+blockquote line (`**Speaker** (HH:MM:SS):\n> text`). Empty transcript events
+are omitted. SharePoint `/:v:/p/` sharing links in `fileUrl` are ignored when
+extracting recording filenames so opaque sharing tokens do not reject valid
+`.mp4` names in `g_fileInfo.name`. Recap captions are finite, so this path
 exits after writing the extracted entries instead of waiting for cancellation.
 
 ## Teams AI summary

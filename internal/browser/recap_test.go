@@ -162,8 +162,8 @@ func TestExtractMeetingIdentityAndVerifyRecapTargetMatchesMeeting(t *testing.T) 
 	submittedURL := "https://teams.cloud.microsoft/l/meetingrecap?driveId=b%21syntheticDriveId123&driveItemId=01SYNTHETICITEMID456&fileUrl=https%3A%2F%2Fcontoso-my.sharepoint.com%2Fpersonal%2Fpresenter_contoso_com%2FDocuments%2FRecordings%2FARCHITECTURE+SYNC+OPTIONS-20261109_105939-Meeting+Recording.mp4%3Fweb%3D1&iCalUid=040000008200E00074C5B7101A82E00800000000SYNTHETICICALUID&threadId=19%3Ameeting_U1lOVEhFVElDX01FRVRJTkdfVE9LRU4%40thread.v2&callId=00000000-1111-2222-3333-444444444444"
 
 	id := ExtractMeetingIdentity(submittedURL)
-	assert.Equal(t, "19:meeting_u1lovehfveldx01frvrjbkdfve9lru4@thread.v2", id.ThreadID)
-	assert.Equal(t, "meeting_u1lovehfveldx01frvrjbkdfve9lru4", id.MeetingToken)
+	assert.Equal(t, "19:meeting_u1lovehfveldx01frvrjtkdfve9lru4@thread.v2", id.ThreadID)
+	assert.Equal(t, "meeting_u1lovehfveldx01frvrjtkdfve9lru4", id.MeetingToken)
 	assert.Equal(t, "01syntheticitemid456", id.DriveItemID)
 	assert.Equal(t, "00000000-1111-2222-3333-444444444444", id.CallID)
 	assert.Equal(t, "architecture sync options-20261109_105939-meeting recording.mp4", id.RecordingName)

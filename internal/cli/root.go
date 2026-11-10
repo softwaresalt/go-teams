@@ -89,7 +89,7 @@ func newRootCommand(d *deps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {
 				if isInsideQueueExecution(cmd.Context()) {
-					return fmt.Errorf("cli: nested --queue flag is not allowed")
+					return errors.New("cli: nested --queue flag is not allowed")
 				}
 				return runQueueFile(cmd.Context(), d, flags.queueFile, inheritedQueueFlags(cmd, configPath, flags))
 			}

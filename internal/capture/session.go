@@ -23,7 +23,9 @@ type SessionConfig struct {
 	OutputFile string
 	// MeetingURL is the mutated Teams meeting URL (used for output naming).
 	MeetingURL string
-	// BotName is written into the transcript frontmatter header.
+	// Category is an optional meeting category written to the transcript header.
+	Category string
+	// BotName is written into the transcript header when applicable.
 	BotName string
 	// Now is the capture start time used for output naming; a zero value
 	// defaults to time.Now at setup.
@@ -68,14 +70,26 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		captionsOnly = true
 	}
 
-	out, err := s.setupOutput(OutputConfig{
+	outCfg := OutputConfig{
 		Dir:          s.cfg.OutputDir,
 		FilePath:     s.cfg.OutputFile,
 		MeetingURL:   s.cfg.MeetingURL,
+		Category:     s.cfg.Category,
 		BotName:      s.cfg.BotName,
 		Now:          s.cfg.Now,
 		CaptionsOnly: captionsOnly,
-	})
+	}
+	if mp, ok := m.(browser.MetadataProvider); ok {
+		meta := mp.MeetingMetadata()
+		outCfg.MeetingTitle = meta.Title
+		outCfg.Timezone = meta.Timezone
+		outCfg.Attendees = meta.Attendees
+		if outCfg.Now.IsZero() && !meta.StartTime.IsZero() {
+			outCfg.Now = meta.StartTime
+		}
+	}
+
+	out, err := s.setupOutput(outCfg)
 	if err != nil {
 		return err
 	}

@@ -120,8 +120,9 @@ func TestCaptionsCommandEndToEndWritesMarkdownFile(t *testing.T) {
 	cancel()
 	require.NoError(t, <-errCh)
 
-	assert.Contains(t, mdContent, `meeting_id: "meet-mvp123"`)
-	assert.Contains(t, mdContent, "# Transcript")
+	assert.Contains(t, mdContent, "# Meeting Attendees")
+	assert.Contains(t, mdContent, "**Meeting:** meet-mvp123")
+	assert.Contains(t, mdContent, "## Transcript")
 	assert.Contains(t, mdContent, "**Presenter (")
 	assert.Contains(t, mdContent, "Live captions are now streaming to Markdown.")
 }

@@ -130,21 +130,29 @@ func TestWriteEventEscapesMarkdownInjection(t *testing.T) {
 func TestWriterHeader(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewWriter(&buf)
-	start := time.Date(2026, 7, 9, 13, 5, 30, 0, time.UTC)
+	start := time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
 	require.NoError(t, w.WriteHeader(Metadata{
-		MeetingID: "19:meeting_abc",
-		StartTime: start,
-		BotName:   "Transcription Agent",
+		MeetingID:    "19:meeting_abc",
+		MeetingTitle: "NVD Pacific TZ Sync",
+		Category:     "WSP",
+		SourceURL:    "https://teams.microsoft.com/l/meetingrecap?threadId=1",
+		StartTime:    start,
+		Timezone:     "America/Los_Angeles",
+		Attendees:    []string{"Derek Williams", "Sahir Shivji", "Tarun Kumar"},
 	}))
 	require.NoError(t, w.Flush())
 
 	out := buf.String()
-	assert.Contains(t, out, `meeting_id: "19:meeting_abc"`)
-	assert.Contains(t, out, "date: 2026-07-09")
-	assert.Contains(t, out, `start_time: "13:05:30"`)
+	assert.Contains(t, out, "# Meeting Attendees\n\n")
+	assert.Contains(t, out, "**Total Attendees:** 3\n\n")
+	assert.Contains(t, out, "**Meeting Start:** 2026-10-23 09:00 America/Los_Angeles\n\n")
+	assert.Contains(t, out, "**Meeting:** NVD Pacific TZ Sync\n\n")
+	assert.Contains(t, out, "**Category:** WSP\n\n")
+	assert.Contains(t, out, "**Source:** [Teams meeting recap](https://teams.microsoft.com/l/meetingrecap?threadId=1)\n\n")
+	assert.Contains(t, out, "## Attendee List\n\n- Derek Williams\n- Sahir Shivji\n- Tarun Kumar\n\n---\n\n## Transcript\n\n")
+	assert.NotContains(t, out, "Speakers identified in the transcript")
 	assert.NotContains(t, out, "generated_by:")
 	assert.NotContains(t, out, "bot_name:")
-	assert.Contains(t, out, "# Transcript")
 }
 
 func TestWriterEvent(t *testing.T) {

@@ -21,6 +21,7 @@ type captureFlags struct {
 	outputDir   string
 	profileDir  string
 	botName     string
+	category    string
 	browserPath string
 	headless    bool
 	headed      bool
@@ -34,6 +35,7 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().StringVar(&f.outputDir, "output-dir", "", "directory where the Markdown transcript is saved")
 	cmd.Flags().StringVar(&f.profileDir, "profile-dir", "", "browser user-data directory for session persistence")
 	cmd.Flags().StringVar(&f.botName, "bot-name", "", "display name injected on guest pre-join")
+	cmd.Flags().StringVarP(&f.category, "category", "c", "", "optional meeting category for the transcript header")
 	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
 	cmd.Flags().BoolVar(&f.headless, "headless", false, "run browser in headless mode")
 	cmd.Flags().BoolVar(&f.headed, "headed", false, "open a visible browser window for interactive authentication")
@@ -74,6 +76,9 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	}
 	if f.botName != "" {
 		cfg.BotName = f.botName
+	}
+	if f.category != "" {
+		cfg.Category = f.category
 	}
 	if f.browserPath != "" {
 		cfg.BrowserPath = f.browserPath

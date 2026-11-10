@@ -44,6 +44,7 @@ func defaultDeps() *deps {
 				OutputDir:    c.OutputDir,
 				OutputFile:   c.OutputFile,
 				MeetingURL:   meetingURL,
+				Category:     c.Category,
 				BotName:      c.BotName,
 				CaptionsOnly: !c.CaptureAudio,
 			})

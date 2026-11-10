@@ -44,9 +44,19 @@ type OutputConfig struct {
 	// transcript file. When set, the transcript is written directly to
 	// FilePath (creating parent directories as needed).
 	FilePath string
-	// MeetingURL is used to derive the sanitized meeting id in the file names.
+	// MeetingURL is used to derive the sanitized meeting id in the file names
+	// and the Source link in the transcript header.
 	MeetingURL string
-	// BotName is written into the transcript frontmatter header.
+	// MeetingTitle is the human-readable meeting subject written to the header.
+	MeetingTitle string
+	// Category is an optional meeting category written to the header.
+	Category string
+	// Timezone is the IANA timezone name (e.g. "America/Los_Angeles") written
+	// alongside the meeting start time.
+	Timezone string
+	// Attendees is the list of speaker display names written to the header.
+	Attendees []string
+	// BotName is retained for compatibility with existing callers.
 	BotName string
 	// Now is the capture start time used for naming and the header; a zero
 	// value defaults to time.Now.
@@ -134,7 +144,16 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
 	w := transcript.NewWriter(mdFile)
-	if err := w.WriteHeader(transcript.Metadata{MeetingID: id, StartTime: now, BotName: cfg.BotName}); err != nil {
+	if err := w.WriteHeader(transcript.Metadata{
+		MeetingID:    id,
+		MeetingTitle: cfg.MeetingTitle,
+		Category:     cfg.Category,
+		SourceURL:    cfg.MeetingURL,
+		StartTime:    now,
+		Timezone:     cfg.Timezone,
+		Attendees:    cfg.Attendees,
+		BotName:      cfg.BotName,
+	}); err != nil {
 		// Best-effort rollback of the partial transcript; the header-write
 		// error is the failure worth surfacing to the caller.
 		_ = mdFile.Close()

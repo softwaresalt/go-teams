@@ -42,6 +42,7 @@ type Config struct {
 	OutputFile   string            `yaml:"output_file,omitempty"`
 	ProfileDir   string            `yaml:"profile_dir"`
 	BotName      string            `yaml:"bot_name"`
+	Category     string            `yaml:"category,omitempty"`
 	Headless     bool              `yaml:"headless"`
 	CaptureAudio bool              `yaml:"capture_audio,omitempty"`
 	BrowserPath  string            `yaml:"browser_path,omitempty"`

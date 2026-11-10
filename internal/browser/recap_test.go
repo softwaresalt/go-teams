@@ -138,3 +138,13 @@ func TestIsTrustedSingleTabRebindURLRejectsSpoofedHosts(t *testing.T) {
 	assert.False(t, isTrustedSingleTabRebindURL("https://teams.cloud.microsoft.attacker.example/"), "spoofed subdomain prefix must be rejected")
 	assert.False(t, isTrustedSingleTabRebindURL("https://evilsharepoint.com/"), "non-dot suffix must be rejected")
 }
+
+func TestParseRecapStartTime(t *testing.T) {
+	ts, ok := parseRecapStartTime("Monday, November 9, 2026 8:00\u202fAM")
+	require.True(t, ok)
+	assert.Equal(t, "2026-11-09 08:00", ts.Format("2006-01-02 15:04"))
+
+	tsTZ, ok := parseRecapStartTimeInLocation("2026-11-09T15:59:38Z", "America/Los_Angeles")
+	require.True(t, ok)
+	assert.Equal(t, "2026-11-09 08:00", tsTZ.Format("2006-01-02 15:04"))
+}

@@ -40,6 +40,7 @@ type chromeMeeting struct {
 	headedStop           func()
 	attachedCtx          context.Context
 	recapEntries         []RecapTranscriptEntry
+	recapMeta            MeetingMetadata
 	aiSummary            string
 }
 
@@ -50,6 +51,11 @@ func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 // AISummary implements AISummaryProvider.
 func (m *chromeMeeting) AISummary() string {
 	return m.aiSummary
+}
+
+// MeetingMetadata implements MetadataProvider.
+func (m *chromeMeeting) MeetingMetadata() MeetingMetadata {
+	return m.recapMeta
 }
 
 // IsRecap implements RecapMeeting.
@@ -178,13 +184,15 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
 					// has a Meeting Recap transcript list populated.
 					if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-						if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
+						if entries, meta, pErr := parseRecapPayloadWithMeta(raw); pErr == nil && len(entries) > 0 {
 							m.recapEntries = entries
-							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
 							if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
 								m.aiSummary = summary
 								slog.Info("browser: copied AI summary from meeting recap")
 							}
+							enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
+							m.recapMeta = meta
+							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
 							return nil
 						}
 					}
@@ -452,13 +460,15 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 			continue
 		}
 		if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-			if entries, pErr := parseRecapEntriesPayload(raw); pErr == nil && len(entries) > 0 {
+			if entries, meta, pErr := parseRecapPayloadWithMeta(raw); pErr == nil && len(entries) > 0 {
 				m.recapEntries = entries
-				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries))
 				if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
 					m.aiSummary = summary
 					slog.Info("browser: copied AI summary from meeting recap")
 				}
+				enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
+				m.recapMeta = meta
+				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
 				return true
 			}
 		}

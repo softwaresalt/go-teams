@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,21 @@ type RecapTranscriptEntry struct {
 // capture the Teams Meeting Recap AI Summary alongside the transcript.
 type AISummaryProvider interface {
 	AISummary() string
+}
+
+// MeetingMetadata holds header metadata discovered from the Teams Meeting Recap
+// page and transcript.
+type MeetingMetadata struct {
+	Title     string
+	StartTime time.Time
+	Timezone  string
+	Attendees []string
+}
+
+// MetadataProvider is an optional interface implemented by Meeting values that
+// supply discovered meeting header metadata.
+type MetadataProvider interface {
+	MeetingMetadata() MeetingMetadata
 }
 
 // RecapMeeting is an optional interface implemented by Meeting values that
@@ -411,6 +427,10 @@ func ParseRecapTimestamp(raw string, base time.Time) (time.Time, bool) {
 }
 
 const extractRecapTranscriptJS = `(() => {
+	const fi = window.g_fileInfo || {};
+	const fileTitle = fi.title ? String(fi.title).trim() : '';
+	const fileStart = String(fi.CreatedDateTime || fi.TimeCreated || fi.creationTime || fi.lastModifiedTime || fi.name || '').trim();
+	const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '';
 	const listEl = document.querySelector('.ms-List');
 	if (listEl) {
 		const fiberKey = Object.keys(listEl).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
@@ -424,13 +444,13 @@ const extractRecapTranscriptJS = `(() => {
 					text: String(it.text || '').trim(),
 					type: String(it.type || 'Text')
 				}));
-				return JSON.stringify({ entries });
+				return JSON.stringify({ title: fileTitle, startTime: fileStart, timezone: tz, entries });
 			}
 		}
 	}
 	const cells = Array.from(document.querySelectorAll('.ms-List-cell, [data-transcript-entry-id]'));
 	if (cells.length === 0) {
-		return JSON.stringify({ entries: [] });
+		return JSON.stringify({ title: fileTitle, startTime: fileStart, timezone: tz, entries: [] });
 	}
 	const entries = [];
 	const seen = new Set();
@@ -452,11 +472,25 @@ const extractRecapTranscriptJS = `(() => {
 			type: 'Text'
 		});
 	}
-	return JSON.stringify({ entries });
+	return JSON.stringify({ title: fileTitle, startTime: fileStart, timezone: tz, entries });
+})()`
+
+const extractRecapPageMetadataJS = `(() => {
+	const rawTitle = (document.title || '').replace(/^\(\d+\)\s*/, '').replace(/\s*\[[^\]]+\]\s*$/, '').replace(/\s*\|\s*Microsoft Teams.*$/i, '').trim();
+	const headerEl = document.querySelector('[data-tid="intelligent-recap-header"]');
+	const headerText = headerEl ? (headerEl.parentElement ? headerEl.parentElement.innerText : headerEl.innerText) : '';
+	const bodyText = (headerText + '\n' + (document.body ? document.body.innerText : '')).replace(/[\u202f\u00a0]/g, ' ');
+	const m = bodyText.match(/(?:[A-Za-z]+,\s+)?([A-Za-z]+\s+\d{1,2}(?:,\s*\d{4})?)[\s,•·|\-–—]+(\d{1,2}:\d{2}\s*[AP]M)/i);
+	const startText = m ? (m[1] + ' ' + m[2]) : '';
+	const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '';
+	return JSON.stringify({ title: rawTitle, startText: startText, timezone: tz });
 })()`
 
 type rawRecapPayload struct {
-	Entries []struct {
+	Title     string `json:"title"`
+	StartTime string `json:"startTime"`
+	Timezone  string `json:"timezone"`
+	Entries   []struct {
 		Speaker   string `json:"speaker"`
 		Timestamp string `json:"timestamp"`
 		Text      string `json:"text"`
@@ -465,12 +499,18 @@ type rawRecapPayload struct {
 }
 
 func parseRecapEntriesPayload(raw string) ([]RecapTranscriptEntry, error) {
+	entries, _, err := parseRecapPayloadWithMeta(raw)
+	return entries, err
+}
+
+func parseRecapPayloadWithMeta(raw string) ([]RecapTranscriptEntry, MeetingMetadata, error) {
 	var p rawRecapPayload
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return nil, fmt.Errorf("browser: parse recap transcript payload: %w", err)
+		return nil, MeetingMetadata{}, fmt.Errorf("browser: parse recap transcript payload: %w", err)
 	}
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	out := make([]RecapTranscriptEntry, 0, len(p.Entries))
+	speakerSet := make(map[string]struct{})
 	for _, item := range p.Entries {
 		text := strings.TrimSpace(item.Text)
 		if text == "" {
@@ -479,6 +519,8 @@ func parseRecapEntriesPayload(raw string) ([]RecapTranscriptEntry, error) {
 		speaker := strings.TrimSpace(item.Speaker)
 		if speaker == "" {
 			speaker = "Speaker"
+		} else {
+			speakerSet[speaker] = struct{}{}
 		}
 		var offset string
 		if ts, ok := ParseRecapTimestamp(item.Timestamp, base); ok {
@@ -490,7 +532,116 @@ func parseRecapEntriesPayload(raw string) ([]RecapTranscriptEntry, error) {
 			Text:    text,
 		})
 	}
-	return out, nil
+	attendees := make([]string, 0, len(speakerSet))
+	for spk := range speakerSet {
+		attendees = append(attendees, spk)
+	}
+	sort.Strings(attendees)
+	meta := MeetingMetadata{
+		Title:     strings.TrimSpace(p.Title),
+		Timezone:  strings.TrimSpace(p.Timezone),
+		Attendees: attendees,
+	}
+	if ts, ok := parseRecapStartTimeInLocation(p.StartTime, meta.Timezone); ok {
+		meta.StartTime = ts
+	}
+	return out, meta, nil
+}
+
+func enrichRecapMetadataFromPage(ctx context.Context, port int, ownerPageID string, meta *MeetingMetadata) {
+	targets, err := listCDPTargets(port)
+	if err != nil {
+		return
+	}
+	for _, t := range targets {
+		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if ownerPageID != "" && t.ID != ownerPageID {
+			continue
+		}
+		raw, err := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapPageMetadataJS)
+		if err != nil || raw == "" {
+			continue
+		}
+		var pageMeta struct {
+			Title     string `json:"title"`
+			StartText string `json:"startText"`
+			Timezone  string `json:"timezone"`
+		}
+		if json.Unmarshal([]byte(raw), &pageMeta) != nil {
+			continue
+		}
+		if meta.Title == "" && pageMeta.Title != "" && !strings.EqualFold(pageMeta.Title, "Microsoft Teams") {
+			meta.Title = pageMeta.Title
+		}
+		if meta.Timezone == "" && pageMeta.Timezone != "" {
+			meta.Timezone = pageMeta.Timezone
+		}
+		if meta.StartTime.IsZero() && pageMeta.StartText != "" {
+			if parsed, ok := parseRecapStartTimeInLocation(pageMeta.StartText, meta.Timezone); ok {
+				meta.StartTime = parsed
+			}
+		}
+		return
+	}
+}
+
+var (
+	ampmNoSpaceRe   = regexp.MustCompile(`(?i)(\d{1,2}:\d{2})\s*([ap]m)$`)
+	recordingNameRe = regexp.MustCompile(`(\d{8})_(\d{6})`)
+)
+
+func parseRecapStartTime(raw string) (time.Time, bool) {
+	return parseRecapStartTimeInLocation(raw, "")
+}
+
+func parseRecapStartTimeInLocation(raw, tz string) (time.Time, bool) {
+	cleaned := strings.NewReplacer("\u202f", " ", "\u00a0", " ", ",", ", ").Replace(raw)
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(cleaned)), " ")
+	normalized = strings.ReplaceAll(normalized, " ,", ",")
+	normalized = ampmNoSpaceRe.ReplaceAllStringFunc(normalized, func(m string) string {
+		sub := ampmNoSpaceRe.FindStringSubmatch(m)
+		return sub[1] + " " + strings.ToUpper(sub[2])
+	})
+	if t, err := time.Parse(time.RFC3339, normalized); err == nil {
+		loc := time.Local
+		if tz != "" {
+			if l, locErr := time.LoadLocation(tz); locErr == nil {
+				loc = l
+			}
+		}
+		return t.In(loc).Round(time.Minute), true
+	}
+	for _, layout := range []string{
+		"Monday, January 2, 2006 3:04 PM",
+		"Monday, January 02, 2006 3:04 PM",
+		"January 2, 2006 3:04 PM",
+		"January 02, 2006 3:04 PM",
+		"Jan 2, 2006 3:04 PM",
+		"Jan 02, 2006 3:04 PM",
+	} {
+		if t, err := time.Parse(layout, normalized); err == nil {
+			return t, true
+		}
+	}
+	for _, layout := range []string{
+		"January 2 3:04 PM",
+		"January 02 3:04 PM",
+		"Jan 2 3:04 PM",
+		"Jan 02 3:04 PM",
+	} {
+		if t, err := time.Parse(layout, normalized); err == nil {
+			nowYear := time.Now().Year()
+			return time.Date(nowYear, t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, time.UTC), true
+		}
+	}
+	if m := recordingNameRe.FindStringSubmatch(normalized); m != nil {
+		if t, err := time.Parse("20060102_150405", m[1]+"_"+m[2]); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, string, <-chan struct{}, func(), error) {

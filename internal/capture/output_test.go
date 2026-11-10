@@ -110,7 +110,7 @@ func TestSetupOutputCreatesPairWithHeader(t *testing.T) {
 		t.Fatalf("read transcript: %v", err)
 	}
 	header := string(data)
-	for _, want := range []string{"meeting_id:", "meeting-abc123", "date: 2026-07-10", `start_time: "15:04:05"`} {
+	for _, want := range []string{"# Meeting Attendees", "**Total Attendees:**", "**Meeting Start:** 2026-07-10 15:04", "**Meeting:** meeting-abc123", "## Attendee List", "## Transcript"} {
 		if !strings.Contains(header, want) {
 			t.Errorf("transcript header missing %q; got:\n%s", want, header)
 		}

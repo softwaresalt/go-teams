@@ -6,7 +6,6 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"text/template"
 	"time"
 	"unicode"
 )
@@ -39,6 +38,19 @@ var autolinkDefuser = regexp.MustCompile(`(?i)(https?://|ftp://|www\.)`)
 // mailto link.
 var emailDefuser = regexp.MustCompile(`([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})`)
 
+// validTimezoneRe matches standard IANA timezone identifiers (such as
+// "America/Los_Angeles" or "UTC") so their internal underscore is preserved
+// verbatim without Markdown backslash-escaping.
+var validTimezoneRe = regexp.MustCompile(`^[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*$`)
+
+func sanitizeTimezone(tz string) string {
+	trimmed := strings.TrimSpace(tz)
+	if validTimezoneRe.MatchString(trimmed) {
+		return trimmed
+	}
+	return sanitizeField(trimmed)
+}
+
 // controlToSpace maps control characters and Unicode line/paragraph separators
 // to a space; all other runes pass through. This prevents participant text from
 // breaking the transcript's line structure.
@@ -62,25 +74,17 @@ func sanitizeField(s string) string {
 	return emailDefuser.ReplaceAllString(s, "${1}@\u200b${2}")
 }
 
-// Metadata is the header information written as YAML frontmatter at the top of
-// a transcript file.
+// Metadata is the header information written at the top of a transcript file.
 type Metadata struct {
-	MeetingID string
-	StartTime time.Time
-	BotName   string
+	MeetingID    string
+	MeetingTitle string
+	Category     string
+	SourceURL    string
+	StartTime    time.Time
+	Timezone     string
+	Attendees    []string
+	BotName      string
 }
-
-const headerTemplate = `---
-meeting_id: {{ printf "%q" .MeetingID }}
-date: {{ .Date }}
-start_time: "{{ .StartTime }}"
----
-
-# Transcript
-
-`
-
-var tmpl = template.Must(template.New("header").Parse(headerTemplate))
 
 // Writer streams caption events to an underlying writer as Markdown, using a
 // buffered writer to keep the memory footprint low regardless of meeting
@@ -94,21 +98,69 @@ func NewWriter(w io.Writer) *Writer {
 	return &Writer{bw: bufio.NewWriter(w)}
 }
 
-// WriteHeader renders the YAML frontmatter header from meta.
+// WriteHeader renders the Meeting Attendees and Transcript header section from
+// meta.
 func (w *Writer) WriteHeader(meta Metadata) error {
-	data := struct {
-		MeetingID string
-		Date      string
-		StartTime string
-	}{
-		MeetingID: meta.MeetingID,
-		Date:      meta.StartTime.Format("2006-01-02"),
-		StartTime: meta.StartTime.Format("15:04:05"),
+	title := strings.TrimSpace(meta.MeetingTitle)
+	if title == "" {
+		title = strings.TrimSpace(meta.MeetingID)
 	}
-	if err := tmpl.Execute(w.bw, data); err != nil {
+	if title == "" {
+		title = "Teams Meeting"
+	}
+
+	tz := strings.TrimSpace(meta.Timezone)
+	if tz == "" && !meta.StartTime.IsZero() && meta.StartTime.Location() != nil {
+		locName := meta.StartTime.Location().String()
+		if locName != "" && locName != "Local" {
+			tz = locName
+		}
+	}
+	startStr := meta.StartTime.Format("2006-01-02 15:04")
+	if tz != "" {
+		startStr = startStr + " " + sanitizeTimezone(tz)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Meeting Attendees\n\n")
+	sb.WriteString(fmt.Sprintf("**Total Attendees:** %d\n\n", len(meta.Attendees)))
+	sb.WriteString(fmt.Sprintf("**Meeting Start:** %s\n\n", startStr))
+	sb.WriteString(fmt.Sprintf("**Meeting:** %s\n\n", sanitizeField(title)))
+	if strings.TrimSpace(meta.Category) != "" {
+		sb.WriteString(fmt.Sprintf("**Category:** %s\n\n", sanitizeField(strings.TrimSpace(meta.Category))))
+	}
+	if src := sanitizeSourceURL(meta.SourceURL); src != "" {
+		sb.WriteString(fmt.Sprintf("**Source:** [Teams meeting recap](%s)\n\n", src))
+	}
+	sb.WriteString("## Attendee List\n\n")
+	for _, attendee := range meta.Attendees {
+		name := strings.TrimSpace(attendee)
+		if name == "" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("- %s\n", sanitizeField(name)))
+	}
+	if len(meta.Attendees) > 0 {
+		sb.WriteString("\n")
+	}
+	sb.WriteString("---\n\n")
+	sb.WriteString("## Transcript\n\n")
+
+	if _, err := w.bw.WriteString(sb.String()); err != nil {
 		return fmt.Errorf("transcript: write header: %w", err)
 	}
 	return nil
+}
+
+func sanitizeSourceURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	cleaned := strings.Map(controlToSpace, trimmed)
+	cleaned = strings.ReplaceAll(cleaned, " ", "%20")
+	cleaned = strings.ReplaceAll(cleaned, ")", "%29")
+	return cleaned
 }
 
 // WriteEvent appends a formatted caption event to the transcript. The

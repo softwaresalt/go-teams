@@ -159,14 +159,14 @@ func TestParseRecapStartTime(t *testing.T) {
 }
 
 func TestExtractMeetingIdentityAndVerifyRecapTargetMatchesMeeting(t *testing.T) {
-	submittedURL := "https://teams.cloud.microsoft/l/meetingrecap?driveId=b%21l2BYRSQNckK-b9hYIVbTwwDZD7vuS19DisrieMYuwh4LHTDHfJZTQYkRP3QpLC5y&driveItemId=01IN4XFJJR2BRKUWNPC5GLNIJZXN2JV6ZT&fileUrl=https%3A%2F%2Fmicrosoft-my.sharepoint.com%2Fpersonal%2Fjseitzinger_microsoft_com%2FDocuments%2FRecordings%2FFL+DOE+ENGINEER+OPTIONS-20261109_105939-Meeting+Recording.mp4%3Fweb%3D1&iCalUid=040000008200E00074C5B7101A82E008000000001D60D6739A6BDD01000000000000000010000000F7D24D503517EE498771CB2BFAA50F0A&threadId=19%3Ameeting_NGIzNjdhY2ItZmIyZi00MDMwLWFlNWMtMWI3NTRjMTcxMjM4%40thread.v2&callId=12a22b70-37a5-45cf-88e4-28947877e7bd"
+	submittedURL := "https://teams.cloud.microsoft/l/meetingrecap?driveId=b%21syntheticDriveId123&driveItemId=01SYNTHETICITEMID456&fileUrl=https%3A%2F%2Fcontoso-my.sharepoint.com%2Fpersonal%2Fpresenter_contoso_com%2FDocuments%2FRecordings%2FARCHITECTURE+SYNC+OPTIONS-20261109_105939-Meeting+Recording.mp4%3Fweb%3D1&iCalUid=040000008200E00074C5B7101A82E00800000000SYNTHETICICALUID&threadId=19%3Ameeting_U1lOVEhFVElDX01FRVRJTkdfVE9LRU4%40thread.v2&callId=00000000-1111-2222-3333-444444444444"
 
 	id := ExtractMeetingIdentity(submittedURL)
-	assert.Equal(t, "19:meeting_ngiznjdhy2itzmiyzi00mdmwlwflnwmtmwi3ntrjmtcxmjm4@thread.v2", id.ThreadID)
-	assert.Equal(t, "meeting_ngiznjdhy2itzmiyzi00mdmwlwflnwmtmwi3ntrjmtcxmjm4", id.MeetingToken)
-	assert.Equal(t, "01in4xfjjr2brkuwnpc5glnijzxn2jv6zt", id.DriveItemID)
-	assert.Equal(t, "12a22b70-37a5-45cf-88e4-28947877e7bd", id.CallID)
-	assert.Equal(t, "fl doe engineer options-20261109_105939-meeting recording.mp4", id.RecordingName)
+	assert.Equal(t, "19:meeting_u1lovehfveldx01frvrjbkdfve9lru4@thread.v2", id.ThreadID)
+	assert.Equal(t, "meeting_u1lovehfveldx01frvrjbkdfve9lru4", id.MeetingToken)
+	assert.Equal(t, "01syntheticitemid456", id.DriveItemID)
+	assert.Equal(t, "00000000-1111-2222-3333-444444444444", id.CallID)
+	assert.Equal(t, "architecture sync options-20261109_105939-meeting recording.mp4", id.RecordingName)
 
 	// Rebind check: a restored tab for a different meeting must be rejected,
 	// whereas a tab carrying the submitted meeting's threadId/driveItemId is accepted.
@@ -190,7 +190,7 @@ func TestExtractMeetingIdentityAndVerifyRecapTargetMatchesMeeting(t *testing.T) 
 		{
 			ID:                   "post-auth-same-meeting",
 			Type:                 "page",
-			URL:                  "https://teams.cloud.microsoft/_#/l/meetingrecap?threadId=19%3Ameeting_NGIzNjdhY2ItZmIyZi00MDMwLWFlNWMtMWI3NTRjMTcxMjM4%40thread.v2&driveItemId=01IN4XFJJR2BRKUWNPC5GLNIJZXN2JV6ZT",
+			URL:                  "https://teams.cloud.microsoft/_#/l/meetingrecap?threadId=19%3Ameeting_U1lOVEhFVElDX01FRVRJTkdfVE9LRU4%40thread.v2&driveItemId=01SYNTHETICITEMID456",
 			WebSocketDebuggerURL: "ws://127.0.0.1/same",
 		},
 	}
@@ -205,17 +205,17 @@ func TestExtractMeetingIdentityAndVerifyRecapTargetMatchesMeeting(t *testing.T) 
 		"itemId": "01DIFFERENTITEMID",
 		"entries": [{"speaker": "Alice", "timestamp": "PT10S", "text": "Wrong meeting", "type": "Text"}]
 	}`
-	_, _, err := parseRecapPayloadForMeeting(mismatchedPayload, submittedURL, sameMeetingTab[0].URL, "https://microsoft-my.sharepoint.com/xplatplugins.aspx")
+	_, _, err := parseRecapPayloadForMeeting(mismatchedPayload, submittedURL, sameMeetingTab[0].URL, "https://contoso-my.sharepoint.com/xplatplugins.aspx")
 	require.Error(t, err, "extraction must reject payload whose recording identity does not match submitted URL")
 
 	matchingPayload := `{
-		"title": "FL DOE ENGINEER OPTIONS",
-		"fileName": "FL DOE ENGINEER OPTIONS-20261109_105939-Meeting Recording.mp4",
-		"itemId": "01IN4XFJJR2BRKUWNPC5GLNIJZXN2JV6ZT",
-		"entries": [{"speaker": "John Seitzinger", "timestamp": "PT19S", "text": "Good morning.", "type": "Text"}]
+		"title": "ARCHITECTURE SYNC OPTIONS",
+		"fileName": "ARCHITECTURE SYNC OPTIONS-20261109_105939-Meeting Recording.mp4",
+		"itemId": "01SYNTHETICITEMID456",
+		"entries": [{"speaker": "Presenter A", "timestamp": "PT19S", "text": "Good morning.", "type": "Text"}]
 	}`
-	entries, meta, err := parseRecapPayloadForMeeting(matchingPayload, submittedURL, sameMeetingTab[0].URL, "https://microsoft-my.sharepoint.com/xplatplugins.aspx")
+	entries, meta, err := parseRecapPayloadForMeeting(matchingPayload, submittedURL, sameMeetingTab[0].URL, "https://contoso-my.sharepoint.com/xplatplugins.aspx")
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	assert.Equal(t, "FL DOE ENGINEER OPTIONS", meta.Title)
+	assert.Equal(t, "ARCHITECTURE SYNC OPTIONS", meta.Title)
 }

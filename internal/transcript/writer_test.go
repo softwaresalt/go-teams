@@ -138,7 +138,7 @@ func TestWriterHeader(t *testing.T) {
 		SourceURL:    "https://teams.microsoft.com/l/meetingrecap?threadId=1",
 		StartTime:    start,
 		Timezone:     "America/Los_Angeles",
-		Attendees:    []string{"Derek Williams", "Sahir Shivji", "Tarun Kumar"},
+		Attendees:    []string{"Alice Example", "Bob Example", "Charlie Example"},
 	}))
 	require.NoError(t, w.Flush())
 
@@ -149,7 +149,7 @@ func TestWriterHeader(t *testing.T) {
 	assert.Contains(t, out, "**Meeting:** NVD Pacific TZ Sync\n\n")
 	assert.Contains(t, out, "**Category:** WSP\n\n")
 	assert.Contains(t, out, "**Source:** [Teams meeting recap](https://teams.microsoft.com/l/meetingrecap?threadId=1)\n\n")
-	assert.Contains(t, out, "## Attendee List\n\n- Derek Williams\n- Sahir Shivji\n- Tarun Kumar\n\n---\n\n## Transcript\n\n")
+	assert.Contains(t, out, "## Attendee List\n\n- Alice Example\n- Bob Example\n- Charlie Example\n\n---\n\n## Transcript\n\n")
 	assert.NotContains(t, out, "Speakers identified in the transcript")
 	assert.NotContains(t, out, "generated_by:")
 	assert.NotContains(t, out, "bot_name:")

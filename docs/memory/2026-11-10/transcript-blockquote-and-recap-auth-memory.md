@@ -38,6 +38,7 @@ reconciled and closed previously merged shipment `011-S`
 * Cold profiles without Teams Local Storage tokens (`SKYPE-TOKEN`, `UserAuthState`, `msal.2.account.keys`) bootstrap Meeting Recap sessions on the matching `/v2/` origin (`teamsV2BootstrapURLFor`) first.
 * During code review, fixed a P2 issue in `headedAuthTracker.onNonAuthPage` where `reNavigateAttempts == 0` lowered `stallThreshold` to 5 polls on warm profiles already on the target recap URL; warm profiles now retain the 20-poll (30s) on-target stall threshold, covered by a dedicated unit test assertion.
 * `applyQueryIdentity` ignores `fileUrl` paths containing SharePoint `/:` sharing prefixes or lacking a media extension so `RecapSharingLink_RecapChiclet` URLs do not reject the `.mp4` filename in `g_fileInfo.name`.
+* Addressed all four Copilot review comments on PR #30 (`sanitizeBlockquoteText` for leading blockquote list/thematic markers, `isRecapIframeTarget` checking `t.Type == "iframe"` and parsed hostname, multi-candidate `otherPageIDs` tracking on missing-target polls, and omitting `navURL` from bounce-recovery logs).
 
 ## Next steps
 

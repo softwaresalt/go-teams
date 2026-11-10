@@ -110,6 +110,41 @@ func TestWriteEventEscapesMarkdownInjection(t *testing.T) {
 			text:    "a\u2029- item",
 			absent:  []string{"\u2029"},
 		},
+		{
+			name:     "leading thematic break escaped in blockquote",
+			speaker:  "Bob",
+			text:     "---",
+			contains: []string{"> \\---"},
+			absent:   []string{"> ---"},
+		},
+		{
+			name:     "leading unordered list dash escaped in blockquote",
+			speaker:  "Bob",
+			text:     "- bullet item",
+			contains: []string{"> \\- bullet item"},
+			absent:   []string{"> - bullet item"},
+		},
+		{
+			name:     "leading unordered list plus escaped in blockquote",
+			speaker:  "Bob",
+			text:     "+ plus item",
+			contains: []string{"> \\+ plus item"},
+			absent:   []string{"> + plus item"},
+		},
+		{
+			name:     "leading ordered list period escaped in blockquote",
+			speaker:  "Bob",
+			text:     "1. first item",
+			contains: []string{"> 1\\. first item"},
+			absent:   []string{"> 1. first item"},
+		},
+		{
+			name:     "leading ordered list paren escaped in blockquote",
+			speaker:  "Bob",
+			text:     "2) second item",
+			contains: []string{"> 2\\) second item"},
+			absent:   []string{"> 2) second item"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

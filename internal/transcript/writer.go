@@ -43,6 +43,17 @@ var emailDefuser = regexp.MustCompile(`([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A
 // verbatim without Markdown backslash-escaping.
 var validTimezoneRe = regexp.MustCompile(`^[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*$`)
 
+var (
+	blockquoteBulletOrRuleRe = regexp.MustCompile(`^(\s*)([-+=])`)
+	blockquoteOrderedListRe  = regexp.MustCompile(`^(\s*\d+)([.)])(\s|$)`)
+)
+
+func sanitizeBlockquoteText(s string) string {
+	s = sanitizeField(s)
+	s = blockquoteBulletOrRuleRe.ReplaceAllString(s, `${1}\${2}`)
+	return blockquoteOrderedListRe.ReplaceAllString(s, `${1}\${2}${3}`)
+}
+
 func sanitizeTimezone(tz string) string {
 	trimmed := strings.TrimSpace(tz)
 	if validTimezoneRe.MatchString(trimmed) {
@@ -168,7 +179,7 @@ func sanitizeSourceURL(raw string) string {
 // HTML injection into the rendered transcript.
 func (w *Writer) WriteEvent(ev CaptionEvent) error {
 	line := fmt.Sprintf("**%s** (%s):\n> %s\n\n",
-		sanitizeField(ev.Speaker), ev.Timestamp.Format("15:04:05"), sanitizeField(ev.Text))
+		sanitizeField(ev.Speaker), ev.Timestamp.Format("15:04:05"), sanitizeBlockquoteText(ev.Text))
 	if _, err := w.bw.WriteString(line); err != nil {
 		return fmt.Errorf("transcript: write event: %w", err)
 	}

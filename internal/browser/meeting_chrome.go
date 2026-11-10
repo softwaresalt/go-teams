@@ -328,7 +328,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 				}
 				if navURL := authTracker.onAuthRedirect(mainPage.URL); navURL != "" {
 					clickedLauncher = false
-					slog.Info("browser: detected rapid auth redirect bounce loop; navigating to break loop", "target", navURL, "attempt", authTracker.reNavigateAttempts)
+					slog.Info("browser: detected rapid auth redirect bounce loop; navigating to break loop", "attempt", authTracker.reNavigateAttempts)
 					_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, navURL)
 				}
 			} else {
@@ -340,9 +340,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					if !isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) {
 						continue
 					}
-					if strings.Contains(t.URL, "xplatplugins.aspx") ||
-						strings.Contains(t.URL, "streamembed.aspx") ||
-						strings.Contains(t.URL, "sharepoint.com") {
+					if isRecapIframeTarget(*t) {
 						hasRecapIframe = true
 					}
 
@@ -500,6 +498,15 @@ func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTarge
 		}
 		return boundTarget, true
 	}
+	if len(candidates) > 1 {
+		if m.otherPageIDs == nil {
+			m.otherPageIDs = make(map[string]bool)
+		}
+		for _, c := range candidates {
+			m.otherPageIDs[c.ID] = true
+		}
+		return nil, false
+	}
 	if m.allowSingleTabRebind && len(candidates) == 1 &&
 		!m.otherPageIDs[candidates[0].ID] &&
 		isTrustedSingleTabRebindURL(candidates[0].URL) &&
@@ -510,6 +517,15 @@ func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTarge
 		return candidates[0], true
 	}
 	return nil, false
+}
+
+func isRecapIframeTarget(t cdpTargetInfo) bool {
+	if t.Type != "iframe" {
+		return false
+	}
+	return strings.Contains(t.URL, "xplatplugins.aspx") ||
+		strings.Contains(t.URL, "streamembed.aspx") ||
+		hasHTTPSHostSuffix(t.URL, "sharepoint.com")
 }
 
 func isTrustedSingleTabRebindURL(rawURL string) bool {

@@ -35,6 +35,15 @@ Code review ran across two passes on `feat/transcript-blockquote-and-recap-auth`
   assertion in `internal/browser/recap_test.go`.
 * Pass 2 re-verified the remediated diff: `READY`, with `P0=0, P1=0, P2=0, P3=0`
   unresolved findings.
+* Copilot shadow review on PR #30 raised four in-scope findings (P-021 C1 same
+  contract surface), all fixed with regression tests:
+  * Omitted `navURL` from bounce-recovery `slog.Info` in `meeting_chrome.go`
+  * Recorded candidates seen during multi-tab missing-target polls in
+    `findBoundCapturePage` so subsequent single-tab polls still fail closed
+  * Restricted `hasRecapIframe` via `isRecapIframeTarget` to `iframe` targets
+    matching `xplatplugins.aspx`, `streamembed.aspx`, or `hasHTTPSHostSuffix(..., "sharepoint.com")`
+  * Added `sanitizeBlockquoteText` in `writer.go` to escape leading `-`, `+`,
+    `=`, and ordered-list markers (`1.`, `1)`) at the start of blockquote captions
 
 ## Verification evidence
 

@@ -416,4 +416,32 @@ func TestFindBoundCapturePageRebindsSingleTabAcrossAuthAndTeamsHostsWithoutSwitc
 		{ID: "concurrent-other-tab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/other"},
 	})
 	assert.False(t, ok, "must fail closed when bound tab closes and remaining tab was a known concurrent tab")
+
+	// Ambiguous missing-target poll with two candidates (B and C) followed by only C must also fail closed.
+	m2 := &chromeMeeting{
+		opts:                 MeetingOptions{MeetingURL: recapURL},
+		capturePageID:        "tab-a",
+		allowSingleTabRebind: true,
+	}
+	_, ok = m2.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-b", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/b"},
+		{ID: "tab-c", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/c"},
+	})
+	assert.False(t, ok)
+	_, ok = m2.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-c", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/c"},
+	})
+	assert.False(t, ok, "candidate seen in ambiguous multi-tab missing-target poll must not be rebound later")
+
+	// Outer page URL containing sharepoint.com in its fileUrl query must not be classified as a recap iframe.
+	assert.False(t, isRecapIframeTarget(cdpTargetInfo{
+		ID:   "main-page",
+		Type: "page",
+		URL:  "https://teams.microsoft.com/l/meetingrecap?fileUrl=https%3A%2F%2Fcontoso-my.sharepoint.com%2Fvideo.mp4",
+	}))
+	assert.True(t, isRecapIframeTarget(cdpTargetInfo{
+		ID:   "sp-iframe",
+		Type: "iframe",
+		URL:  "https://contoso-my.sharepoint.com/personal/user/_layouts/15/xplatplugins.aspx",
+	}))
 }

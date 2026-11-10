@@ -7,11 +7,11 @@
 # (**Category:**) and in the <category> filename placeholder.
 category: "WSP"
 
-# Default directory where transcripts are written when no explicit .md file path
-# is passed on the command line.
-output_dir: "C:\\Transcripts\\WSP"
+# Default output folder where all transcripts for this config are written
+# when no explicit .md file path is specified.
+output_folder: "C:\\Transcripts\\WSP"
 
-# Naming convention template used when writing to output_dir.
+# Naming convention template used when writing to output_folder.
 # Supported placeholders:
 #   <category>            - value of category (omitted cleanly if empty)
 #   <concat-meeting-name> - meeting title with articles/filler words removed and words concatenated
@@ -22,7 +22,8 @@ output_dir: "C:\\Transcripts\\WSP"
 #   <HHMMSS>              - meeting start time as 080000
 filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 
-# Optional explicit output file path (overrides output_dir + filename_template).
+# Optional explicit output file path (overrides output_folder + filename_template
+# when you want a fixed file path instead of the folder naming template).
 # output_file: "C:\\Transcripts\\WSP\\custom-output.md"
 
 # Optional default meeting or recap URL (can be overridden on the command line).

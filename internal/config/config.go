@@ -153,6 +153,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	var aliases struct {
+		OutputFolder string `yaml:"output_folder"`
 		DefaultPath  string `yaml:"default_path"`
 		Output       string `yaml:"output"`
 		NameTemplate string `yaml:"name_template"`
@@ -164,6 +165,9 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &aliases); err == nil {
 		if aliases.DefaultPath != "" {
 			cfg.OutputDir = aliases.DefaultPath
+		}
+		if aliases.OutputFolder != "" {
+			cfg.OutputDir = aliases.OutputFolder
 		}
 		if aliases.Output != "" {
 			ext := filepath.Ext(aliases.Output)

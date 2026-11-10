@@ -136,7 +136,7 @@ func TestLoadCustomerYAMLWithTemplateAndAliases(t *testing.T) {
 	path := filepath.Join(dir, "wsp.yaml")
 	yamlContent := `
 category: WSP
-default_path: C:\Transcripts\WSP
+output_folder: C:\Transcripts\WSP
 name_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 browser_path: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
 profile_dir: C:\Transcripts\profile

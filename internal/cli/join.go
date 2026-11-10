@@ -19,6 +19,7 @@ type captureFlags struct {
 	output           string
 	outputFile       string
 	outputDir        string
+	outputFolder     string
 	filenameTemplate string
 	nameTemplate     string
 	profileDir       string
@@ -34,6 +35,7 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().StringVarP(&f.meetingURL, "url", "u", "", "Teams meeting or recap URL to capture")
 	cmd.Flags().StringVarP(&f.output, "output", "o", "", "output Markdown file path (.md) or directory")
 	cmd.Flags().StringVar(&f.outputFile, "output-file", "", "explicit output Markdown file path (.md)")
+	cmd.Flags().StringVar(&f.outputFolder, "output-folder", "", "default folder where Markdown transcripts are saved")
 	cmd.Flags().StringVar(&f.outputDir, "output-dir", "", "directory where the Markdown transcript is saved")
 	cmd.Flags().StringVar(&f.filenameTemplate, "filename-template", "", "filename template when writing to a directory (default: <category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md)")
 	cmd.Flags().StringVar(&f.nameTemplate, "name-template", "", "alias for --filename-template")
@@ -65,6 +67,10 @@ func applyOutputTarget(cfg *config.Config, target string) {
 }
 
 func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
+	if f.outputFolder != "" {
+		cfg.OutputDir = f.outputFolder
+		cfg.OutputFile = ""
+	}
 	if f.outputDir != "" {
 		cfg.OutputDir = f.outputDir
 		cfg.OutputFile = ""

@@ -16,6 +16,7 @@ const defaultTeamsCaptureURL = "https://teams.microsoft.com/v2/"
 
 type captureFlags struct {
 	meetingURL       string
+	queueFile        string
 	output           string
 	outputFile       string
 	outputDir        string
@@ -33,6 +34,7 @@ type captureFlags struct {
 
 func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().StringVarP(&f.meetingURL, "url", "u", "", "Teams meeting or recap URL to capture")
+	cmd.Flags().StringVarP(&f.queueFile, "queue", "q", "", "path to a batch queue file of Teams capture arguments")
 	cmd.Flags().StringVarP(&f.output, "output", "o", "", "output Markdown file path (.md) or directory")
 	cmd.Flags().StringVar(&f.outputFile, "output-file", "", "explicit output Markdown file path (.md)")
 	cmd.Flags().StringVar(&f.outputFolder, "output-folder", "", "default folder where Markdown transcripts are saved")
@@ -110,6 +112,56 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	}
 }
 
+func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) []string {
+	var out []string
+	if configPath != "" {
+		out = append(out, "--config", configPath)
+	}
+	if f.outputFolder != "" {
+		out = append(out, "--output-folder", f.outputFolder)
+	}
+	if f.outputDir != "" {
+		out = append(out, "--output-dir", f.outputDir)
+	}
+	if f.output != "" {
+		out = append(out, "--output", f.output)
+	}
+	if f.outputFile != "" {
+		out = append(out, "--output-file", f.outputFile)
+	}
+	if f.filenameTemplate != "" {
+		out = append(out, "--filename-template", f.filenameTemplate)
+	} else if f.nameTemplate != "" {
+		out = append(out, "--name-template", f.nameTemplate)
+	}
+	if f.profileDir != "" {
+		out = append(out, "--profile-dir", f.profileDir)
+	}
+	if f.botName != "" {
+		out = append(out, "--bot-name", f.botName)
+	}
+	if f.category != "" {
+		out = append(out, "--category", f.category)
+	}
+	if f.browserPath != "" {
+		out = append(out, "--browser-path", f.browserPath)
+	}
+	if cmd.Flags().Changed("headless") {
+		if f.headless {
+			out = append(out, "--headless")
+		} else {
+			out = append(out, "--headless=false")
+		}
+	}
+	if f.headed {
+		out = append(out, "--headed")
+	}
+	if cmd.Flags().Changed("audio") && f.audio {
+		out = append(out, "--audio")
+	}
+	return out
+}
+
 func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 	var flags captureFlags
 	cmd := &cobra.Command{
@@ -117,6 +169,9 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 		Short: "Join a Teams meeting and capture its live captions to a Markdown file",
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.queueFile != "" {
+				return runQueueFile(cmd.Context(), d, flags.queueFile, inheritedQueueFlags(cmd, *configPath, flags))
+			}
 			cfg, err := loadConfigFrom(d, *configPath)
 			if err != nil {
 				return err
@@ -156,6 +211,9 @@ func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 			"the captured transcript and AI Summary to the specified Markdown file or output directory.",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.queueFile != "" {
+				return runQueueFile(cmd.Context(), d, flags.queueFile, inheritedQueueFlags(cmd, *configPath, flags))
+			}
 			cfg, err := loadConfigFrom(d, *configPath)
 			if err != nil {
 				return err

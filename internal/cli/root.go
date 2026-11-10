@@ -82,10 +82,14 @@ func newRootCommand(d *deps) *cobra.Command {
 			"the AI Summary) from Microsoft Teams into local Markdown files.\n\n" +
 			"Examples:\n" +
 			"  teams-cli.exe \"https://teams.cloud.microsoft/l/meetingrecap?...\" \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli.exe --queue transcript-queue.txt\n" +
 			"  teams-cli.exe captions \"https://teams.cloud.microsoft/l/meetingrecap?...\" -o \"C:\\out\\transcript.md\" --headless",
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.queueFile != "" {
+				return runQueueFile(cmd.Context(), d, flags.queueFile, inheritedQueueFlags(cmd, configPath, flags))
+			}
 			cfg, err := loadConfigFrom(d, configPath)
 			if err != nil {
 				return err

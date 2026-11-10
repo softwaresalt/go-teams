@@ -119,3 +119,44 @@ func TestQueueFileLeavesFailedLineUncommentedAndContinuesBatch(t *testing.T) {
 	assert.False(t, strings.HasPrefix(lines[0], "::"), "failed line must remain uncommented for retry")
 	assert.True(t, strings.HasPrefix(lines[1], "::"), "succeeded line must be prefixed with ::")
 }
+
+func TestQueueFileDoesNotCommentOutCancelledEntryAndRejectsNestedQueueAndForwardsAudioFalse(t *testing.T) {
+	dir := t.TempDir()
+	queuePath := filepath.Join(dir, "transcript-queue.txt")
+	initialQueue := strings.Join([]string{
+		`-q` + queuePath,
+		`-u "https://teams.cloud.microsoft/l/meetingrecap?threadId=cancel"`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(queuePath, []byte(initialQueue), 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var gotAudio bool
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) {
+			c := validConfig()
+			c.CaptureAudio = true
+			c.Headless = true
+			return c, nil
+		},
+		newRunner: func(config.Config) browser.Runner { return &fakeRunner{} },
+		newMeeting: func(mctx context.Context, c config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			gotAudio = c.CaptureAudio
+			// Simulate cancellation during Join where Session.Run returns nil.
+			cancel()
+			return nil, mctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession {
+			return recorderSession{&captureRecorder{}}
+		},
+	}
+
+	err := runCmd(ctx, d, "--queue", queuePath, "--audio=false")
+	require.Error(t, err)
+	assert.False(t, gotAudio, "explicit --audio=false must be forwarded to queue entries")
+
+	updatedBytes, readErr := os.ReadFile(queuePath)
+	require.NoError(t, readErr)
+	for _, line := range strings.Split(strings.TrimSpace(string(updatedBytes)), "\n") {
+		assert.False(t, strings.HasPrefix(line, "::"), "neither rejected nested -q nor cancelled entry may be commented out: %q", line)
+	}
+}

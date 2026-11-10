@@ -334,6 +334,8 @@ func cleanBrowserArgs(port int, profileDir string, headless bool, initialURL str
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--no-first-run",
 		"--no-default-browser-check",
+		"--use-fake-ui-for-media-stream",
+		"--auto-select-desktop-capture-source=Microsoft Teams",
 	}
 	if headless {
 		args = append(args, "--headless=new")

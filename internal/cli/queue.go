@@ -77,6 +77,10 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 			errs = append(errs, fmt.Errorf("cli: queue line %d: %w", i+1, err))
 			continue
 		}
+		if ctx.Err() != nil {
+			errs = append(errs, ctx.Err())
+			break
+		}
 
 		lines[i] = "::" + rawLine
 		if writeErr := writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline); writeErr != nil {
@@ -88,18 +92,46 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 	return errors.Join(errs...)
 }
 
+type queueExecKey struct{}
+
 func executeQueueLine(ctx context.Context, d *deps, args []string) error {
 	root := newRootCommand(d)
 	root.SetArgs(args)
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
-	return root.ExecuteContext(ctx)
+	return root.ExecuteContext(context.WithValue(ctx, queueExecKey{}, true))
+}
+
+func isInsideQueueExecution(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(queueExecKey{}).(bool)
+	return v
 }
 
 func containsQueueFlag(args []string) bool {
 	for _, a := range args {
-		if a == "--queue" || a == "-q" || strings.HasPrefix(a, "--queue=") || strings.HasPrefix(a, "-q=") {
+		if a == "--queue" || a == "-q" || strings.HasPrefix(a, "--queue=") || strings.HasPrefix(a, "-q") {
 			return true
+		}
+		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+			// Check short flag cluster up to any '=' for '-q'.
+			cluster := a[1:]
+			if eq := strings.IndexByte(cluster, '='); eq >= 0 {
+				cluster = cluster[:eq]
+			}
+			// Only check when the leading short flags are boolean flags (-h)
+			// before -q; flags taking a value (-u, -o, -c, -f) consume the rest
+			// of the token as their argument.
+			for _, ch := range cluster {
+				if ch == 'q' {
+					return true
+				}
+				if ch == 'u' || ch == 'o' || ch == 'c' || ch == 'f' {
+					break
+				}
+			}
 		}
 	}
 	return false

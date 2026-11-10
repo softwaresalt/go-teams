@@ -320,7 +320,9 @@ func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTarge
 		}
 		candidates = append(candidates, t)
 	}
-	if m.allowSingleTabRebind && len(candidates) == 1 && isTrustedSingleTabRebindURL(candidates[0].URL) {
+	if m.allowSingleTabRebind && len(candidates) == 1 &&
+		candidates[0].ParentID == m.capturePageID &&
+		isTrustedSingleTabRebindURL(candidates[0].URL) {
 		m.capturePageID = candidates[0].ID
 		return candidates[0], true
 	}

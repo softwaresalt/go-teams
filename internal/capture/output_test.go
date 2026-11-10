@@ -201,6 +201,28 @@ func TestSetupOutputRefusesOverwrite(t *testing.T) {
 	}
 }
 
+func TestSetupOutputCaptionsOnlyRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	cfg := OutputConfig{
+		Dir:          dir,
+		MeetingURL:   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_X%40thread.v2/0",
+		MeetingTitle: "NVD Pacific TZ Sync",
+		Category:     "WSP",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: true,
+	}
+	first, err := setupOutput(cfg)
+	if err != nil {
+		t.Fatalf("first CaptionsOnly setupOutput: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	if _, err := setupOutput(cfg); err == nil {
+		t.Fatal("expected CaptionsOnly directory capture to refuse overwriting an existing transcript, got nil error")
+	}
+}
+
 func TestSetupOutputCreatesMissingDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "does", "not", "exist", "yet")
 	out, err := setupOutput(OutputConfig{

@@ -156,8 +156,12 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 	if f.headed {
 		out = append(out, "--headed")
 	}
-	if cmd.Flags().Changed("audio") && f.audio {
-		out = append(out, "--audio")
+	if cmd.Flags().Changed("audio") {
+		if f.audio {
+			out = append(out, "--audio")
+		} else {
+			out = append(out, "--audio=false")
+		}
 	}
 	return out
 }
@@ -170,6 +174,9 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {
+				if isInsideQueueExecution(cmd.Context()) {
+					return fmt.Errorf("cli: nested --queue flag is not allowed")
+				}
 				return runQueueFile(cmd.Context(), d, flags.queueFile, inheritedQueueFlags(cmd, *configPath, flags))
 			}
 			cfg, err := loadConfigFrom(d, *configPath)
@@ -212,6 +219,9 @@ func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {
+				if isInsideQueueExecution(cmd.Context()) {
+					return fmt.Errorf("cli: nested --queue flag is not allowed")
+				}
 				return runQueueFile(cmd.Context(), d, flags.queueFile, inheritedQueueFlags(cmd, *configPath, flags))
 			}
 			cfg, err := loadConfigFrom(d, *configPath)

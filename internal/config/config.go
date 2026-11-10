@@ -113,6 +113,9 @@ func expandUserPath(raw string) string {
 			expanded = filepath.Join(home, expanded[2:])
 		}
 	}
+	if filepath.Separator != '\\' {
+		expanded = strings.ReplaceAll(expanded, `\`, string(filepath.Separator))
+	}
 	return filepath.Clean(expanded)
 }
 

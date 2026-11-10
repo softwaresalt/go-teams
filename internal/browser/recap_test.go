@@ -60,6 +60,8 @@ func TestCleanHeadedBrowserFlags(t *testing.T) {
 			"headed browser must not include --headless")
 	}
 	assert.Contains(t, args, "--remote-debugging-port=9222")
+	assert.Contains(t, args, "--use-fake-ui-for-media-stream")
+	assert.Contains(t, args, "--auto-select-desktop-capture-source=Microsoft Teams")
 }
 
 func TestCleanHeadlessBrowserFlags(t *testing.T) {
@@ -120,13 +122,20 @@ func TestIsTargetInCaptureScope(t *testing.T) {
 }
 
 func TestVerifyCapturePagePresentFailsClosedWhenBoundTabDisappears(t *testing.T) {
-	m := &chromeMeeting{capturePageID: "created-tab"}
+	m := &chromeMeeting{capturePageID: "created-tab", allowSingleTabRebind: true}
 	targets := []cdpTargetInfo{
 		{ID: "restored-other-tab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/other"},
 	}
 	_, ok := m.findBoundCapturePage(targets)
-	assert.False(t, ok, "must fail closed when bound capturePageID disappears rather than switching to another tab")
-	assert.Equal(t, "created-tab", m.capturePageID, "capturePageID must not be cleared or reassigned")
+	assert.False(t, ok, "must fail closed when bound capturePageID disappears rather than switching to an unrelated tab")
+	assert.Equal(t, "created-tab", m.capturePageID, "capturePageID must not be cleared or reassigned without verified ParentID")
+
+	targetsWithParent := []cdpTargetInfo{
+		{ID: "coop-rebound-tab", ParentID: "created-tab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/rebound"},
+	}
+	rebound, ok := m.findBoundCapturePage(targetsWithParent)
+	require.True(t, ok, "must allow rebind when candidate explicitly reports ParentID == capturePageID")
+	assert.Equal(t, "coop-rebound-tab", rebound.ID)
 }
 
 func TestIsTrustedSingleTabRebindURLRejectsSpoofedHosts(t *testing.T) {

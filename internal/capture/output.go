@@ -84,9 +84,13 @@ type OutputConfig struct {
 	Attendees []string
 	// BotName is retained for compatibility with existing callers.
 	BotName string
-	// Now is the capture start time used for naming and the header; a zero
-	// value defaults to time.Now.
+	// Now is the capture start time used for output file naming and as the
+	// fallback header start time; a zero value defaults to time.Now.
 	Now time.Time
+	// MeetingStart is the optional discovered meeting start time written to
+	// the transcript header (**Meeting Start:**) when non-zero, keeping Now as
+	// the per-capture timestamp for file naming.
+	MeetingStart time.Time
 	// CaptionsOnly skips creating the MP3 audio output file when only live
 	// captions are being captured to Markdown.
 	CaptionsOnly bool
@@ -153,9 +157,6 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		}
 		mdPath = filepath.Join(dir, mdFilename)
 		mp3Path = filepath.Join(dir, base+".mp3")
-		if cfg.CaptionsOnly {
-			openFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-		}
 	}
 
 	if !cfg.CaptionsOnly {
@@ -173,13 +174,17 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
+	headerStart := now
+	if !cfg.MeetingStart.IsZero() {
+		headerStart = cfg.MeetingStart
+	}
 	w := transcript.NewWriter(mdFile)
 	if err := w.WriteHeader(transcript.Metadata{
 		MeetingID:    id,
 		MeetingTitle: cfg.MeetingTitle,
 		Category:     cfg.Category,
 		SourceURL:    cfg.MeetingURL,
-		StartTime:    now,
+		StartTime:    headerStart,
 		Timezone:     cfg.Timezone,
 		Attendees:    cfg.Attendees,
 		BotName:      cfg.BotName,

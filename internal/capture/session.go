@@ -87,8 +87,8 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		outCfg.MeetingTitle = meta.Title
 		outCfg.Timezone = meta.Timezone
 		outCfg.Attendees = meta.Attendees
-		if outCfg.Now.IsZero() && !meta.StartTime.IsZero() {
-			outCfg.Now = meta.StartTime
+		if !meta.StartTime.IsZero() {
+			outCfg.MeetingStart = meta.StartTime
 		}
 	}
 

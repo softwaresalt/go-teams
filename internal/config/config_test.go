@@ -149,10 +149,10 @@ headless: true
 	got, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "WSP", got.Category)
-	assert.Equal(t, `C:\Transcripts\WSP`, got.OutputDir)
+	assert.Equal(t, filepath.FromSlash("C:/Transcripts/WSP"), got.OutputDir)
 	assert.Equal(t, "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md", got.FilenameTemplate)
-	assert.Equal(t, `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, got.BrowserPath)
-	assert.Equal(t, `C:\Transcripts\profile`, got.ProfileDir)
+	assert.Equal(t, filepath.FromSlash("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"), got.BrowserPath)
+	assert.Equal(t, filepath.FromSlash("C:/Transcripts/profile"), got.ProfileDir)
 	assert.Equal(t, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", got.MeetingURL)
 	assert.True(t, got.Headless)
 }

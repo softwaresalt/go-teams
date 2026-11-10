@@ -162,8 +162,8 @@ func TestExtractMeetingIdentityAndVerifyRecapTargetMatchesMeeting(t *testing.T) 
 	submittedURL := "https://teams.cloud.microsoft/l/meetingrecap?driveId=b%21l2BYRSQNckK-b9hYIVbTwwDZD7vuS19DisrieMYuwh4LHTDHfJZTQYkRP3QpLC5y&driveItemId=01IN4XFJJR2BRKUWNPC5GLNIJZXN2JV6ZT&fileUrl=https%3A%2F%2Fmicrosoft-my.sharepoint.com%2Fpersonal%2Fjseitzinger_microsoft_com%2FDocuments%2FRecordings%2FFL+DOE+ENGINEER+OPTIONS-20261109_105939-Meeting+Recording.mp4%3Fweb%3D1&iCalUid=040000008200E00074C5B7101A82E008000000001D60D6739A6BDD01000000000000000010000000F7D24D503517EE498771CB2BFAA50F0A&threadId=19%3Ameeting_NGIzNjdhY2ItZmIyZi00MDMwLWFlNWMtMWI3NTRjMTcxMjM4%40thread.v2&callId=12a22b70-37a5-45cf-88e4-28947877e7bd"
 
 	id := ExtractMeetingIdentity(submittedURL)
-	assert.Equal(t, "19:meeting_ngiznjdhymitzmiyzio0mdmwlwflnwmtmwi3ntrjmtcxmjm4@thread.v2", id.ThreadID)
-	assert.Equal(t, "meeting_ngiznjdhymitzmiyzio0mdmwlwflnwmtmwi3ntrjmtcxmjm4", id.MeetingToken)
+	assert.Equal(t, "19:meeting_ngiznjdhy2itzmiyzi00mdmwlwflnwmtmwi3ntrjmtcxmjm4@thread.v2", id.ThreadID)
+	assert.Equal(t, "meeting_ngiznjdhy2itzmiyzi00mdmwlwflnwmtmwi3ntrjmtcxmjm4", id.MeetingToken)
 	assert.Equal(t, "01in4xfjjr2brkuwnpc5glnijzxn2jv6zt", id.DriveItemID)
 	assert.Equal(t, "12a22b70-37a5-45cf-88e4-28947877e7bd", id.CallID)
 	assert.Equal(t, "fl doe engineer options-20261109_105939-meeting recording.mp4", id.RecordingName)

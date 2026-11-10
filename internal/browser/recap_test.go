@@ -433,6 +433,33 @@ func TestFindBoundCapturePageRebindsSingleTabAcrossAuthAndTeamsHostsWithoutSwitc
 	})
 	assert.False(t, ok, "candidate seen in ambiguous multi-tab missing-target poll must not be rebound later")
 
+	// Concurrent tab initially at edge://newtab/ alongside capture tab A must be remembered so it cannot be rebound later.
+	m3 := &chromeMeeting{
+		opts:                 MeetingOptions{MeetingURL: recapURL},
+		capturePageID:        "tab-a",
+		allowSingleTabRebind: true,
+	}
+	_, ok = m3.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-a", Type: "page", URL: recapURL, WebSocketDebuggerURL: "ws://127.0.0.1/a"},
+		{ID: "tab-edge-newtab", Type: "page", URL: "edge://newtab/", WebSocketDebuggerURL: "ws://127.0.0.1/newtab"},
+	})
+	require.True(t, ok)
+	_, ok = m3.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-edge-newtab", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/newtab"},
+	})
+	assert.False(t, ok, "concurrent edge:// tab that later navigates to Teams /v2/ must not be rebound")
+
+	// Candidate with a nonempty ParentID pointing to a different page must be rejected by the identity-free fallback.
+	m4 := &chromeMeeting{
+		opts:                 MeetingOptions{MeetingURL: recapURL},
+		capturePageID:        "tab-a",
+		allowSingleTabRebind: true,
+	}
+	_, ok = m4.findBoundCapturePage([]cdpTargetInfo{
+		{ID: "tab-child-of-b", ParentID: "tab-b", Type: "page", URL: "https://teams.cloud.microsoft/v2/", WebSocketDebuggerURL: "ws://127.0.0.1/child"},
+	})
+	assert.False(t, ok, "candidate whose nonempty ParentID points to a different page must be rejected")
+
 	// Outer page URL containing sharepoint.com in its fileUrl query must not be classified as a recap iframe.
 	assert.False(t, isRecapIframeTarget(cdpTargetInfo{
 		ID:   "main-page",

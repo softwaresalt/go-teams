@@ -473,46 +473,53 @@ func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTarge
 	if m.capturePageID == "" {
 		return nil, false
 	}
-	var candidates []*cdpTargetInfo
-	var boundTarget *cdpTargetInfo
+	var (
+		candidates      []*cdpTargetInfo
+		allOtherPageIDs []string
+		boundTarget     *cdpTargetInfo
+	)
 	for i := range targets {
 		t := &targets[i]
-		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+		if t.Type != "page" || strings.HasPrefix(t.URL, "chrome-extension://") {
 			continue
 		}
-		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
-			continue
-		}
-		if t.ID == m.capturePageID {
+		if t.ID == m.capturePageID && t.WebSocketDebuggerURL != "" {
 			boundTarget = t
+			continue
+		}
+		if t.ID != "" {
+			allOtherPageIDs = append(allOtherPageIDs, t.ID)
+		}
+		if t.WebSocketDebuggerURL == "" || strings.HasPrefix(t.URL, "edge://") {
 			continue
 		}
 		candidates = append(candidates, t)
 	}
-	if boundTarget != nil {
+	recordOtherIDs := func() {
+		if len(allOtherPageIDs) == 0 {
+			return
+		}
 		if m.otherPageIDs == nil {
 			m.otherPageIDs = make(map[string]bool)
 		}
-		for _, c := range candidates {
-			m.otherPageIDs[c.ID] = true
+		for _, id := range allOtherPageIDs {
+			m.otherPageIDs[id] = true
 		}
+	}
+	if boundTarget != nil {
+		recordOtherIDs()
 		return boundTarget, true
 	}
-	if len(candidates) > 1 {
-		if m.otherPageIDs == nil {
-			m.otherPageIDs = make(map[string]bool)
-		}
-		for _, c := range candidates {
-			m.otherPageIDs[c.ID] = true
-		}
+	if len(allOtherPageIDs) > 1 || len(candidates) != 1 {
+		recordOtherIDs()
 		return nil, false
 	}
-	if m.allowSingleTabRebind && len(candidates) == 1 &&
+	if m.allowSingleTabRebind &&
 		!m.otherPageIDs[candidates[0].ID] &&
 		isTrustedSingleTabRebindURL(candidates[0].URL) &&
 		(candidates[0].ParentID == m.capturePageID ||
 			hasPositiveMeetingIdentityMatch(m.opts.MeetingURL, candidates[0].URL) ||
-			(m.opts.MeetingURL != "" && !hasMeetingIdentityConflict(ExtractMeetingIdentity(m.opts.MeetingURL), ExtractMeetingIdentity(candidates[0].URL)))) {
+			(candidates[0].ParentID == "" && m.opts.MeetingURL != "" && !hasMeetingIdentityConflict(ExtractMeetingIdentity(m.opts.MeetingURL), ExtractMeetingIdentity(candidates[0].URL)))) {
 		m.capturePageID = candidates[0].ID
 		return candidates[0], true
 	}

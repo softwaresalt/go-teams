@@ -142,7 +142,8 @@ func TestWriterHeader(t *testing.T) {
 	assert.Contains(t, out, `meeting_id: "19:meeting_abc"`)
 	assert.Contains(t, out, "date: 2026-07-09")
 	assert.Contains(t, out, `start_time: "13:05:30"`)
-	assert.Contains(t, out, `bot_name: "Transcription Agent"`)
+	assert.NotContains(t, out, "generated_by:")
+	assert.NotContains(t, out, "bot_name:")
 	assert.Contains(t, out, "# Transcript")
 }
 

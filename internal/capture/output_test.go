@@ -110,9 +110,14 @@ func TestSetupOutputCreatesPairWithHeader(t *testing.T) {
 		t.Fatalf("read transcript: %v", err)
 	}
 	header := string(data)
-	for _, want := range []string{"meeting_id:", "meeting-abc123", "bot_name:", "Transcription Agent", "generated_by: teams-cli"} {
+	for _, want := range []string{"meeting_id:", "meeting-abc123", "date: 2026-07-10", `start_time: "15:04:05"`} {
 		if !strings.Contains(header, want) {
 			t.Errorf("transcript header missing %q; got:\n%s", want, header)
+		}
+	}
+	for _, unwanted := range []string{"bot_name:", "generated_by:"} {
+		if strings.Contains(header, unwanted) {
+			t.Errorf("transcript header should not contain %q; got:\n%s", unwanted, header)
 		}
 	}
 }

@@ -74,8 +74,6 @@ const headerTemplate = `---
 meeting_id: {{ printf "%q" .MeetingID }}
 date: {{ .Date }}
 start_time: "{{ .StartTime }}"
-generated_by: teams-cli
-bot_name: {{ printf "%q" .BotName }}
 ---
 
 # Transcript
@@ -102,12 +100,10 @@ func (w *Writer) WriteHeader(meta Metadata) error {
 		MeetingID string
 		Date      string
 		StartTime string
-		BotName   string
 	}{
 		MeetingID: meta.MeetingID,
 		Date:      meta.StartTime.Format("2006-01-02"),
 		StartTime: meta.StartTime.Format("15:04:05"),
-		BotName:   meta.BotName,
 	}
 	if err := tmpl.Execute(w.bw, data); err != nil {
 		return fmt.Errorf("transcript: write header: %w", err)

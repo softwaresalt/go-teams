@@ -146,7 +146,6 @@ func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 			}
 			def.Headless = false
 			def.OutputDir = "transcripts"
-			def.ProfileDir = resolveDefaultProfileDir(def.ProfileDir)
 			return def, nil
 		}
 		return config.Config{}, err
@@ -166,12 +165,4 @@ func resolveDefaultConfigPath() (string, error) {
 		}
 	}
 	return config.DefaultConfigPath()
-}
-
-// resolveDefaultProfileDir prefers an existing workspace/executable-relative
-// profile directory (e.g. bin/profile next to teams-cli.exe or in the current
-// working directory) so automation runs work regardless of the caller's working
-// directory.
-func resolveDefaultProfileDir(fallback string) string {
-	return config.ResolveDefaultProfileDir(fallback)
 }

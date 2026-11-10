@@ -15,6 +15,8 @@ func TestDefaultConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, cfg.OutputDir)
 	assert.NotEmpty(t, cfg.ProfileDir)
+	assert.NotContains(t, cfg.ProfileDir, filepath.Join("bin", "profile"), "default profile dir should live under the user profile, not workspace bin/profile")
+	assert.Contains(t, cfg.ProfileDir, filepath.Join("teams-cli", "profile"))
 	assert.Equal(t, "Transcription Agent", cfg.BotName)
 	assert.True(t, cfg.Headless)
 	assert.NoError(t, cfg.Validate())
@@ -153,4 +155,20 @@ headless: true
 	assert.Equal(t, `C:\Transcripts\profile`, got.ProfileDir)
 	assert.Equal(t, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", got.MeetingURL)
 	assert.True(t, got.Headless)
+}
+
+func TestLoadExpandsWindowsUserVariables(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "user-vars.yaml")
+	yamlContent := `
+output_folder: "%USER%\\Documents\\Transcripts"
+profile_dir: "%USERPROFILE%\\AppData\\Local\\teams-cli\\profile"
+`
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0o600))
+	got, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "Documents", "Transcripts"), got.OutputDir)
+	assert.Equal(t, filepath.Join(home, "AppData", "Local", "teams-cli", "profile"), got.ProfileDir)
 }

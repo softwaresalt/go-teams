@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,6 +19,8 @@ const (
 	// when only an output directory is specified.
 	DefaultFilenameTemplate = "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 )
+
+var winEnvVarRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%`)
 
 // Sentinel validation errors returned by Config.Validate.
 var (
@@ -57,7 +61,8 @@ type Config struct {
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default
-// paths resolved via os.UserConfigDir.
+// paths resolved in the user's Windows profile (%LOCALAPPDATA%\teams-cli and
+// %APPDATA%\teams-cli).
 func DefaultConfig() (Config, error) {
 	appDir, err := appConfigDir()
 	if err != nil {
@@ -66,37 +71,49 @@ func DefaultConfig() (Config, error) {
 	return Config{
 		OutputDir:        filepath.Join(appDir, "transcripts"),
 		FilenameTemplate: DefaultFilenameTemplate,
-		ProfileDir:       ResolveDefaultProfileDir(filepath.Join(appDir, "profile")),
+		ProfileDir:       defaultProfileDir(appDir),
 		BotName:          "Transcription Agent",
 		Headless:         true,
 	}, nil
 }
 
-// ResolveDefaultProfileDir prefers an existing workspace or executable-relative
-// profile directory (such as bin/profile next to teams-cli.exe) so customer
-// YAML config files that omit profile_dir reuse the authenticated browser
-// session automatically. When none exist on disk, fallback is returned.
-func ResolveDefaultProfileDir(fallback string) string {
-	candidates := []string{filepath.Join("bin", "profile")}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		candidates = append([]string{
-			filepath.Join(exeDir, "profile"),
-			filepath.Join(exeDir, "bin", "profile"),
-		}, candidates...)
+// defaultProfileDir returns the standard per-user browser profile location on
+// Windows (%LOCALAPPDATA%\teams-cli\profile, matching Edge/Chrome User Data
+// placement under AppData\Local), falling back to appDir\profile when
+// LOCALAPPDATA is unset.
+func defaultProfileDir(appDir string) string {
+	if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+		return filepath.Join(localAppData, appDirName, "profile")
 	}
-	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && info.IsDir() {
-			if abs, absErr := filepath.Abs(c); absErr == nil {
-				return abs
+	return filepath.Join(appDir, "profile")
+}
+
+func expandUserPath(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	expanded := winEnvVarRe.ReplaceAllStringFunc(raw, func(m string) string {
+		sub := winEnvVarRe.FindStringSubmatch(m)
+		if len(sub) == 2 {
+			if strings.EqualFold(sub[1], "USER") || strings.EqualFold(sub[1], "USERPROFILE") {
+				if home != "" {
+					return home
+				}
 			}
-			return c
+			if val, ok := os.LookupEnv(sub[1]); ok {
+				return val
+			}
+		}
+		return m
+	})
+	expanded = os.ExpandEnv(expanded)
+	if strings.HasPrefix(expanded, "~"+string(filepath.Separator)) || strings.HasPrefix(expanded, "~/") {
+		if home != "" {
+			expanded = filepath.Join(home, expanded[2:])
 		}
 	}
-	if fallback != "" {
-		return fallback
-	}
-	return filepath.Join("bin", "profile")
+	return filepath.Clean(expanded)
 }
 
 // DefaultConfigPath returns the default location of the config file.
@@ -198,6 +215,10 @@ func Load(path string) (Config, error) {
 	if cfg.FilenameTemplate == "" {
 		cfg.FilenameTemplate = DefaultFilenameTemplate
 	}
+	cfg.OutputDir = expandUserPath(cfg.OutputDir)
+	cfg.OutputFile = expandUserPath(cfg.OutputFile)
+	cfg.ProfileDir = expandUserPath(cfg.ProfileDir)
+	cfg.BrowserPath = expandUserPath(cfg.BrowserPath)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}

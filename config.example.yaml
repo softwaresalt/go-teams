@@ -34,7 +34,9 @@ filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 # browser_path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
 
 # Browser profile directory for persisting Microsoft 365 authentication cookies/tokens.
-profile_dir: "bin\\profile"
+# Defaults to "%LOCALAPPDATA%\\teams-cli\\profile" (e.g. C:\Users\<you>\AppData\Local\teams-cli\profile)
+# when omitted.
+# profile_dir: "%LOCALAPPDATA%\\teams-cli\\profile"
 
 # Run the browser in headless mode (true for background automation after initial sign-in,
 # false to open a visible browser window for interactive login).

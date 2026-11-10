@@ -73,3 +73,26 @@ func TestDeduplicatorTrimsWhitespace(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "Trimmed sentence.", got)
 }
+
+func TestDeduplicatorIngestSettled(t *testing.T) {
+	d := NewDeduplicator()
+
+	// Unpunctuated fragment that settled after speaker paused is emitted.
+	got, ok := d.IngestSettled("Alice", "  Thanks everyone for joining  ")
+	assert.True(t, ok)
+	assert.Equal(t, "Thanks everyone for joining", got)
+
+	// Duplicate settled fragment is suppressed.
+	_, ok = d.IngestSettled("Alice", "Thanks everyone for joining")
+	assert.False(t, ok)
+
+	// Retroactive punctuation on the same utterance is also suppressed as duplicate.
+	_, ok = d.Ingest("Alice", "Thanks everyone for joining.")
+	assert.False(t, ok)
+
+	// Empty or punctuation-only settled fragment is ignored.
+	_, ok = d.IngestSettled("Alice", "   ")
+	assert.False(t, ok)
+	_, ok = d.IngestSettled("Alice", "...")
+	assert.False(t, ok)
+}

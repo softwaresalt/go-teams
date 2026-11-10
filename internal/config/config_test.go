@@ -15,6 +15,8 @@ func TestDefaultConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, cfg.OutputDir)
 	assert.NotEmpty(t, cfg.ProfileDir)
+	assert.NotContains(t, cfg.ProfileDir, filepath.Join("bin", "profile"), "default profile dir should live under the user profile, not workspace bin/profile")
+	assert.Contains(t, cfg.ProfileDir, filepath.Join("teams-cli", "profile"))
 	assert.Equal(t, "Transcription Agent", cfg.BotName)
 	assert.True(t, cfg.Headless)
 	assert.NoError(t, cfg.Validate())
@@ -67,10 +69,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	want := Config{
-		OutputDir:  filepath.Join(dir, "out"),
-		ProfileDir: filepath.Join(dir, "prof"),
-		BotName:    "Bot",
-		Headless:   false,
+		OutputDir:        filepath.Join(dir, "out"),
+		FilenameTemplate: DefaultFilenameTemplate,
+		ProfileDir:       filepath.Join(dir, "prof"),
+		BotName:          "Bot",
+		Headless:         false,
 		Meetings: []MeetingSchedule{
 			{Name: "standup", URL: "https://teams.microsoft.com/l/meetup-join/x", Cron: "0 9 * * 1-5"},
 		},
@@ -127,4 +130,45 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Equal(t, "Custom", got.BotName)
 	assert.NotEmpty(t, got.OutputDir)
 	assert.NotEmpty(t, got.ProfileDir)
+	assert.Equal(t, DefaultFilenameTemplate, got.FilenameTemplate)
+}
+
+func TestLoadCustomerYAMLWithTemplateAndAliases(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wsp.yaml")
+	yamlContent := `
+category: WSP
+output_folder: C:\Transcripts\WSP
+name_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
+browser_path: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+profile_dir: C:\Transcripts\profile
+url: https://teams.cloud.microsoft/l/meetingrecap?threadId=1
+headless: true
+`
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0o600))
+	got, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "WSP", got.Category)
+	assert.Equal(t, filepath.FromSlash("C:/Transcripts/WSP"), got.OutputDir)
+	assert.Equal(t, "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md", got.FilenameTemplate)
+	assert.Equal(t, filepath.FromSlash("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"), got.BrowserPath)
+	assert.Equal(t, filepath.FromSlash("C:/Transcripts/profile"), got.ProfileDir)
+	assert.Equal(t, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", got.MeetingURL)
+	assert.True(t, got.Headless)
+}
+
+func TestLoadExpandsWindowsUserVariables(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "user-vars.yaml")
+	yamlContent := `
+output_folder: "%USER%\\Documents\\Transcripts"
+profile_dir: "%USERPROFILE%\\AppData\\Local\\teams-cli\\profile"
+`
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0o600))
+	got, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "Documents", "Transcripts"), got.OutputDir)
+	assert.Equal(t, filepath.Join(home, "AppData", "Local", "teams-cli", "profile"), got.ProfileDir)
 }

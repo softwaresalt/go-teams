@@ -1,0 +1,3 @@
+{
+  "mvp-live-captions-2026-11-09": "011-F and tasks 011.001-T through 011.005-T done; 011-S active pending approved merge. Implementation 5d7225316fbdae259255d6e611b5eac1d640afb2 pushed on feat/mvp-live-captions. PR #29 https://github.com/softwaresalt/go-teams/pull/29 targets main with exact-HEAD local readiness. Go 1.26 vet, integration vet, CI-pinned lint v1.64.8, format, build, race and full tests pass. Compiled Windows binary passes six synthetic headless URL/output forms. Required decision/design/plan/review-closure/memory artifacts committed. No real tenant qualification or merge. Next: CI/review gates, operator live checks, explicit merge approval, post-merge reconciliation and compaction."
+}

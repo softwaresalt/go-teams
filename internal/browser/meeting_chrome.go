@@ -2,13 +2,16 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	cdpruntime "github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/softwaresalt/go-teams/internal/audio"
@@ -16,48 +19,467 @@ import (
 	"github.com/softwaresalt/go-teams/internal/transcript"
 )
 
-// admissionPollInterval controls how often awaitAdmission re-checks the DOM.
-const admissionPollInterval = 2 * time.Second
+// admissionPollInterval controls how often pre-join and admission loops
+// re-check the DOM.
+const (
+	admissionPollInterval = 1 * time.Second
+	captionMenuStepWait   = 5 * time.Second
+	captionMenuPoll       = 150 * time.Millisecond
+)
 
 // chromeMeeting is the chromedp-backed Meeting implementation. Its methods
 // operate on a chromedp browser context supplied by the caller so that a single
 // browser session spans join, captions, and audio.
 type chromeMeeting struct {
-	opts MeetingOptions
+	opts                 MeetingOptions
+	headedOpts           *Options
+	cdpPort              int
+	capturePageID        string
+	allowSingleTabRebind bool
+	headedMu             sync.Mutex
+	headedStop           func()
+	attachedCtx          context.Context
+	recapEntries         []RecapTranscriptEntry
+	recapMeta            MeetingMetadata
+	aiSummary            string
 }
 
 func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 	return &chromeMeeting{opts: opts}
 }
 
-// Join implements Meeting. ctx MUST be a chromedp browser context. It validates
-// the meeting URL, navigates to it, runs the pre-join sequence (enforce mute,
-// inject the bot name, click "Join now"), then polls until admitted or ctx is
-// cancelled. Navigation failures are reported separately from pre-join
-// readiness failures.
+// AISummary implements AISummaryProvider.
+func (m *chromeMeeting) AISummary() string {
+	return m.aiSummary
+}
+
+// MeetingMetadata implements MetadataProvider.
+func (m *chromeMeeting) MeetingMetadata() MeetingMetadata {
+	return m.recapMeta
+}
+
+// IsRecap implements RecapMeeting.
+func (m *chromeMeeting) IsRecap() bool {
+	return len(m.recapEntries) > 0
+}
+
+func (m *chromeMeeting) stopHeadedBrowser() {
+	m.headedMu.Lock()
+	stop := m.headedStop
+	m.headedStop = nil
+	m.headedMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+// Join implements Meeting. It validates the meeting URL, navigates to it, waits
+// for user authentication or launcher interstitial handling as needed, and
+// detects either a Teams Meeting Recap transcript (via xplatplugins.aspx /
+// .ms-List) or a live call pre-join / active call toolbar.
 func (m *chromeMeeting) Join(ctx context.Context) error {
-	if chromedp.FromContext(ctx) == nil {
+	if m.headedOpts == nil && chromedp.FromContext(ctx) == nil {
 		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
 	}
 	if err := teams.ValidateMeetingURL(m.opts.MeetingURL); err != nil {
 		return fmt.Errorf("browser: invalid meeting url: %w", err)
 	}
+	if m.headedOpts != nil {
+		return m.joinHeaded(ctx)
+	}
 	if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {
 		return fmt.Errorf("browser: navigate to meeting: %w", err)
 	}
-	if err := chromedp.Run(ctx, chromedp.WaitVisible(joinNowSel, chromedp.ByQuery)); err != nil {
-		return fmt.Errorf("browser: pre-join not visible: %w", err)
-	}
-	if err := m.enforceMute(ctx); err != nil {
+	return m.awaitPreJoinOrAdmission(ctx)
+}
+
+func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
+	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, m.opts.MeetingURL)
+	if err != nil {
 		return err
 	}
-	if err := m.injectName(ctx); err != nil {
-		return err
+	m.capturePageID = targetID
+	m.allowSingleTabRebind = true
+	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, wsURL)
+	m.headedMu.Lock()
+	m.headedStop = func() {
+		cancelAlloc()
+		cleanupProc()
 	}
-	if err := chromedp.Run(ctx, chromedp.Click(joinNowSel, chromedp.ByQuery)); err != nil {
-		return fmt.Errorf("browser: click join now: %w", err)
+	m.headedMu.Unlock()
+
+	ticker := time.NewTicker(1500 * time.Millisecond)
+	defer ticker.Stop()
+
+	loggedWaiting := false
+	clickedLauncher := false
+	reNavigateAttempts := 0
+	hydratedWithoutRecapPolls := 0
+	sawAuthRedirect := false
+	lastWasAuth := false
+	authBounceCount := 0
+	authLoopPolls := 0
+	consecutiveListFailures := 0
+	missingTargetPolls := 0
+
+	for {
+		targets, err := listCDPTargets(port)
+		if err != nil {
+			consecutiveListFailures++
+			select {
+			case <-procDone:
+				return fmt.Errorf("browser: browser process exited before meeting admission: %w", err)
+			default:
+			}
+			if consecutiveListFailures >= 5 {
+				return fmt.Errorf("browser: DevTools endpoint unreachable before meeting admission: %w", err)
+			}
+		} else {
+			consecutiveListFailures = 0
+			mainPage, found := m.findBoundCapturePage(targets)
+			if !found {
+				missingTargetPolls++
+				if missingTargetPolls >= 5 {
+					return fmt.Errorf("browser: capture tab %s was closed before meeting admission", m.capturePageID)
+				}
+			} else if isAuthRedirectURL(mainPage.URL) {
+				missingTargetPolls = 0
+				sawAuthRedirect = true
+				if !lastWasAuth {
+					authBounceCount++
+					lastWasAuth = true
+				}
+				authLoopPolls++
+				if !loggedWaiting {
+					slog.Info("browser: waiting for user authentication in browser window")
+					loggedWaiting = true
+				}
+				// If the browser is bouncing repeatedly between Teams and the
+				// login page (auth redirect loop after initial token setup),
+				// override the loop by navigating the address bar directly to
+				// the original meeting URL via Page.navigate.
+				if authBounceCount >= 2 && authLoopPolls >= 3 && reNavigateAttempts < 4 {
+					reNavigateAttempts++
+					authBounceCount = 0
+					authLoopPolls = 0
+					clickedLauncher = false
+					slog.Info("browser: detected auth redirect loop; re-navigating to original meeting URL", "attempt", reNavigateAttempts)
+					_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, m.opts.MeetingURL)
+				}
+			} else {
+				missingTargetPolls = 0
+				lastWasAuth = false
+				authLoopPolls = 0
+				ownedFrames := fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
+				hasRecapIframe := false
+				for i := range targets {
+					t := &targets[i]
+					if !isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) {
+						continue
+					}
+					if strings.Contains(t.URL, "xplatplugins.aspx") || strings.Contains(t.URL, "streamembed.aspx") {
+						hasRecapIframe = true
+					}
+
+					// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
+					// has a Meeting Recap transcript list populated for the requested meeting.
+					if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
+						if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPage.URL, t.URL); pErr == nil && len(entries) > 0 {
+							m.recapEntries = entries
+							if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
+								m.aiSummary = summary
+								slog.Info("browser: copied AI summary from meeting recap")
+							}
+							enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
+							m.recapMeta = meta
+							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
+							return nil
+						}
+					}
+				}
+
+				stateRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `JSON.stringify({
+					host: location.host,
+					path: location.pathname,
+					hash: location.hash,
+					toolbar: document.querySelector('#hangup-button, [data-tid="hangup-button"], [data-tid="hangup-main-btn"]') !== null,
+					lobby: document.body !== null && document.body.innerText.includes("Someone will let you in shortly"),
+					prejoin: document.querySelector('[data-tid="prejoin-join-button"]') !== null,
+					launcher: document.querySelector('#openTeamsClientInBrowser, button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]') !== null,
+					recapHeader: document.querySelector('[data-tid="intelligent-recap-header"]') !== null,
+					tidCount: document.querySelectorAll('[data-tid]').length,
+					msalReady: (() => {
+						try {
+							return Boolean(
+								localStorage.getItem('msal.2.account.keys') ||
+								Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
+							);
+						} catch (_) {
+							return false;
+						}
+					})()
+				})`)
+				if evalErr == nil {
+					var st struct {
+						Host        string `json:"host"`
+						Path        string `json:"path"`
+						Hash        string `json:"hash"`
+						Toolbar     bool   `json:"toolbar"`
+						Lobby       bool   `json:"lobby"`
+						Prejoin     bool   `json:"prejoin"`
+						Launcher    bool   `json:"launcher"`
+						RecapHeader bool   `json:"recapHeader"`
+						TidCount    int    `json:"tidCount"`
+						MsalReady   bool   `json:"msalReady"`
+					}
+					_ = json.Unmarshal([]byte(stateRaw), &st)
+
+					if st.Launcher {
+						hydratedWithoutRecapPolls = 0
+						if !clickedLauncher {
+							slog.Info("browser: launcher interstitial detected; clicking use web app")
+							_, _ = evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `(() => {
+								const btn = document.querySelector('#openTeamsClientInBrowser, button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]');
+								if (btn) { btn.click(); return true; }
+								return false;
+							})()`)
+							clickedLauncher = true
+						}
+					} else {
+						clickedLauncher = false
+						if st.Toolbar || st.Lobby || st.Prejoin {
+							// Live meeting flow on the open page target.
+							tCtx, _ := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(mainPage.ID)))
+							m.attachedCtx = tCtx
+							return m.awaitPreJoinOrAdmission(tCtx)
+						}
+						if strings.Contains(st.Host, "teams.cloud.microsoft") &&
+							!st.RecapHeader &&
+							!hasRecapIframe &&
+							(st.MsalReady || sawAuthRedirect || st.TidCount > 15) &&
+							reNavigateAttempts < 4 {
+							hydratedWithoutRecapPolls++
+							// Wait 2 polls (3s) on the first post-auth landing,
+							// or 6 polls (9s) on subsequent retries, then
+							// re-apply the original meeting URL via Page.navigate
+							// (equivalent to pasting the URL into the address bar).
+							threshold := 2
+							if reNavigateAttempts > 0 {
+								threshold = 6
+							}
+							if hydratedWithoutRecapPolls >= threshold {
+								reNavigateAttempts++
+								hydratedWithoutRecapPolls = 0
+								slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
+								_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, m.opts.MeetingURL)
+							}
+						} else {
+							hydratedWithoutRecapPolls = 0
+							if !loggedWaiting {
+								slog.Info("browser: waiting for user authentication and meeting/recap load in browser window")
+								loggedWaiting = true
+							}
+						}
+					}
+				}
+			}
+		}
+
+		select {
+		case <-procDone:
+			return fmt.Errorf("browser: browser process exited before meeting admission")
+		case <-ctx.Done():
+			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
+		case <-ticker.C:
+		}
 	}
-	return m.awaitAdmission(ctx)
+}
+
+// findBoundCapturePage locates the page target bound to m.capturePageID. During
+// cross-origin OAuth redirects (login.microsoftonline.com <-> teams.cloud.microsoft),
+// Chromium COOP can swap the targetId of the single tab in a dedicated browser
+// instance; when allowSingleTabRebind is enabled and exactly one Microsoft/auth
+// page tab exists in the browser, m.capturePageID follows that single tab. If
+// the bound tab disappears when multiple tabs or non-Microsoft tabs exist, it
+// fails closed.
+func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTargetInfo, bool) {
+	if m.capturePageID == "" {
+		return nil, false
+	}
+	var candidates []*cdpTargetInfo
+	for i := range targets {
+		t := &targets[i]
+		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+			continue
+		}
+		if t.ID == m.capturePageID {
+			return t, true
+		}
+		candidates = append(candidates, t)
+	}
+	if m.allowSingleTabRebind && len(candidates) == 1 &&
+		isTrustedSingleTabRebindURL(candidates[0].URL) &&
+		(candidates[0].ParentID == m.capturePageID || hasPositiveMeetingIdentityMatch(m.opts.MeetingURL, candidates[0].URL)) {
+		m.capturePageID = candidates[0].ID
+		return candidates[0], true
+	}
+	return nil, false
+}
+
+func isTrustedSingleTabRebindURL(rawURL string) bool {
+	if isAuthRedirectURL(rawURL) {
+		return true
+	}
+	return hasHTTPSHostSuffix(rawURL,
+		"teams.cloud.microsoft",
+		"teams.microsoft.com",
+		"teams.live.com",
+		"sharepoint.com",
+	)
+}
+
+func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
+	ticker := time.NewTicker(admissionPollInterval)
+	defer ticker.Stop()
+	loggedWaiting := false
+	clickedLauncher := false
+	reNavigateAttempts := 0
+	coldRecapPolls := 0
+
+	for {
+		if m.cdpPort > 0 {
+			if ok := m.tryExtractRecapViaCDP(ctx, m.cdpPort); ok {
+				return nil
+			}
+		}
+
+		var toolbar, lobby, prejoin, launcher bool
+		if err := chromedp.Run(ctx,
+			chromedp.Evaluate(existsJS(meetingToolbarSel), &toolbar),
+			chromedp.Evaluate(containsTextJS(lobbyText), &lobby),
+			chromedp.Evaluate(existsJS(joinNowSel), &prejoin),
+			chromedp.Evaluate(existsJS(joinOnWebSel), &launcher),
+		); err != nil {
+			return fmt.Errorf("browser: pre-join not visible: %w", err)
+		}
+
+		switch classifyPreJoinState(toolbar, lobby, prejoin, launcher) {
+		case PreJoinAdmitted:
+			slog.Info("browser: admitted to meeting")
+			return nil
+		case PreJoinInLobby:
+			return m.awaitAdmission(ctx)
+		case PreJoinReady:
+			if err := m.enforceMute(ctx); err != nil {
+				return err
+			}
+			if err := m.injectName(ctx); err != nil {
+				return err
+			}
+			if err := chromedp.Run(ctx, chromedp.Click(joinNowSel, chromedp.ByQuery)); err != nil {
+				return fmt.Errorf("browser: click join now: %w", err)
+			}
+			return m.awaitAdmission(ctx)
+		case PreJoinLauncher:
+			coldRecapPolls = 0
+			if !clickedLauncher {
+				slog.Info("browser: launcher interstitial detected; clicking join on web")
+				var clicked bool
+				if err := chromedp.Run(ctx, chromedp.Evaluate(clickJS(joinOnWebSel), &clicked)); err != nil {
+					slog.Warn("browser: click join on web failed; retrying", "err", err)
+				} else if clicked {
+					clickedLauncher = true
+				}
+			}
+		case PreJoinWaitingForUser:
+			clickedLauncher = false
+			if reNavigateAttempts < 4 {
+				var stalledAfterAuth bool
+				_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => {
+					try {
+						if (!location.host.includes('teams.cloud.microsoft')) return false;
+						if (document.querySelector('[data-tid="intelligent-recap-header"]')) return false;
+						const msal = Boolean(
+							localStorage.getItem('msal.2.account.keys') ||
+							Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
+						);
+						return msal || document.querySelectorAll('[data-tid]').length > 15;
+					} catch (_) {
+						return false;
+					}
+				})()`, &stalledAfterAuth))
+				if stalledAfterAuth {
+					coldRecapPolls++
+					threshold := 2
+					if reNavigateAttempts > 0 {
+						threshold = 6
+					}
+					if coldRecapPolls >= threshold {
+						reNavigateAttempts++
+						coldRecapPolls = 0
+						slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
+						_ = chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL))
+					}
+				}
+			}
+			if !loggedWaiting {
+				slog.Info("browser: waiting for user authentication and meeting entry in browser window")
+				loggedWaiting = true
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) bool {
+	if m.capturePageID == "" {
+		if c := chromedp.FromContext(ctx); c != nil && c.Target != nil && c.Target.TargetID != "" {
+			m.capturePageID = string(c.Target.TargetID)
+		}
+	}
+	targets, err := listCDPTargets(port)
+	if err != nil {
+		return false
+	}
+	var (
+		ownedFrames ownedFrameSet
+		mainPageURL string
+	)
+	if m.capturePageID != "" {
+		mainPage, ok := m.findBoundCapturePage(targets)
+		if !ok {
+			return false
+		}
+		mainPageURL = mainPage.URL
+		ownedFrames = fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
+	}
+	for _, t := range targets {
+		if !isTargetInCaptureScope(t, m.capturePageID, ownedFrames) {
+			continue
+		}
+		if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
+			if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPageURL, t.URL); pErr == nil && len(entries) > 0 {
+				m.recapEntries = entries
+				if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
+					m.aiSummary = summary
+					slog.Info("browser: copied AI summary from meeting recap")
+				}
+				enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
+				m.recapMeta = meta
+				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // enforceMute clicks the microphone toggle if it is currently enabled so the
@@ -75,6 +497,10 @@ func (m *chromeMeeting) enforceMute(ctx context.Context) error {
 		slog.Warn("browser: mic toggle not found; assuming muted")
 		return nil
 	}
+	var checked bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(propBoolJS(micToggleSel, "checked"), &checked)); err != nil {
+		return fmt.Errorf("browser: read mic checked property: %w", err)
+	}
 	var ariaChecked string
 	var ok bool
 	if err := chromedp.Run(ctx,
@@ -82,7 +508,7 @@ func (m *chromeMeeting) enforceMute(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("browser: read mic toggle state: %w", err)
 	}
-	if ok && muteRequired(ariaChecked) {
+	if micStateRequiresMute(checked, ariaChecked) {
 		if err := chromedp.Run(ctx, chromedp.Click(micToggleSel, chromedp.ByQuery)); err != nil {
 			return fmt.Errorf("browser: mute microphone: %w", err)
 		}
@@ -91,7 +517,7 @@ func (m *chromeMeeting) enforceMute(ctx context.Context) error {
 }
 
 // injectName types the configured bot name into the display-name input when it
-// is present (unauthenticated guest flow).
+// is present and empty (unauthenticated guest flow).
 func (m *chromeMeeting) injectName(ctx context.Context) error {
 	if m.opts.BotName == "" {
 		return nil
@@ -101,6 +527,13 @@ func (m *chromeMeeting) injectName(ctx context.Context) error {
 		return fmt.Errorf("browser: probe display-name input: %w", err)
 	}
 	if !present {
+		return nil
+	}
+	var existing string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(propStringJS(displayNameInputSel, "value"), &existing)); err != nil {
+		return fmt.Errorf("browser: read display-name input: %w", err)
+	}
+	if existing != "" {
 		return nil
 	}
 	if err := chromedp.Run(ctx,
@@ -203,6 +636,23 @@ func (p *payloadPump) stop() {
 	p.workWG.Wait()
 }
 
+// targetContext returns a context that carries the active chromedp target
+// (using m.attachedCtx when Join attached to a headed CDP target) while
+// propagating cancellation from callerCtx so Session.Run's runCtx can cancel
+// EnableCaptions and CaptureAudio on write/flush/worker errors without closing
+// the underlying browser target.
+func (m *chromeMeeting) targetContext(callerCtx context.Context) (context.Context, context.CancelFunc) {
+	if m.attachedCtx == nil {
+		return context.WithCancel(callerCtx)
+	}
+	targetCtx, cancel := context.WithCancel(m.attachedCtx)
+	stop := context.AfterFunc(callerCtx, cancel)
+	return targetCtx, func() {
+		stop()
+		cancel()
+	}
+}
+
 // EnableCaptions implements Meeting. It activates Teams live captions, registers
 // the sendCaptionToGo CDP binding, injects the caption MutationObserver, and
 // routes forwarded fragments through Go-side deduplication to sink. It blocks
@@ -211,13 +661,25 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 	if sink == nil {
 		return fmt.Errorf("browser: caption sink must not be nil")
 	}
-	if chromedp.FromContext(ctx) == nil {
+	if len(m.recapEntries) > 0 {
+		for _, entry := range m.recapEntries {
+			speaker := entry.Speaker
+			if entry.Offset != "" {
+				speaker = speaker + RecapOffsetSeparator + entry.Offset
+			}
+			sink(speaker, entry.Text)
+		}
+		return nil
+	}
+	targetCtx, cancelTarget := m.targetContext(ctx)
+	defer cancelTarget()
+	if chromedp.FromContext(targetCtx) == nil {
 		return fmt.Errorf("browser: enable captions requires a chromedp browser context")
 	}
-	if err := m.activateCaptions(ctx); err != nil {
+	if err := m.activateCaptions(targetCtx); err != nil {
 		return err
 	}
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := chromedp.Run(targetCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		return cdpruntime.AddBinding(captionBinding).Do(ctx)
 	})); err != nil {
 		return fmt.Errorf("browser: add caption binding: %w", err)
@@ -228,7 +690,7 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 	// sink delivery. pump.stop() is a producer barrier that drains all buffered
 	// fragments before EnableCaptions returns, so the transcript tail is not
 	// lost on shutdown and no sink call happens after return.
-	workerCtx, cancel := context.WithCancel(ctx)
+	workerCtx, cancel := context.WithCancel(targetCtx)
 	dedup := transcript.NewDeduplicator()
 	pump := newPayloadPump(captionQueueSize, func(raw string) {
 		if err := handleCaptionPayload(raw, dedup, sink); err != nil {
@@ -254,29 +716,133 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 	})
 
 	var attached bool
-	if err := chromedp.Run(ctx, chromedp.Evaluate(captionObserverJS, &attached)); err != nil {
+	if err := chromedp.Run(targetCtx, chromedp.Evaluate(captionObserverJS, &attached)); err != nil {
 		return fmt.Errorf("browser: inject caption observer: %w", err)
 	}
 	if !attached {
 		slog.Warn("browser: caption renderer not yet present; observer not attached")
 	}
 
-	<-ctx.Done()
+	<-targetCtx.Done()
 	return nil
 }
 
 // activateCaptions clicks through the meeting menu to turn on live captions:
-// "More actions" -> "Language and speech" -> "Turn on live captions".
+// "More actions" -> (optional "Language and speech" submenu in full client) ->
+// "Turn on live captions", then waits for the caption renderer wrapper to
+// appear. If captions are already active in the DOM, it returns immediately.
 func (m *chromeMeeting) activateCaptions(ctx context.Context) error {
+	var alreadyActive bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive)); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if alreadyActive {
+		slog.Info("browser: live captions already active")
+		return nil
+	}
+
+	if err := waitAnyPresent(ctx, captionWrapperSel, moreActionsSel); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive)); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if alreadyActive {
+		return nil
+	}
+
+	if err := chromedp.Run(ctx, chromedp.Click(moreActionsSel, chromedp.ByQuery)); err != nil {
+		return fmt.Errorf("browser: activate captions (click more): %w", err)
+	}
+
+	menuCtx, cancelMenu := context.WithTimeout(ctx, captionMenuStepWait)
+	err := waitAnyPresent(menuCtx, captionWrapperSel, turnOnCaptionsSel, languageSpeechSel)
+	cancelMenu()
+	if err != nil {
+		return fmt.Errorf("browser: activate captions (menu): %w", err)
+	}
+
+	var captionsBtn, langSubmenu bool
 	if err := chromedp.Run(ctx,
-		chromedp.Click(moreActionsSel, chromedp.ByQuery),
-		chromedp.Click(languageSpeechSel, chromedp.ByQuery),
-		chromedp.Click(turnOnCaptionsSel, chromedp.ByQuery),
-		chromedp.WaitVisible(captionWrapperSel, chromedp.ByQuery),
+		chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive),
+		chromedp.Evaluate(existsJS(turnOnCaptionsSel), &captionsBtn),
+		chromedp.Evaluate(existsJS(languageSpeechSel), &langSubmenu),
 	); err != nil {
 		return fmt.Errorf("browser: activate captions: %w", err)
 	}
-	return nil
+	if alreadyActive {
+		return nil
+	}
+
+	if !captionsBtn && langSubmenu {
+		if err := chromedp.Run(ctx, chromedp.Click(languageSpeechSel, chromedp.ByQuery)); err != nil {
+			return fmt.Errorf("browser: activate captions (language submenu): %w", err)
+		}
+		subCtx, cancelSub := context.WithTimeout(ctx, captionMenuStepWait)
+		err := waitAnyPresent(subCtx, captionWrapperSel, turnOnCaptionsSel)
+		cancelSub()
+		if err != nil {
+			return fmt.Errorf("browser: activate captions (wait captions button): %w", err)
+		}
+	}
+
+	if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(captionWrapperSel), &alreadyActive)); err != nil {
+		return fmt.Errorf("browser: activate captions: %w", err)
+	}
+	if !alreadyActive {
+		if err := chromedp.Run(ctx, chromedp.Click(turnOnCaptionsSel, chromedp.ByQuery)); err != nil {
+			return fmt.Errorf("browser: activate captions (click turn on captions): %w", err)
+		}
+	}
+
+	return m.awaitCaptionWrapper(ctx)
+}
+
+func (m *chromeMeeting) awaitCaptionWrapper(ctx context.Context) error {
+	ticker := time.NewTicker(captionMenuPoll)
+	defer ticker.Stop()
+	for {
+		var wrapper, langConfirm bool
+		if err := chromedp.Run(ctx,
+			chromedp.Evaluate(existsJS(captionWrapperSel), &wrapper),
+			chromedp.Evaluate(existsJS(spokenLanguageConfirmSel), &langConfirm),
+		); err != nil {
+			return fmt.Errorf("browser: activate captions: %w", err)
+		}
+		if wrapper {
+			slog.Info("browser: live captions active")
+			return nil
+		}
+		if langConfirm {
+			_ = chromedp.Run(ctx, chromedp.Click(spokenLanguageConfirmSel, chromedp.ByQuery))
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("browser: activate captions: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitAnyPresent(ctx context.Context, selectors ...string) error {
+	ticker := time.NewTicker(captionMenuPoll)
+	defer ticker.Stop()
+	for {
+		for _, sel := range selectors {
+			var ok bool
+			if err := chromedp.Run(ctx, chromedp.Evaluate(existsJS(sel), &ok)); err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // CaptureAudio implements Meeting. It registers the sendAudioToGo CDP binding,
@@ -287,10 +853,12 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 	if w == nil {
 		return fmt.Errorf("browser: audio writer must not be nil")
 	}
-	if chromedp.FromContext(ctx) == nil {
+	targetCtx, cancelTarget := m.targetContext(ctx)
+	defer cancelTarget()
+	if chromedp.FromContext(targetCtx) == nil {
 		return fmt.Errorf("browser: capture audio requires a chromedp browser context")
 	}
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := chromedp.Run(targetCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		return cdpruntime.AddBinding(audioBinding).Do(ctx)
 	})); err != nil {
 		return fmt.Errorf("browser: add audio binding: %w", err)
@@ -300,7 +868,7 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 	// producer barrier on stop, so buffered audio chunks are drained (not lost)
 	// on shutdown. workerErr is written only by the pump's worker goroutine and
 	// is read after pump.stop() joins it, so the access is race-free.
-	workerCtx, cancel := context.WithCancel(ctx)
+	workerCtx, cancel := context.WithCancel(targetCtx)
 	var workerErr error
 	enc := audio.NewEncoder(w, audio.SampleRate)
 	pump := newPayloadPump(audioQueueSize, func(raw string) {
@@ -350,7 +918,7 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 	awaitPromise := func(p *cdpruntime.EvaluateParams) *cdpruntime.EvaluateParams {
 		return p.WithAwaitPromise(true)
 	}
-	if err := chromedp.Run(ctx, chromedp.Evaluate(audioCaptureJS, &started, awaitPromise)); err != nil {
+	if err := chromedp.Run(targetCtx, chromedp.Evaluate(audioCaptureJS, &started, awaitPromise)); err != nil {
 		return fmt.Errorf("browser: start audio capture: %w", err)
 	}
 	if !started {

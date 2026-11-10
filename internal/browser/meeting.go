@@ -3,6 +3,10 @@ package browser
 import (
 	"context"
 	"io"
+	"net"
+	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/chromedp/chromedp"
 )
@@ -47,17 +51,72 @@ func NewMeeting(opts MeetingOptions) Meeting {
 	return newChromeMeeting(opts)
 }
 
-// NewLiveMeeting allocates a headless Chromium context for automated capture and
-// returns a chromedp-backed Meeting bound to it, the context that drives the
-// meeting's methods, and a cleanup func that cancels the browser and allocator
-// contexts (terminating the spawned Chromium process). The caller MUST invoke
+// NewLiveMeeting allocates a Chromium context for meeting capture and returns a
+// chromedp-backed Meeting bound to it, the context that drives the meeting's
+// methods, and a cleanup func that cancels the browser and allocator contexts
+// (terminating the spawned Chromium process). Both headed and headless modes
+// launch via a clean local CDP debugging port without stealth or
+// sandbox-disabling flags so both Live Calls and Meeting Recaps work in
+// headless mode once the profile is authenticated. The caller MUST invoke
 // cleanup when the meeting is done, on success, failure, and cancellation.
 func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Meeting, context.Context, func(), error) {
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, AllocatorOptions(opts)...)
+	cm := newChromeMeeting(mopts)
+	if !opts.Headless {
+		optsCopy := opts
+		cm.headedOpts = &optsCopy
+		browserCtx, cancelBrowser := context.WithCancel(ctx)
+		cleanup := func() {
+			cancelBrowser()
+			cm.stopHeadedBrowser()
+		}
+		return cm, browserCtx, cleanup, nil
+	}
+	allocOpts := cleanHeadlessAllocatorOptions(opts)
+	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		cm.cdpPort = port
+		allocOpts = append(allocOpts, chromedp.Flag("remote-debugging-port", strconv.Itoa(port)))
+	}
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, allocOpts...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	cleanup := func() {
+		launched := false
+		if c := chromedp.FromContext(browserCtx); c != nil && c.Browser != nil {
+			launched = true
+		}
 		cancelBrowser()
 		cancelAlloc()
+		if launched {
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
-	return NewMeeting(mopts), browserCtx, cleanup, nil
+	return cm, browserCtx, cleanup, nil
+}
+
+func cleanHeadlessFlags() []Flag {
+	return []Flag{
+		{Name: "headless", Value: "new"},
+		{Name: "use-fake-ui-for-media-stream", Value: true},
+		{Name: "auto-select-desktop-capture-source", Value: "Microsoft Teams"},
+		{Name: "mute-audio", Value: false},
+	}
+}
+
+func cleanHeadlessAllocatorOptions(opts Options) []chromedp.ExecAllocatorOption {
+	out := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	for _, f := range cleanHeadlessFlags() {
+		out = append(out, chromedp.Flag(f.Name, f.Value))
+	}
+	if opts.UserDataDir != "" {
+		dir := opts.UserDataDir
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+		out = append(out, chromedp.UserDataDir(dir))
+	}
+	if execPath := ResolveExecPath(opts.ExecPath); execPath != "" {
+		out = append(out, chromedp.ExecPath(execPath))
+	}
+	return out
 }

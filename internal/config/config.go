@@ -7,11 +7,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-const appDirName = "teams-cli"
+const (
+	appDirName = "teams-cli"
+	// DefaultFilenameTemplate is the default transcript filename pattern used
+	// when only an output directory is specified.
+	DefaultFilenameTemplate = "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
+)
+
+var winEnvVarRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%`)
 
 // Sentinel validation errors returned by Config.Validate.
 var (
@@ -38,26 +47,76 @@ type MeetingSchedule struct {
 
 // Config is the top-level go-teams CLI configuration.
 type Config struct {
-	OutputDir  string            `yaml:"output_dir"`
-	ProfileDir string            `yaml:"profile_dir"`
-	BotName    string            `yaml:"bot_name"`
-	Headless   bool              `yaml:"headless"`
-	Meetings   []MeetingSchedule `yaml:"meetings"`
+	OutputDir        string            `yaml:"output_dir"`
+	OutputFile       string            `yaml:"output_file,omitempty"`
+	FilenameTemplate string            `yaml:"filename_template,omitempty"`
+	MeetingURL       string            `yaml:"meeting_url,omitempty"`
+	ProfileDir       string            `yaml:"profile_dir"`
+	BotName          string            `yaml:"bot_name"`
+	Category         string            `yaml:"category,omitempty"`
+	Headless         bool              `yaml:"headless"`
+	CaptureAudio     bool              `yaml:"capture_audio,omitempty"`
+	BrowserPath      string            `yaml:"browser_path,omitempty"`
+	Meetings         []MeetingSchedule `yaml:"meetings"`
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default
-// paths resolved via os.UserConfigDir.
+// paths resolved in the user's Windows profile (%LOCALAPPDATA%\teams-cli and
+// %APPDATA%\teams-cli).
 func DefaultConfig() (Config, error) {
 	appDir, err := appConfigDir()
 	if err != nil {
 		return Config{}, err
 	}
 	return Config{
-		OutputDir:  filepath.Join(appDir, "transcripts"),
-		ProfileDir: filepath.Join(appDir, "profile"),
-		BotName:    "Transcription Agent",
-		Headless:   true,
+		OutputDir:        filepath.Join(appDir, "transcripts"),
+		FilenameTemplate: DefaultFilenameTemplate,
+		ProfileDir:       defaultProfileDir(appDir),
+		BotName:          "Transcription Agent",
+		Headless:         true,
 	}, nil
+}
+
+// defaultProfileDir returns the standard per-user browser profile location on
+// Windows (%LOCALAPPDATA%\teams-cli\profile, matching Edge/Chrome User Data
+// placement under AppData\Local), falling back to appDir\profile when
+// LOCALAPPDATA is unset.
+func defaultProfileDir(appDir string) string {
+	if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+		return filepath.Join(localAppData, appDirName, "profile")
+	}
+	return filepath.Join(appDir, "profile")
+}
+
+func expandUserPath(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	expanded := winEnvVarRe.ReplaceAllStringFunc(raw, func(m string) string {
+		sub := winEnvVarRe.FindStringSubmatch(m)
+		if len(sub) == 2 {
+			if strings.EqualFold(sub[1], "USER") || strings.EqualFold(sub[1], "USERPROFILE") {
+				if home != "" {
+					return home
+				}
+			}
+			if val, ok := os.LookupEnv(sub[1]); ok {
+				return val
+			}
+		}
+		return m
+	})
+	expanded = os.ExpandEnv(expanded)
+	if strings.HasPrefix(expanded, "~"+string(filepath.Separator)) || strings.HasPrefix(expanded, "~/") {
+		if home != "" {
+			expanded = filepath.Join(home, expanded[2:])
+		}
+	}
+	if filepath.Separator != '\\' {
+		expanded = strings.ReplaceAll(expanded, `\`, string(filepath.Separator))
+	}
+	return filepath.Clean(expanded)
 }
 
 // DefaultConfigPath returns the default location of the config file.
@@ -113,6 +172,56 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	var aliases struct {
+		OutputFolder string `yaml:"output_folder"`
+		DefaultPath  string `yaml:"default_path"`
+		Output       string `yaml:"output"`
+		NameTemplate string `yaml:"name_template"`
+		URL          string `yaml:"url"`
+		Headless     *bool  `yaml:"headless"`
+		Headed       *bool  `yaml:"headed"`
+		Audio        *bool  `yaml:"audio"`
+	}
+	if err := yaml.Unmarshal(data, &aliases); err == nil {
+		if aliases.DefaultPath != "" {
+			cfg.OutputDir = aliases.DefaultPath
+		}
+		if aliases.OutputFolder != "" {
+			cfg.OutputDir = aliases.OutputFolder
+		}
+		if aliases.Output != "" {
+			ext := filepath.Ext(aliases.Output)
+			if ext == ".md" || ext == ".markdown" {
+				cfg.OutputFile = aliases.Output
+			} else {
+				cfg.OutputDir = aliases.Output
+			}
+		}
+		if cfg.FilenameTemplate == DefaultFilenameTemplate && aliases.NameTemplate != "" {
+			cfg.FilenameTemplate = aliases.NameTemplate
+		}
+		if cfg.MeetingURL == "" && aliases.URL != "" {
+			cfg.MeetingURL = aliases.URL
+		}
+		switch {
+		case aliases.Headed != nil && *aliases.Headed:
+			cfg.Headless = false
+		case aliases.Headless != nil:
+			cfg.Headless = *aliases.Headless
+		default:
+			cfg.Headless = false
+		}
+		if aliases.Audio != nil {
+			cfg.CaptureAudio = *aliases.Audio
+		}
+	}
+	if cfg.FilenameTemplate == "" {
+		cfg.FilenameTemplate = DefaultFilenameTemplate
+	}
+	cfg.OutputDir = expandUserPath(cfg.OutputDir)
+	cfg.OutputFile = expandUserPath(cfg.OutputFile)
+	cfg.ProfileDir = expandUserPath(cfg.ProfileDir)
+	cfg.BrowserPath = expandUserPath(cfg.BrowserPath)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}

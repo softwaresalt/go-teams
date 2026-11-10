@@ -56,3 +56,19 @@ func TestAllocatorOptionsDefaultUserAgent(t *testing.T) {
 	})
 	assert.Contains(t, DefaultUserAgent, "Windows NT 10.0")
 }
+
+func TestResolveExecPathPrecedence(t *testing.T) {
+	t.Setenv("TEAMS_BROWSER_PATH", "/env/browser")
+	assert.Equal(t, "/explicit/browser", ResolveExecPath("/explicit/browser"),
+		"explicit ExecPath must take precedence over TEAMS_BROWSER_PATH")
+	assert.Equal(t, "/env/browser", ResolveExecPath(""),
+		"TEAMS_BROWSER_PATH must be used when explicit ExecPath is empty")
+}
+
+func TestAllocatorOptionsAcceptsExecPath(t *testing.T) {
+	opts := AllocatorOptions(Options{
+		Headless: true,
+		ExecPath: "/custom/chromium",
+	})
+	assert.Greater(t, len(opts), len(chromedp.DefaultExecAllocatorOptions))
+}

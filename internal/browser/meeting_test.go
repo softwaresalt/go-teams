@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -34,4 +35,27 @@ func TestNewLiveMeeting(t *testing.T) {
 	if assert.NotNil(t, cleanup) {
 		cleanup()
 	}
+}
+
+func TestTargetContextPropagatesCallerCancellationWithAttachedCtx(t *testing.T) {
+	allocCtx, cancelAlloc := context.WithCancel(context.Background())
+	defer cancelAlloc()
+
+	cm := newChromeMeeting(MeetingOptions{MeetingURL: "https://teams.microsoft.com/x"})
+	cm.attachedCtx = allocCtx
+
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	targetCtx, cancelTarget := cm.targetContext(callerCtx)
+	defer cancelTarget()
+
+	cancelCaller()
+	select {
+	case <-targetCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("targetCtx was not cancelled after callerCtx cancellation")
+	}
+	assert.ErrorIs(t, targetCtx.Err(), context.Canceled,
+		"cancelling callerCtx must cancel targetCtx even when m.attachedCtx is still active")
+	assert.NoError(t, allocCtx.Err(),
+		"cancelling callerCtx must not cancel the underlying attachedCtx")
 }

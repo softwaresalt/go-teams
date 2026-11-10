@@ -3,12 +3,16 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/capture"
 	"github.com/softwaresalt/go-teams/internal/config"
+	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
 // deps holds injectable dependencies so commands can be unit-tested with fakes
@@ -31,25 +35,34 @@ func defaultDeps() *deps {
 			return browser.NewChromeRunner(browser.Options{
 				UserDataDir: c.ProfileDir,
 				Headless:    c.Headless,
+				ExecPath:    c.BrowserPath,
 			})
 		},
 		newMeeting: defaultNewMeeting,
 		newSession: func(c config.Config, meetingURL string) meetingSession {
 			return capture.NewSession(capture.SessionConfig{
-				OutputDir:  c.OutputDir,
-				MeetingURL: meetingURL,
-				BotName:    c.BotName,
+				OutputDir:        c.OutputDir,
+				OutputFile:       c.OutputFile,
+				FilenameTemplate: c.FilenameTemplate,
+				MeetingURL:       meetingURL,
+				Category:         c.Category,
+				BotName:          c.BotName,
+				CaptionsOnly:     !c.CaptureAudio,
 			})
 		},
 	}
 }
 
-// defaultNewMeeting allocates a headless Chromium context for automated capture
-// and returns a chromedp-backed Meeting bound to it. The cleanup func cancels
-// the browser and allocator contexts, terminating the spawned Chromium process.
+// defaultNewMeeting allocates a Chromium context for meeting capture and
+// returns a chromedp-backed Meeting bound to it. The cleanup func cancels the
+// browser and allocator contexts, terminating the spawned Chromium process.
 func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
 	return browser.NewLiveMeeting(ctx,
-		browser.Options{UserDataDir: c.ProfileDir, Headless: true},
+		browser.Options{
+			UserDataDir: c.ProfileDir,
+			Headless:    c.Headless,
+			ExecPath:    c.BrowserPath,
+		},
 		browser.MeetingOptions{MeetingURL: meetingURL, BotName: c.BotName})
 }
 
@@ -61,31 +74,102 @@ func NewRootCommand() *cobra.Command {
 
 func newRootCommand(d *deps) *cobra.Command {
 	var configPath string
+	var flags captureFlags
 	root := &cobra.Command{
-		Use:          "teams-cli",
-		Short:        "Autonomous Microsoft Teams live-transcription and audio capture",
+		Use:   "teams-cli [meeting-url] [output-markdown-path]",
+		Short: "Autonomous Microsoft Teams live-transcription and meeting recap capture",
+		Long: "teams-cli captures live captions and Meeting Recap transcripts (including " +
+			"the AI Summary) from Microsoft Teams into local Markdown files.\n\n" +
+			"Examples:\n" +
+			"  teams-cli.exe \"https://teams.cloud.microsoft/l/meetingrecap?...\" \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli.exe --queue transcript-queue.txt\n" +
+			"  teams-cli.exe captions \"https://teams.cloud.microsoft/l/meetingrecap?...\" -o \"C:\\out\\transcript.md\" --headless",
 		SilenceUsage: true,
+		Args:         cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.queueFile != "" {
+				if isInsideQueueExecution(cmd.Context()) {
+					return errors.New("cli: nested --queue flag is not allowed")
+				}
+				return runQueueFile(cmd.Context(), d, flags.queueFile, inheritedQueueFlags(cmd, configPath, flags))
+			}
+			cfg, err := loadConfigFrom(d, configPath)
+			if err != nil {
+				return err
+			}
+			applyCaptureFlags(cmd, &cfg, flags)
+			if len(args) >= 2 {
+				applyOutputTarget(&cfg, args[1])
+			}
+			rawURL := cfg.MeetingURL
+			if flags.meetingURL != "" {
+				rawURL = flags.meetingURL
+			}
+			if len(args) >= 1 {
+				rawURL = args[0]
+			}
+			if rawURL == "" {
+				return cmd.Help()
+			}
+			mutated, err := teams.MutateJoinURL(rawURL)
+			if err != nil {
+				return err
+			}
+			return runCapture(cmd.Context(), d, cfg, mutated)
+		},
 	}
-	root.PersistentFlags().StringVar(&configPath, "config", "",
-		"path to the config file (default: user config directory)")
+	root.PersistentFlags().StringVarP(&configPath, "config", "f", "",
+		"path to the YAML config file (default: ./config.yaml or user config directory)")
+	bindCaptureFlags(root, &flags)
 	root.AddCommand(
 		newAuthCommand(d, &configPath),
 		newJoinCommand(d, &configPath),
+		newCaptionsCommand(d, &configPath),
 		newScheduleCommand(d, &configPath),
 	)
 	return root
 }
 
 // loadConfigFrom resolves the effective config path (falling back to the
-// default location) and loads it via the injected loader.
+// default location) and loads it via the injected loader. When no --config path
+// was explicitly specified and the default config file does not exist on disk,
+// it falls back to DefaultConfig with Headless=false so the CLI opens a visible
+// browser window for interactive user authentication out of the box.
 func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 	path := configPath
 	if path == "" {
-		p, err := config.DefaultConfigPath()
+		p, err := resolveDefaultConfigPath()
 		if err != nil {
 			return config.Config{}, err
 		}
 		path = p
 	}
-	return d.loadConfig(path)
+	cfg, err := d.loadConfig(path)
+	if err != nil {
+		if configPath == "" && errors.Is(err, os.ErrNotExist) {
+			def, defErr := config.DefaultConfig()
+			if defErr != nil {
+				return config.Config{}, defErr
+			}
+			def.Headless = false
+			def.OutputDir = "transcripts"
+			return def, nil
+		}
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+func resolveDefaultConfigPath() (string, error) {
+	candidates := []string{"config.yaml"}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates, filepath.Join(exeDir, "config.yaml"))
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return c, nil
+		}
+	}
+	return config.DefaultConfigPath()
 }

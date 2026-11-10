@@ -55,6 +55,24 @@ func (d *Deduplicator) Ingest(speaker, text string) (string, bool) {
 	return trimmed, true
 }
 
+// IngestSettled processes a caption fragment that has settled in the DOM (no
+// further mutations observed within the settle window) without requiring
+// trailing sentence punctuation. It shares the same per-speaker normalized
+// deduplication key as Ingest so a settled utterance and a later punctuated
+// revision of the same words are never emitted twice.
+func (d *Deduplicator) IngestSettled(speaker, text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	norm := normalize(trimmed)
+	if norm == "" {
+		return "", false
+	}
+	if d.lastFinal[speaker] == norm {
+		return "", false
+	}
+	d.lastFinal[speaker] = norm
+	return trimmed, true
+}
+
 // normalize reduces a fragment to a comparison key: lowercased, with
 // punctuation removed and whitespace collapsed.
 func normalize(s string) string {

@@ -12,27 +12,100 @@ The full architectural blueprint lives in
 
 ## Status
 
-This is the foundation release: the CLI skeleton, configuration, URL handling,
-caption deduplication, Markdown rendering, cron scheduling, and browser
-allocator flags are implemented and unit-tested. Live meeting automation (the
-pre-join finite state machine, caption/audio JavaScript payloads, and MP3
-encoding) is scaffolded behind interfaces and lands in follow-on releases.
+The browser capture MVP supports live captions, Meeting Recap transcripts,
+and available Teams AI summaries. It supports headed sign-in and headless
+automation with a previously authenticated browser profile. Teams DOM changes,
+tenant permissions, admission, and recap availability can affect capture.
+See the [capture design](docs/design-docs/2026-11-09-teams-browser-caption-and-recap-capture.md).
 
 ## Requirements
 
-- Go 1.26 or later (driven by the `chromedp` dependency)
-- A Chromium-based browser (Chrome, Edge, or Brave) installed on the host
+* Go 1.26 or later to build the executable
+* A Chromium-based browser (Chrome, Edge, or Brave) installed on the host
 
 ## Commands
 
 ```text
-teams-cli auth               Sign in interactively and cache the session
-teams-cli join <meeting-url> Join a meeting immediately from a URL
-teams-cli schedule           Run as a daemon, joining meetings on a cron schedule
+teams-cli [meeting-url] [output-markdown-path]          Capture directly
+teams-cli captions [meeting-url] [output-markdown-path] Capture live captions or a Meeting Recap
+teams-cli join <meeting-url> [output-markdown-path]     Join and capture (also accepts --url)
+teams-cli auth                   Sign in interactively and cache the session
+teams-cli schedule               Run as a daemon, joining meetings on a cron schedule
 ```
+
+### Quick Start (Interactive Live Captions MVP)
+
+Run `teams-cli captions` (with an optional meeting link) to open a browser
+window, sign in to Microsoft Teams manually, enter your call, and automatically
+enable and record live captions to a local Markdown file:
+
+```bash
+# Open Teams in a browser window, sign in, join any call, and save captions to ./transcripts:
+go run ./cmd/teams-cli captions --output-dir ./transcripts
+
+# Or navigate directly to a specific Teams meeting URL:
+go run ./cmd/teams-cli captions "https://teams.microsoft.com/meet/synthetic" --output-dir ./transcripts
+```
+
+### Compiled executable and explicit output file
+
+Build on Windows, then pass both the input URL and destination file:
+
+```powershell
+go build -o .\bin\teams-cli.exe .\cmd\teams-cli
+.\bin\teams-cli.exe "https://teams.microsoft.com/meet/synthetic" ".\transcripts\call.md"
+.\bin\teams-cli.exe captions "https://teams.microsoft.com/meet/synthetic" ".\transcripts\call.md"
+.\bin\teams-cli.exe -u "https://teams.microsoft.com/meet/synthetic" -o ".\transcripts\call.md"
+```
+
+These are synthetic URLs; replace them with a meeting or Meeting Recap URL you
+are authorized to access. Quote URLs (especially those containing `&`) and
+paths containing spaces. Absolute destinations such as
+`C:\captures\call.md` are also accepted.
+
+Flags for the root command, `captions`, and `join`:
+
+* `--url`, `-u`: input meeting or Meeting Recap URL
+* `--output`, `-o`: Markdown file (`.md` or `.markdown`) or output directory
+* `--output-file`: explicit Markdown destination file
+* `--output-dir`: output directory, even if its name ends in `.md`
+* `--profile-dir`: browser user-data directory to persist login state across runs
+* `--bot-name`: display name injected when joining as an unauthenticated guest
+* `--browser-path`: explicit Chrome, Edge, or Brave executable path (also reads `TEAMS_BROWSER_PATH`)
+* `--headed` / `--headless`: control whether the browser window is visible
+* `--audio`: also capture tab audio to an `.mp3` file alongside the `.md` transcript
+
+Parent output directories are created automatically. Explicit file destinations
+are replaced on each successful capture admission; use unique paths if you
+need to retain previous results. Directory output generates timestamped names
+and rejects collisions. An existing directory passed to `--output` is always
+treated as a directory. Positional URL and destination arguments override
+their corresponding flags; output flag precedence is `--output-file`,
+then `--output`, then `--output-dir`.
+
+### Headless automation
+
+Sign in using a visible capture session first and reuse that profile:
+
+```powershell
+.\bin\teams-cli.exe captions --profile-dir ".\bin\profile"
+.\bin\teams-cli.exe captions --url "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --output-file ".\transcripts\recap.md" --profile-dir ".\bin\profile" --headless
+```
+
+For zero-config runs, an existing profile next to the executable is preferred
+over the working-directory `bin\profile`. Use an explicit `--profile-dir` for
+scheduled automation. Do not run two browser instances against the same profile.
+Headless mode cannot complete interactive login, MFA, or lobby admission for
+you. Live capture continues until cancellation; recap capture exits after
+exporting available transcript entries and the optional AI summary, separated
+by a Markdown horizontal rule. AI summary discovery retries up to 20 times
+with 500 ms between attempts; transcript export still succeeds if no summary
+is available.
 
 A `--config` flag overrides the config file path, which defaults to the
 per-user configuration directory (for example `~/.config/teams-cli/config.yaml`).
+When no config file exists on disk, `teams-cli` uses built-in defaults and opens
+a visible browser window automatically.
 
 ## Configuration
 
@@ -94,6 +167,15 @@ GO_TEAMS_INTEGRATION=1 TEAMS_MEETING_URL="https://teams.microsoft.com/l/meetup-j
 | `GO_TEAMS_INTEGRATION` | Set to any non-empty value to enable integration tests |
 | `TEAMS_MEETING_URL` | A joinable Teams meeting URL for the live meeting tests |
 
-The `Meeting` contract (`Join`, `EnableCaptions`, `CaptureAudio`) is scaffolded
-and returns `ErrNotImplemented`; the live meeting tests are red until the
-live-capture release units implement it.
+The local synthetic-page end-to-end harness verifies browser caption delivery.
+The opt-in compiled-executable harness also verifies recap and AI summary
+output without connecting to a real tenant:
+
+```powershell
+go build -o .\bin\teams-cli.exe .\cmd\teams-cli
+$env:GO_TEAMS_BINARY = (Resolve-Path .\bin\teams-cli.exe).Path
+go test ./internal/cli -run TestCompiledBinaryCapturesRecapToExplicitOutput -count=1
+```
+
+Synthetic checks do not qualify real Teams login, tenant policy, audio fidelity,
+or recap completeness. Those require an authorized operator-assisted live run.

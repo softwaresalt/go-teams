@@ -31,15 +31,16 @@ const (
 // operate on a chromedp browser context supplied by the caller so that a single
 // browser session spans join, captions, and audio.
 type chromeMeeting struct {
-	opts          MeetingOptions
-	headedOpts    *Options
-	cdpPort       int
-	capturePageID string
-	headedMu      sync.Mutex
-	headedStop    func()
-	attachedCtx   context.Context
-	recapEntries  []RecapTranscriptEntry
-	aiSummary     string
+	opts                 MeetingOptions
+	headedOpts           *Options
+	cdpPort              int
+	capturePageID        string
+	allowSingleTabRebind bool
+	headedMu             sync.Mutex
+	headedStop           func()
+	attachedCtx          context.Context
+	recapEntries         []RecapTranscriptEntry
+	aiSummary            string
 }
 
 func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
@@ -92,6 +93,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 		return err
 	}
 	m.capturePageID = targetID
+	m.allowSingleTabRebind = true
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, wsURL)
 	m.headedMu.Lock()
 	m.headedStop = func() {
@@ -106,6 +108,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 	loggedWaiting := false
 	clickedLauncher := false
 	reNavigatedRecap := false
+	hydratedWithoutRecapPolls := 0
 	consecutiveListFailures := 0
 	missingTargetPolls := 0
 
@@ -126,8 +129,14 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 			mainPage, found := m.findBoundCapturePage(targets)
 			if !found {
 				missingTargetPolls++
-				if missingTargetPolls >= 3 {
+				if missingTargetPolls >= 5 {
 					return fmt.Errorf("browser: capture tab %s was closed before meeting admission", m.capturePageID)
+				}
+			} else if isAuthRedirectURL(mainPage.URL) {
+				missingTargetPolls = 0
+				if !loggedWaiting {
+					slog.Info("browser: waiting for user authentication in browser window")
+					loggedWaiting = true
 				}
 			} else {
 				missingTargetPolls = 0
@@ -161,7 +170,14 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					prejoin: document.querySelector('[data-tid="prejoin-join-button"]') !== null,
 					launcher: document.querySelector('#openTeamsClientInBrowser, button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]') !== null,
 					recapHeader: document.querySelector('[data-tid="intelligent-recap-header"]') !== null,
-					tidCount: document.querySelectorAll('[data-tid]').length
+					tidCount: document.querySelectorAll('[data-tid]').length,
+					msalReady: (() => {
+						try {
+							return Boolean(localStorage.getItem('msal.2.account.keys') || Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN')));
+						} catch (_) {
+							return false;
+						}
+					})()
 				})`)
 				if evalErr == nil {
 					var st struct {
@@ -173,6 +189,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 						Launcher    bool   `json:"launcher"`
 						RecapHeader bool   `json:"recapHeader"`
 						TidCount    int    `json:"tidCount"`
+						MsalReady   bool   `json:"msalReady"`
 					}
 					_ = json.Unmarshal([]byte(stateRaw), &st)
 
@@ -191,11 +208,15 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 						if strings.Contains(m.opts.MeetingURL, "meetingrecap") &&
 							strings.Contains(st.Host, "teams.cloud.microsoft") &&
 							!st.RecapHeader &&
-							st.TidCount > 20 &&
+							(st.TidCount > 20 || (st.MsalReady && st.Path == "/")) &&
 							!reNavigatedRecap {
-							// Wait for Teams to finish routing the launcher deep link; only
-							// re-navigate if the recap container still has not appeared.
-							reNavigatedRecap = true
+							hydratedWithoutRecapPolls++
+							if hydratedWithoutRecapPolls >= 3 {
+								reNavigatedRecap = true
+								slog.Info("browser: Teams authenticated on cold profile; navigating to meeting recap URL")
+								_, _ = evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL,
+									fmt.Sprintf(`(() => { location.href = %q; return true; })()`, m.opts.MeetingURL))
+							}
 						} else if st.Toolbar || st.Lobby || st.Prejoin {
 							// Live meeting flow on the open page target.
 							tCtx, _ := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(mainPage.ID)))
@@ -220,20 +241,48 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 	}
 }
 
-// findBoundCapturePage locates the page target bound to m.capturePageID. It
-// fails closed (returning nil, false without clearing or reassigning
-// m.capturePageID) if the bound tab disappears from the target list.
+// findBoundCapturePage locates the page target bound to m.capturePageID. During
+// cross-origin OAuth redirects (login.microsoftonline.com <-> teams.cloud.microsoft),
+// Chromium COOP can swap the targetId of the single tab in a dedicated browser
+// instance; when allowSingleTabRebind is enabled and exactly one Microsoft/auth
+// page tab exists in the browser, m.capturePageID follows that single tab. If
+// the bound tab disappears when multiple tabs or non-Microsoft tabs exist, it
+// fails closed.
 func (m *chromeMeeting) findBoundCapturePage(targets []cdpTargetInfo) (*cdpTargetInfo, bool) {
 	if m.capturePageID == "" {
 		return nil, false
 	}
+	var candidates []*cdpTargetInfo
 	for i := range targets {
 		t := &targets[i]
-		if t.Type == "page" && t.ID == m.capturePageID && t.WebSocketDebuggerURL != "" {
+		if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+			continue
+		}
+		if t.ID == m.capturePageID {
 			return t, true
 		}
+		candidates = append(candidates, t)
+	}
+	if m.allowSingleTabRebind && len(candidates) == 1 && isTrustedSingleTabRebindURL(candidates[0].URL) {
+		m.capturePageID = candidates[0].ID
+		return candidates[0], true
 	}
 	return nil, false
+}
+
+func isTrustedSingleTabRebindURL(rawURL string) bool {
+	if isAuthRedirectURL(rawURL) {
+		return true
+	}
+	return hasHTTPSHostSuffix(rawURL,
+		"teams.cloud.microsoft",
+		"teams.microsoft.com",
+		"teams.live.com",
+		"sharepoint.com",
+	)
 }
 
 func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
@@ -241,6 +290,8 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 	defer ticker.Stop()
 	loggedWaiting := false
 	clickedLauncher := false
+	reNavigatedRecap := false
+	coldRecapPolls := 0
 
 	for {
 		if m.cdpPort > 0 {
@@ -288,6 +339,27 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 			}
 		case PreJoinWaitingForUser:
 			clickedLauncher = false
+			if strings.Contains(m.opts.MeetingURL, "meetingrecap") && !reNavigatedRecap {
+				var stalledAfterAuth bool
+				_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => {
+					try {
+						if (!location.host.includes('teams.cloud.microsoft')) return false;
+						if (document.querySelector('[data-tid="intelligent-recap-header"]')) return false;
+						const msal = Boolean(localStorage.getItem('msal.2.account.keys') || Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN')));
+						return msal && (location.pathname === '/' || document.querySelectorAll('[data-tid]').length > 20);
+					} catch (_) {
+						return false;
+					}
+				})()`, &stalledAfterAuth))
+				if stalledAfterAuth {
+					coldRecapPolls++
+					if coldRecapPolls >= 3 {
+						reNavigatedRecap = true
+						slog.Info("browser: Teams authenticated on cold profile; navigating to meeting recap URL")
+						_ = chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL))
+					}
+				}
+			}
 			if !loggedWaiting {
 				slog.Info("browser: waiting for user authentication and meeting entry in browser window")
 				loggedWaiting = true

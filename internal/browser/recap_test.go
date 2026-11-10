@@ -72,7 +72,6 @@ func TestCleanHeadlessBrowserFlags(t *testing.T) {
 	}
 	assert.Contains(t, args, "--remote-debugging-port=9222")
 	assert.Contains(t, args, "--headless=new")
-	assert.Contains(t, args, "--auto-select-desktop-capture-source=Microsoft Teams")
 }
 
 func TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox(t *testing.T) {
@@ -128,4 +127,14 @@ func TestVerifyCapturePagePresentFailsClosedWhenBoundTabDisappears(t *testing.T)
 	_, ok := m.findBoundCapturePage(targets)
 	assert.False(t, ok, "must fail closed when bound capturePageID disappears rather than switching to another tab")
 	assert.Equal(t, "created-tab", m.capturePageID, "capturePageID must not be cleared or reassigned")
+}
+
+func TestIsTrustedSingleTabRebindURLRejectsSpoofedHosts(t *testing.T) {
+	assert.True(t, isTrustedSingleTabRebindURL("https://teams.cloud.microsoft/v2/"))
+	assert.True(t, isTrustedSingleTabRebindURL("https://login.microsoftonline.com/common/oauth2/v2.0/authorize"))
+	assert.True(t, isTrustedSingleTabRebindURL("https://microsoft-my.sharepoint.com/personal/user"))
+	assert.False(t, isTrustedSingleTabRebindURL("http://teams.cloud.microsoft/v2/"), "non-HTTPS scheme must be rejected")
+	assert.False(t, isTrustedSingleTabRebindURL("https://attacker.example/?next=teams.cloud.microsoft"), "query substring must be rejected")
+	assert.False(t, isTrustedSingleTabRebindURL("https://teams.cloud.microsoft.attacker.example/"), "spoofed subdomain prefix must be rejected")
+	assert.False(t, isTrustedSingleTabRebindURL("https://evilsharepoint.com/"), "non-dot suffix must be rejected")
 }

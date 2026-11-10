@@ -67,14 +67,14 @@ func ResolveExecPath(explicit string) string {
 		return env
 	}
 	pathNames := []string{
+		"msedge",
+		"microsoft-edge",
+		"microsoft-edge-stable",
 		"google-chrome",
 		"google-chrome-stable",
 		"chromium",
 		"chromium-browser",
 		"chrome",
-		"msedge",
-		"microsoft-edge",
-		"microsoft-edge-stable",
 		"brave",
 		"brave-browser",
 	}
@@ -102,8 +102,8 @@ func candidateBrowserPaths() []string {
 			continue
 		}
 		paths = append(paths,
-			filepath.Join(root, "Google", "Chrome", "Application", "chrome.exe"),
 			filepath.Join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
+			filepath.Join(root, "Google", "Chrome", "Application", "chrome.exe"),
 			filepath.Join(root, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
 			filepath.Join(root, "Chromium", "Application", "chrome.exe"),
 		)

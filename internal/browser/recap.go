@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,6 +136,13 @@ func isTargetInCaptureScope(t cdpTargetInfo, capturePageID string, ownedFrames o
 	}
 	if t.Type == "page" {
 		return t.ID == capturePageID
+	}
+	// Real Chromium/Edge /json/list populates parentId on out-of-process
+	// iframes (OOPIFs such as cross-origin SharePoint xplatplugins.aspx), while
+	// Page.getFrameTree only lists same-process local frames. Check parentId
+	// first when present, and fall back to Page.getFrameTree frame IDs.
+	if t.ParentID != "" {
+		return t.ParentID == capturePageID
 	}
 	return ownedFrames.contains(t)
 }
@@ -295,6 +303,7 @@ func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID stri
 
 type cdpTargetInfo struct {
 	ID                   string `json:"id"`
+	ParentID             string `json:"parentId"`
 	Type                 string `json:"type"`
 	Title                string `json:"title"`
 	URL                  string `json:"url"`
@@ -309,7 +318,6 @@ func cleanBrowserArgs(port int, profileDir string, headless bool, initialURL str
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--no-first-run",
 		"--no-default-browser-check",
-		"--auto-select-desktop-capture-source=Microsoft Teams",
 	}
 	if headless {
 		args = append(args, "--headless=new")
@@ -321,6 +329,44 @@ func cleanBrowserArgs(port int, profileDir string, headless bool, initialURL str
 		args = append(args, initialURL)
 	}
 	return args
+}
+
+// hasHTTPSHostSuffix parses rawURL and reports whether it is an https:// URL
+// whose hostname equals one of domains or is a dot-prefixed subdomain of one
+// of domains.
+func hasHTTPSHostSuffix(rawURL string, domains ...string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	for _, d := range domains {
+		d = strings.ToLower(d)
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAuthRedirectURL reports whether rawURL is on a Microsoft / identity
+// provider login host where CDP Runtime.evaluate probes should be paused until
+// interactive sign-in redirects back to Teams.
+func isAuthRedirectURL(rawURL string) bool {
+	return hasHTTPSHostSuffix(rawURL,
+		"login.microsoftonline.com",
+		"login.live.com",
+		"login.windows.net",
+		"autologon.microsoftazuread-sso.com",
+		"device.login.microsoftonline.com",
+		"aadcdn.msftauth.net",
+		"msauth.net",
+		"duosecurity.com",
+		"okta.com",
+	)
 }
 
 func cleanHeadedBrowserArgs(port int, profileDir, initialURL string) []string {
@@ -471,9 +517,14 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 
-	// Start with about:blank and explicitly create the capture tab via
-	// Target.createTarget so its exact targetId is known before any redirect.
-	args := cleanBrowserArgs(port, absProfile, opts.Headless, "about:blank")
+	// Launch directly with initialURL so the browser opens a single tab (no
+	// extra about:blank tab). Once DevTools is ready, bind capturePageID to
+	// that single page target (or create one if none exists yet).
+	targetURL := initialURL
+	if targetURL == "" {
+		targetURL = "about:blank"
+	}
+	args := cleanBrowserArgs(port, absProfile, opts.Headless, targetURL)
 	cmd := exec.Command(execPath, args...)
 	if err := cmd.Start(); err != nil {
 		return 0, "", "", nil, nil, fmt.Errorf("browser: start browser: %w", err)
@@ -498,13 +549,40 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 		cleanup()
 		return 0, "", "", nil, nil, err
 	}
-	targetID, err := createCDPPageTarget(context.Background(), wsURL, initialURL)
-	if err != nil {
-		cleanup()
-		return 0, "", "", nil, nil, err
+	targetID := waitForInitialPageTargetID(port, 5*time.Second)
+	if targetID == "" {
+		targetID, err = createCDPPageTarget(context.Background(), wsURL, targetURL)
+		if err != nil {
+			cleanup()
+			return 0, "", "", nil, nil, err
+		}
 	}
 	slog.Info("browser: launched clean browser", "pid", cmd.Process.Pid, "cdp_port", port, "target_id", targetID, "headless", opts.Headless)
 	return port, wsURL, targetID, procDone, cleanup, nil
+}
+
+func waitForInitialPageTargetID(port int, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		targets, err := listCDPTargets(port)
+		if err == nil {
+			var candidates []cdpTargetInfo
+			for _, t := range targets {
+				if t.Type != "page" || t.WebSocketDebuggerURL == "" {
+					continue
+				}
+				if strings.HasPrefix(t.URL, "edge://") || strings.HasPrefix(t.URL, "chrome-extension://") {
+					continue
+				}
+				candidates = append(candidates, t)
+			}
+			if len(candidates) == 1 {
+				return candidates[0].ID
+			}
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return ""
 }
 
 func waitForCDPBrowserWS(port int, timeout time.Duration) (string, error) {

@@ -107,8 +107,12 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 
 	loggedWaiting := false
 	clickedLauncher := false
-	reNavigatedRecap := false
+	reNavigateAttempts := 0
 	hydratedWithoutRecapPolls := 0
+	sawAuthRedirect := false
+	lastWasAuth := false
+	authBounceCount := 0
+	authLoopPolls := 0
 	consecutiveListFailures := 0
 	missingTargetPolls := 0
 
@@ -134,17 +138,41 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 				}
 			} else if isAuthRedirectURL(mainPage.URL) {
 				missingTargetPolls = 0
+				sawAuthRedirect = true
+				if !lastWasAuth {
+					authBounceCount++
+					lastWasAuth = true
+				}
+				authLoopPolls++
 				if !loggedWaiting {
 					slog.Info("browser: waiting for user authentication in browser window")
 					loggedWaiting = true
 				}
+				// If the browser is bouncing repeatedly between Teams and the
+				// login page (auth redirect loop after initial token setup),
+				// override the loop by navigating the address bar directly to
+				// the original meeting URL via Page.navigate.
+				if authBounceCount >= 2 && authLoopPolls >= 3 && reNavigateAttempts < 4 {
+					reNavigateAttempts++
+					authBounceCount = 0
+					authLoopPolls = 0
+					clickedLauncher = false
+					slog.Info("browser: detected auth redirect loop; re-navigating to original meeting URL", "attempt", reNavigateAttempts)
+					_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, m.opts.MeetingURL)
+				}
 			} else {
 				missingTargetPolls = 0
+				lastWasAuth = false
+				authLoopPolls = 0
 				ownedFrames := fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
+				hasRecapIframe := false
 				for i := range targets {
 					t := &targets[i]
 					if !isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) {
 						continue
+					}
+					if strings.Contains(t.URL, "xplatplugins.aspx") || strings.Contains(t.URL, "streamembed.aspx") {
+						hasRecapIframe = true
 					}
 
 					// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
@@ -165,6 +193,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 				stateRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `JSON.stringify({
 					host: location.host,
 					path: location.pathname,
+					hash: location.hash,
 					toolbar: document.querySelector('#hangup-button, [data-tid="hangup-button"], [data-tid="hangup-main-btn"]') !== null,
 					lobby: document.body !== null && document.body.innerText.includes("Someone will let you in shortly"),
 					prejoin: document.querySelector('[data-tid="prejoin-join-button"]') !== null,
@@ -173,7 +202,10 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					tidCount: document.querySelectorAll('[data-tid]').length,
 					msalReady: (() => {
 						try {
-							return Boolean(localStorage.getItem('msal.2.account.keys') || Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN')));
+							return Boolean(
+								localStorage.getItem('msal.2.account.keys') ||
+								Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
+							);
 						} catch (_) {
 							return false;
 						}
@@ -183,6 +215,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					var st struct {
 						Host        string `json:"host"`
 						Path        string `json:"path"`
+						Hash        string `json:"hash"`
 						Toolbar     bool   `json:"toolbar"`
 						Lobby       bool   `json:"lobby"`
 						Prejoin     bool   `json:"prejoin"`
@@ -194,6 +227,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					_ = json.Unmarshal([]byte(stateRaw), &st)
 
 					if st.Launcher {
+						hydratedWithoutRecapPolls = 0
 						if !clickedLauncher {
 							slog.Info("browser: launcher interstitial detected; clicking use web app")
 							_, _ = evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `(() => {
@@ -205,26 +239,38 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 						}
 					} else {
 						clickedLauncher = false
-						if strings.Contains(m.opts.MeetingURL, "meetingrecap") &&
-							strings.Contains(st.Host, "teams.cloud.microsoft") &&
-							!st.RecapHeader &&
-							(st.TidCount > 20 || (st.MsalReady && st.Path == "/")) &&
-							!reNavigatedRecap {
-							hydratedWithoutRecapPolls++
-							if hydratedWithoutRecapPolls >= 3 {
-								reNavigatedRecap = true
-								slog.Info("browser: Teams authenticated on cold profile; navigating to meeting recap URL")
-								_, _ = evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL,
-									fmt.Sprintf(`(() => { location.href = %q; return true; })()`, m.opts.MeetingURL))
-							}
-						} else if st.Toolbar || st.Lobby || st.Prejoin {
+						if st.Toolbar || st.Lobby || st.Prejoin {
 							// Live meeting flow on the open page target.
 							tCtx, _ := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(mainPage.ID)))
 							m.attachedCtx = tCtx
 							return m.awaitPreJoinOrAdmission(tCtx)
-						} else if !loggedWaiting {
-							slog.Info("browser: waiting for user authentication and meeting/recap load in browser window")
-							loggedWaiting = true
+						}
+						if strings.Contains(st.Host, "teams.cloud.microsoft") &&
+							!st.RecapHeader &&
+							!hasRecapIframe &&
+							(st.MsalReady || sawAuthRedirect || st.TidCount > 15) &&
+							reNavigateAttempts < 4 {
+							hydratedWithoutRecapPolls++
+							// Wait 2 polls (3s) on the first post-auth landing,
+							// or 6 polls (9s) on subsequent retries, then
+							// re-apply the original meeting URL via Page.navigate
+							// (equivalent to pasting the URL into the address bar).
+							threshold := 2
+							if reNavigateAttempts > 0 {
+								threshold = 6
+							}
+							if hydratedWithoutRecapPolls >= threshold {
+								reNavigateAttempts++
+								hydratedWithoutRecapPolls = 0
+								slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
+								_ = navigateCDPTarget(ctx, mainPage.WebSocketDebuggerURL, m.opts.MeetingURL)
+							}
+						} else {
+							hydratedWithoutRecapPolls = 0
+							if !loggedWaiting {
+								slog.Info("browser: waiting for user authentication and meeting/recap load in browser window")
+								loggedWaiting = true
+							}
 						}
 					}
 				}
@@ -290,7 +336,7 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 	defer ticker.Stop()
 	loggedWaiting := false
 	clickedLauncher := false
-	reNavigatedRecap := false
+	reNavigateAttempts := 0
 	coldRecapPolls := 0
 
 	for {
@@ -328,6 +374,7 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 			}
 			return m.awaitAdmission(ctx)
 		case PreJoinLauncher:
+			coldRecapPolls = 0
 			if !clickedLauncher {
 				slog.Info("browser: launcher interstitial detected; clicking join on web")
 				var clicked bool
@@ -339,23 +386,31 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 			}
 		case PreJoinWaitingForUser:
 			clickedLauncher = false
-			if strings.Contains(m.opts.MeetingURL, "meetingrecap") && !reNavigatedRecap {
+			if reNavigateAttempts < 4 {
 				var stalledAfterAuth bool
 				_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => {
 					try {
 						if (!location.host.includes('teams.cloud.microsoft')) return false;
 						if (document.querySelector('[data-tid="intelligent-recap-header"]')) return false;
-						const msal = Boolean(localStorage.getItem('msal.2.account.keys') || Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN')));
-						return msal && (location.pathname === '/' || document.querySelectorAll('[data-tid]').length > 20);
+						const msal = Boolean(
+							localStorage.getItem('msal.2.account.keys') ||
+							Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
+						);
+						return msal || document.querySelectorAll('[data-tid]').length > 15;
 					} catch (_) {
 						return false;
 					}
 				})()`, &stalledAfterAuth))
 				if stalledAfterAuth {
 					coldRecapPolls++
-					if coldRecapPolls >= 3 {
-						reNavigatedRecap = true
-						slog.Info("browser: Teams authenticated on cold profile; navigating to meeting recap URL")
+					threshold := 2
+					if reNavigateAttempts > 0 {
+						threshold = 6
+					}
+					if coldRecapPolls >= threshold {
+						reNavigateAttempts++
+						coldRecapPolls = 0
+						slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
 						_ = chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL))
 					}
 				}

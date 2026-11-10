@@ -220,3 +220,42 @@ func TestRecapSummaryScopedToOwningMeetingPageOnly(t *testing.T) {
 	require.Equal(t, "TARGET MEETING SUMMARY", m.AISummary(),
 		"AI summary must be captured strictly from the owning meeting tab, never another open tab")
 }
+
+func TestNavigateCDPTargetSendsPageNavigate(t *testing.T) {
+	var gotMethod, gotURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		reqBytes, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			t.Errorf("read: %v", err)
+			return
+		}
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				URL string `json:"url"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(reqBytes, &req)
+		gotMethod = req.Method
+		gotURL = req.Params.URL
+		resp, _ := json.Marshal(map[string]any{
+			"id":     req.ID,
+			"result": map[string]any{"frameId": "frame-1"},
+		})
+		_ = wsutil.WriteServerText(conn, resp)
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	wantURL := "https://teams.cloud.microsoft/l/meetingrecap?threadId=123"
+	require.NoError(t, navigateCDPTarget(context.Background(), wsURL, wantURL))
+	require.Equal(t, "Page.navigate", gotMethod)
+	require.Equal(t, wantURL, gotURL)
+}

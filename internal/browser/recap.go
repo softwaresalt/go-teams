@@ -684,3 +684,52 @@ func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
 		}
 	}
 }
+
+// navigateCDPTarget sends a top-level CDP Page.navigate command to wsURL,
+// which is the programmatic equivalent of pasting targetURL into the browser's
+// address bar. Unlike Runtime.evaluate("location.href = ..."), Page.navigate
+// succeeds even when the tab is mid-redirect in an authentication loop.
+func navigateCDPTarget(ctx context.Context, wsURL, targetURL string) error {
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, _, _, err := ws.Dial(dialCtx, wsURL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	req := map[string]any{
+		"id":     1,
+		"method": "Page.navigate",
+		"params": map[string]any{
+			"url": targetURL,
+		},
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	if err := wsutil.WriteClientText(conn, payload); err != nil {
+		return err
+	}
+	for {
+		msg, _, err := wsutil.ReadServerData(conn)
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			ID    int `json:"id"`
+			Error *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == 1 {
+			if resp.Error != nil {
+				return fmt.Errorf("browser: Page.navigate error %d: %s", resp.Error.Code, resp.Error.Message)
+			}
+			return nil
+		}
+	}
+}

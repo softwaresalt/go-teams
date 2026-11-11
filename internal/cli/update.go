@@ -56,8 +56,12 @@ func newUpdateCommand(d *deps) *cobra.Command {
 func printUpdateResult(w io.Writer, opts updateOptions, res updater.Result) {
 	switch {
 	case opts.CheckOnly && res.UpdateAvailable:
-		_, _ = fmt.Fprintf(w, "Update available: %s -> %s. Run `teams-cli update` to install it.\n",
-			res.CurrentVersion, res.LatestVersion)
+		install := "teams-cli update"
+		if opts.TargetVersion != "" {
+			install += " --version " + res.TagName
+		}
+		_, _ = fmt.Fprintf(w, "Update available: %s -> %s. Run `%s` to install it.\n",
+			res.CurrentVersion, res.LatestVersion, install)
 	case opts.CheckOnly && res.Downgrade:
 		_, _ = fmt.Fprintf(w, "Release %s is older than the running version %s. Use `teams-cli update --version %s --force` to downgrade.\n",
 			res.LatestVersion, res.CurrentVersion, res.TagName)

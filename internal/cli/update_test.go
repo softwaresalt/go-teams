@@ -70,6 +70,23 @@ func TestUpdateCommandAlreadyUpToDate(t *testing.T) {
 	assert.Contains(t, out, "--force")
 }
 
+func TestUpdateCommandCheckHintKeepsRequestedVersion(t *testing.T) {
+	rec := &updateRecorder{res: updater.Result{
+		CurrentVersion: "1.0.0", LatestVersion: "2.0.0-rc.1", TagName: "v2.0.0-rc.1", UpdateAvailable: true,
+	}}
+	out, err := runCapturing(updateDeps(rec), "update", "--check", "--version", "v2.0.0-rc.1")
+	require.NoError(t, err)
+	assert.Equal(t, updateOptions{CheckOnly: true, TargetVersion: "v2.0.0-rc.1"}, rec.opts)
+	assert.Contains(t, out, "`teams-cli update --version v2.0.0-rc.1`",
+		"the install hint must target the inspected release, not the latest stable one")
+
+	rec = &updateRecorder{res: updater.Result{CurrentVersion: "1.0.0", LatestVersion: "1.2.0", TagName: "v1.2.0", UpdateAvailable: true}}
+	out, err = runCapturing(updateDeps(rec), "update", "--check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "`teams-cli update`")
+	assert.NotContains(t, out, "--version")
+}
+
 func TestUpdateCommandCheckReportsAvailability(t *testing.T) {
 	tests := []struct {
 		name string

@@ -155,8 +155,18 @@ func AssetName(goos, goarch string) string {
 // Check inspects the latest release, or targetVersion when non-empty, without
 // modifying the executable.
 func (u *Updater) Check(ctx context.Context, targetVersion string) (Result, error) {
-	res, _, err := u.lookup(ctx, targetVersion)
-	return res, err
+	res, rel, err := u.lookup(ctx, targetVersion)
+	if err != nil {
+		return res, err
+	}
+	// Do not advertise an update that Update could not install: the release
+	// must carry the platform binary and SHA256SUMS (neither is downloaded here).
+	if res.UpdateAvailable {
+		if _, _, err := findAssets(rel, res.AssetName); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
 }
 
 // Update installs the latest release, or targetVersion when non-empty. It
@@ -270,11 +280,13 @@ func (u *Updater) releaseURL(targetVersion string) (string, error) {
 	if strings.TrimSpace(targetVersion) == "" {
 		return root + "latest", nil
 	}
-	norm, err := version.Normalize(targetVersion)
-	if err != nil {
+	if _, err := version.Normalize(targetVersion); err != nil {
 		return "", fmt.Errorf("target version: %w", err)
 	}
-	return root + "tags/v" + norm, nil
+	// Look up the exact requested tag: normalization drops build metadata
+	// ("+build.2"), which is significant for tag names though not for precedence.
+	tag := "v" + strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(targetVersion), "v"), "V")
+	return root + "tags/" + url.PathEscape(tag), nil
 }
 
 // validRepo accepts only owner/name with conservative path-safe characters.
@@ -373,6 +385,12 @@ func (u *Updater) open(ctx context.Context, rawURL string) (*http.Response, erro
 	req.Header.Set("User-Agent", "teams-cli-updater")
 	resp, err := u.client().Do(req)
 	if err != nil {
+		// Signed asset URLs can carry tokens in the query string; keep them out
+		// of error text while leaving the wrapped error chain intact.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			ue.URL = redact(ue.URL)
+		}
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {

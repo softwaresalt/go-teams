@@ -88,6 +88,11 @@ func parse(raw string) (parsed, error) {
 	s := strings.TrimSpace(raw)
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
 	if i := strings.IndexByte(s, '+'); i >= 0 {
+		for _, id := range strings.Split(s[i+1:], ".") {
+			if !validPreID(id) { // build metadata uses the same identifier alphabet
+				return parsed{}, fmt.Errorf("%w: %q", ErrInvalidVersion, raw)
+			}
+		}
 		s = s[:i]
 	}
 	core, pre, hasPre := strings.Cut(s, "-")
@@ -162,17 +167,10 @@ func comparePre(a, b []string) int {
 }
 
 func comparePreID(a, b string) int {
-	na, aNum := parseNumericLoose(a)
-	nb, bNum := parseNumericLoose(b)
+	aNum, bNum := isDigits(a), isDigits(b)
 	switch {
 	case aNum && bNum:
-		switch {
-		case na < nb:
-			return -1
-		case na > nb:
-			return 1
-		}
-		return 0
+		return compareDigits(a, b)
 	case aNum:
 		return -1
 	case bNum:
@@ -181,13 +179,29 @@ func comparePreID(a, b string) int {
 	return strings.Compare(a, b)
 }
 
-// parseNumericLoose treats an all-digit identifier as numeric for pre-release ordering.
-func parseNumericLoose(s string) (uint64, bool) {
+// isDigits reports whether s is a non-empty all-digit identifier. No integer
+// conversion is used so identifiers beyond any fixed width stay numeric.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
 	for _, r := range s {
 		if r < '0' || r > '9' {
-			return 0, false
+			return false
 		}
 	}
-	n, err := strconv.ParseUint(s, 10, 64)
-	return n, err == nil
+	return true
+}
+
+// compareDigits orders two all-digit strings numerically: fewer significant
+// digits is smaller, equal widths compare lexically.
+func compareDigits(a, b string) int {
+	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
+	switch {
+	case len(a) < len(b):
+		return -1
+	case len(a) > len(b):
+		return 1
+	}
+	return strings.Compare(a, b)
 }

@@ -26,6 +26,10 @@ func TestNormalize(t *testing.T) {
 		{"surrounding space", "  v0.10.0 ", "0.10.0", false},
 		{"pre-release", "v1.2.3-rc.1", "1.2.3-rc.1", false},
 		{"build metadata dropped", "v1.2.3+abc", "1.2.3", false},
+		{"build metadata with dots and hyphens", "1.2.3+build.2-x", "1.2.3", false},
+		{"empty build metadata", "1.2.3+", "", true},
+		{"build metadata path traversal", "1.2.3+../x", "", true},
+		{"build metadata empty identifier", "1.2.3+a..b", "", true},
 		{"empty", "", "", true},
 		{"dev", "dev", "", true},
 		{"two parts", "1.2", "", true},
@@ -65,6 +69,10 @@ func TestCompare(t *testing.T) {
 		{"pre-release alpha vs numeric", "1.2.3-alpha", "1.2.3-1", 1},
 		{"pre-release longer wins", "1.2.3-alpha", "1.2.3-alpha.1", -1},
 		{"pre-release lexical", "1.2.3-alpha", "1.2.3-beta", -1},
+		{"huge numeric pre-release ids beyond uint64", "1.2.3-20000000000000000000", "1.2.3-100000000000000000000", -1},
+		{"huge numeric pre-release equal", "1.2.3-18446744073709551616", "1.2.3-18446744073709551616", 0},
+		{"huge numeric before alphanumeric", "1.2.3-99999999999999999999999", "1.2.3-alpha", -1},
+		{"build metadata ignored", "1.2.3+build.1", "1.2.3+build.2", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -215,6 +216,68 @@ func TestCheckTargetVersionUsesTagsEndpoint(t *testing.T) {
 			assert.Equal(t, []string{"/repos/" + DefaultRepo + "/releases/tags/v1.1.0"}, f.recorded())
 		})
 	}
+}
+
+func TestCheckTargetVersionPreservesBuildMetadata(t *testing.T) {
+	f := newFixture(t, "1.0.0",
+		release{tag: "v1.2.3", binary: []byte("plain")},
+		release{tag: "v1.2.3+build.2", binary: newBin})
+	res, err := f.updater.Check(context.Background(), "v1.2.3+build.2")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.2.3+build.2", res.TagName, "the exact requested tag must be looked up")
+	assert.Equal(t, "1.2.3", res.LatestVersion)
+	assert.Equal(t, []string{"/repos/" + DefaultRepo + "/releases/tags/v1.2.3+build.2"}, f.recorded())
+}
+
+func TestCheckFailsWhenUpdateIsNotInstallable(t *testing.T) {
+	tests := []struct {
+		name string
+		rel  release
+	}{
+		{"no platform asset", release{tag: "v1.2.0", binary: newBin, noBinary: true}},
+		{"no SHA256SUMS asset", release{tag: "v1.2.0", binary: newBin, noSums: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, "1.0.0", tt.rel)
+			res, err := f.updater.Check(context.Background(), "")
+			require.ErrorIs(t, err, ErrAssetNotFound)
+			assert.False(t, res.Updated)
+		})
+		t.Run(tt.name+" but already current", func(t *testing.T) {
+			f := newFixture(t, "1.2.0", tt.rel)
+			res, err := f.updater.Check(context.Background(), "")
+			require.NoError(t, err, "a current install needs no assets")
+			assert.False(t, res.UpdateAvailable)
+		})
+	}
+}
+
+func TestDownloadErrorsRedactSignedURLQuery(t *testing.T) {
+	const secret = "SIGNED-TOKEN-VALUE"
+	// Port 1 on loopback refuses connections, so the download fails after the
+	// release metadata (which carries signed-style URLs) has been fetched.
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v1.2.0",
+			"assets": []map[string]string{
+				{"name": testAsset, "browser_download_url": "http://127.0.0.1:1/bin?token=" + secret},
+				{"name": ChecksumAsset, "browser_download_url": "http://127.0.0.1:1/sums?token=" + secret},
+			},
+		})
+	}))
+	t.Cleanup(api.Close)
+	exe := filepath.Join(t.TempDir(), "teams-cli")
+	require.NoError(t, os.WriteFile(exe, []byte("OLD-BINARY"), 0o755))
+	u := New(Config{HTTPClient: api.Client(), APIBaseURL: api.URL, CurrentVersion: "1.0.0",
+		GOOS: testOS, GOARCH: testArch, ExecutablePath: exe})
+
+	_, err := u.Update(context.Background(), "", false)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), secret, "signed-URL query parameters must not reach CLI output")
+	var ue *url.Error
+	require.ErrorAs(t, err, &ue, "the underlying *url.Error must stay inspectable")
+	assert.Equal(t, "http://127.0.0.1:1/sums", ue.URL)
 }
 
 func TestCheckRejectsMalformedTargetVersion(t *testing.T) {

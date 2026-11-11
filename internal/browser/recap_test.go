@@ -79,10 +79,14 @@ func TestCleanHeadlessBrowserFlags(t *testing.T) {
 }
 
 func TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox(t *testing.T) {
-	flags := cleanHeadlessFlags()
+	t.Setenv("TEAMS_DISABLE_SANDBOX", "")
+	flags := cleanHeadlessFlags(Options{})
+	for _, name := range []string{"no-sandbox", "disable-setuid-sandbox"} {
+		f, ok := findFlag(flags, name)
+		require.Truef(t, ok, "%s must be emitted explicitly so chromedp's root default is overridden", name)
+		assert.Equal(t, false, f.Value, "cleanHeadlessAllocatorOptions must not disable %s by default", name)
+	}
 	for _, f := range flags {
-		assert.NotEqual(t, "no-sandbox", f.Name, "cleanHeadlessAllocatorOptions must not disable the browser sandbox")
-		assert.NotEqual(t, "disable-setuid-sandbox", f.Name, "cleanHeadlessAllocatorOptions must not disable setuid sandbox")
 		assert.NotEqual(t, "disable-blink-features", f.Name, "cleanHeadlessAllocatorOptions must not pass AutomationControlled")
 	}
 	headlessFlag, ok := findFlag(flags, "headless")

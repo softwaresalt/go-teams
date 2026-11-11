@@ -37,6 +37,7 @@ go.work.sum
 # Local environment files (secrets) — never commit. Only .env.example may be tracked.
 .env
 .env.*
+*.env
 !.env.example
 
 # Plugin .mcp.json is intentionally tracked (distinct from local dev config)

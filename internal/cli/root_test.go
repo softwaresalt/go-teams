@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -153,6 +154,108 @@ func TestScheduleCommandInvalidCron(t *testing.T) {
 	}
 	err := runCmd(context.Background(), d, "schedule")
 	assert.Error(t, err)
+}
+
+// browserPathProbe collects the config each seam receives so a test can assert
+// what reached the browser layer for every command.
+type browserPathProbe struct {
+	cfgs chan config.Config
+}
+
+func newBrowserPathProbe() *browserPathProbe {
+	return &browserPathProbe{cfgs: make(chan config.Config, 8)}
+}
+
+func (p *browserPathProbe) deps(loaded config.Config) *deps {
+	return &deps{
+		loadConfig: func(string) (config.Config, error) { return loaded, nil },
+		newRunner: func(c config.Config) browser.Runner {
+			p.cfgs <- c
+			return &fakeRunner{}
+		},
+		newMeeting: func(ctx context.Context, c config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			p.cfgs <- c
+			return nil, ctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession { return recorderSession{&captureRecorder{}} },
+	}
+}
+
+func TestBrowserPathWiredAcrossAllCommands(t *testing.T) {
+	const (
+		meetingURL = "https://teams.microsoft.com/meet/123"
+		cfgBrowser = "/from/config/browser"
+		cfgProfile = "/from/config/profile"
+		flagBrower = "/from/flag/browser"
+		flagProf   = "/from/flag/profile"
+	)
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{"root", []string{meetingURL}},
+		{"join", []string{"join", meetingURL}},
+		{"captions", []string{"captions", meetingURL}},
+		{"auth", []string{"auth"}},
+		{"schedule", []string{"schedule"}},
+	}
+	scenarios := []struct {
+		name        string
+		extra       []string
+		wantBrowser string
+		wantProfile string
+	}{
+		{"config only", nil, cfgBrowser, cfgProfile},
+		{"flags override config", []string{"--browser-path", flagBrower, "--profile-dir", flagProf}, flagBrower, flagProf},
+	}
+	for _, cmdCase := range commands {
+		for _, sc := range scenarios {
+			t.Run(cmdCase.name+"/"+sc.name, func(t *testing.T) {
+				loaded := validConfig()
+				loaded.BrowserPath = cfgBrowser
+				loaded.ProfileDir = cfgProfile
+				loaded.Meetings = []config.MeetingSchedule{{Name: "m", URL: meetingURL, Cron: "@every 1s"}}
+				probe := newBrowserPathProbe()
+				args := append(append([]string{}, cmdCase.args...), sc.extra...)
+
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- runCmd(ctx, probe.deps(loaded), args...) }()
+
+				var got config.Config
+				finished := false
+				select {
+				case got = <-probe.cfgs:
+				case err := <-done:
+					finished = true
+					require.NoError(t, err)
+					// Completion and the buffered config can both be ready.
+					select {
+					case got = <-probe.cfgs:
+					default:
+						t.Fatal("command finished without reaching the browser layer")
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("timed out waiting for the browser layer")
+				}
+				cancel()
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(10 * time.Second):
+						t.Fatal("command did not stop after cancel")
+					}
+				}
+
+				assert.Equal(t, sc.wantBrowser, got.BrowserPath)
+				assert.Equal(t, sc.wantProfile, got.ProfileDir)
+				opts := browserOptions(got)
+				assert.Equal(t, sc.wantBrowser, opts.ExecPath)
+				assert.Equal(t, sc.wantProfile, opts.UserDataDir)
+			})
+		}
+	}
 }
 
 func TestRootHasSubcommands(t *testing.T) {

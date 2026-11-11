@@ -32,11 +32,7 @@ func defaultDeps() *deps {
 	return &deps{
 		loadConfig: config.Load,
 		newRunner: func(c config.Config) browser.Runner {
-			return browser.NewChromeRunner(browser.Options{
-				UserDataDir: c.ProfileDir,
-				Headless:    c.Headless,
-				ExecPath:    c.BrowserPath,
-			})
+			return browser.NewChromeRunner(browserOptions(c))
 		},
 		newMeeting: defaultNewMeeting,
 		newSession: func(c config.Config, meetingURL string) meetingSession {
@@ -53,16 +49,45 @@ func defaultDeps() *deps {
 	}
 }
 
+// browserOptions maps the effective config to the browser allocator options,
+// so every command launches the same configured Chromium executable and profile.
+func browserOptions(c config.Config) browser.Options {
+	return browser.Options{
+		UserDataDir: c.ProfileDir,
+		Headless:    c.Headless,
+		ExecPath:    c.BrowserPath,
+	}
+}
+
+// browserFlags holds the browser selection flags shared by commands that do
+// not bind the full capture flag set (auth and schedule).
+type browserFlags struct {
+	browserPath string
+	profileDir  string
+}
+
+// bindBrowserFlags registers --browser-path and --profile-dir on cmd.
+func bindBrowserFlags(cmd *cobra.Command, f *browserFlags) {
+	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
+	cmd.Flags().StringVar(&f.profileDir, "profile-dir", "", "browser user-data directory for session persistence")
+}
+
+// applyBrowserFlags overrides cfg with any browser flag the operator supplied.
+func applyBrowserFlags(cfg *config.Config, f browserFlags) {
+	if f.browserPath != "" {
+		cfg.BrowserPath = f.browserPath
+	}
+	if f.profileDir != "" {
+		cfg.ProfileDir = f.profileDir
+	}
+}
+
 // defaultNewMeeting allocates a Chromium context for meeting capture and
 // returns a chromedp-backed Meeting bound to it. The cleanup func cancels the
 // browser and allocator contexts, terminating the spawned Chromium process.
 func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
 	return browser.NewLiveMeeting(ctx,
-		browser.Options{
-			UserDataDir: c.ProfileDir,
-			Headless:    c.Headless,
-			ExecPath:    c.BrowserPath,
-		},
+		browserOptions(c),
 		browser.MeetingOptions{MeetingURL: meetingURL, BotName: c.BotName})
 }
 

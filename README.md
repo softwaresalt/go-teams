@@ -75,6 +75,9 @@ Flags for the root command, `captions`, and `join`:
 * `--headed` / `--headless`: control whether the browser window is visible
 * `--audio`: also capture tab audio to an `.mp3` file alongside the `.md` transcript
 
+`--browser-path` and `--profile-dir` are also accepted by `auth` and `schedule`,
+and `browser_path` in the config file applies to every command.
+
 Parent output directories are created automatically. Explicit file destinations
 are replaced on each successful capture admission; use unique paths if you
 need to retain previous results. Directory output generates timestamped names
@@ -82,6 +85,20 @@ and rejects collisions. An existing directory passed to `--output` is always
 treated as a directory. Positional URL and destination arguments override
 their corresponding flags; output flag precedence is `--output-file`,
 then `--output`, then `--output-dir`.
+
+### Browser security posture
+
+* Meeting URLs must use `https` and a Microsoft Teams, SharePoint, or Microsoft
+  365 host (`teams.microsoft.com`, `teams.live.com`, `teams.cloud.microsoft`,
+  `sharepoint.com`, `microsoft.com`, `office.com`, `sfx.ms`, `aka.ms`, and their
+  subdomains). Loopback hosts (`localhost`, `127.0.0.1`, `::1`) may use `http`
+  or `https` for local test fixtures. URLs with embedded credentials are
+  rejected. The check runs before any browser launches and covers the initial
+  URL only; redirects inside the browser are not intercepted.
+* Passcodes (`?p=`), userinfo, query strings, and fragments are stripped from
+  navigation errors and queue logs.
+* The Chromium sandbox stays enabled. Set `TEAMS_DISABLE_SANDBOX=1` (or `true`)
+  only in containers that cannot run it.
 
 ### Headless automation
 

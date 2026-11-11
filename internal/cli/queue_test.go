@@ -160,3 +160,40 @@ func TestQueueFileDoesNotCommentOutCancelledEntryAndRejectsNestedQueueAndForward
 		assert.False(t, strings.HasPrefix(line, "::"), "neither rejected nested -q nor cancelled entry may be commented out: %q", line)
 	}
 }
+
+func TestSplitQueueArgsUnterminatedQuoteDoesNotLeakLine(t *testing.T) {
+	line := `join --url "https://teams.microsoft.com/meet/123?p=secret-passcode`
+
+	_, err := splitQueueArgs(line)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "secret-passcode")
+	assert.NotContains(t, err.Error(), "teams.microsoft.com")
+}
+
+func TestQueueFileUnterminatedQuoteDoesNotLeakPasscode(t *testing.T) {
+	dir := t.TempDir()
+	queuePath := filepath.Join(dir, "transcript-queue.txt")
+	line := `join --url "https://teams.microsoft.com/meet/123?p=secret-passcode`
+	require.NoError(t, os.WriteFile(queuePath, []byte(line+"\n"), 0o600))
+
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
+		newRunner:  func(config.Config) browser.Runner { return &fakeRunner{} },
+	}
+
+	err := runCmd(context.Background(), d, "--queue", queuePath)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "secret-passcode")
+	assert.NotContains(t, err.Error(), "https://teams.microsoft.com/meet/123")
+}
+
+func TestSanitizeQueueArgsForLogRedactsURLSecrets(t *testing.T) {
+	got := sanitizeQueueArgsForLog([]string{"-u", "https://user:pass@teams.microsoft.com/meet/1?p=secret-passcode#frag", "-c", "ACME"})
+
+	assert.Equal(t, "-u https://teams.microsoft.com/meet/1 -c ACME", got)
+	for _, s := range []string{"secret-passcode", "pass", "user", "frag"} {
+		assert.NotContains(t, got, s)
+	}
+}

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
 // runQueueFile reads a batch queue file line by line, executes each active
@@ -71,7 +73,7 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 		effectiveArgs := append([]string(nil), inheritedArgs...)
 		effectiveArgs = append(effectiveArgs, lineArgs...)
 
-		slog.Info("cli: processing queue entry", "line", i+1, "args", strings.Join(lineArgs, " "))
+		slog.Info("cli: processing queue entry", "line", i+1, "args", sanitizeQueueArgsForLog(lineArgs))
 		if err := executeQueueLine(ctx, d, effectiveArgs); err != nil {
 			slog.Error("cli: queue entry failed", "line", i+1, "err", err)
 			errs = append(errs, fmt.Errorf("cli: queue line %d: %w", i+1, err))
@@ -93,6 +95,13 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 }
 
 type queueExecKey struct{}
+
+// sanitizeQueueArgsForLog renders queue line arguments for logging with every
+// URL reduced to scheme://host/path so passcodes, userinfo, and fragments are
+// never written to logs.
+func sanitizeQueueArgsForLog(args []string) string {
+	return teams.RedactArgs(args)
+}
 
 func executeQueueLine(ctx context.Context, d *deps, args []string) error {
 	root := newRootCommand(d)
@@ -179,7 +188,8 @@ func splitQueueArgs(line string) ([]string, error) {
 		}
 	}
 	if quote != 0 {
-		return nil, fmt.Errorf("unterminated quote in %q", line)
+		// The line is deliberately omitted: it may contain a passcode-bearing URL.
+		return nil, fmt.Errorf("unterminated quote in queue line")
 	}
 	if inToken {
 		args = append(args, cur.String())

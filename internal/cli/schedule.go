@@ -42,7 +42,8 @@ func scheduleJob(ctx context.Context, d *deps, cfg config.Config, busy *atomic.B
 }
 
 func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
-	return &cobra.Command{
+	var flags browserFlags
+	cmd := &cobra.Command{
 		Use:   "schedule",
 		Short: "Run as a daemon, capturing configured meetings on their cron schedules",
 		Long: "schedule runs as a long-lived daemon and captures each configured " +
@@ -59,6 +60,7 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			applyBrowserFlags(&cfg, flags)
 			entries := make([]scheduler.Entry, 0, len(cfg.Meetings))
 			for _, m := range cfg.Meetings {
 				entries = append(entries, scheduler.Entry{Name: m.Name, URL: m.URL, Cron: m.Cron})
@@ -89,4 +91,6 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			return nil
 		},
 	}
+	bindBrowserFlags(cmd, &flags)
+	return cmd
 }

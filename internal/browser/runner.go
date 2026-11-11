@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/chromedp/chromedp"
+
+	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
 const teamsHomeURL = "https://teams.microsoft.com"
@@ -42,7 +44,12 @@ func (r *ChromeRunner) Authenticate(ctx context.Context) error {
 }
 
 // Join implements Runner. It forces headless mode and navigates to meetingURL.
+// meetingURL is validated before any browser is allocated, so a disallowed
+// initial URL never launches Chromium.
 func (r *ChromeRunner) Join(ctx context.Context, meetingURL string) error {
+	if err := teams.ValidateMeetingURL(meetingURL); err != nil {
+		return fmt.Errorf("browser: reject meeting url: %w", err)
+	}
 	opts := r.options
 	opts.Headless = true
 	return r.run(ctx, opts, meetingURL)
@@ -58,8 +65,14 @@ func (r *ChromeRunner) run(ctx context.Context, opts Options, target string) err
 	defer cancelBrowser()
 
 	if err := chromedp.Run(browserCtx, chromedp.Navigate(target)); err != nil {
-		return fmt.Errorf("browser: navigate to %s: %w", target, err)
+		return navigateError(target, err)
 	}
 	<-browserCtx.Done()
 	return nil
+}
+
+// navigateError wraps a navigation failure, replacing target with its
+// RedactURL form so passcodes, credentials, and tokens never reach logs.
+func navigateError(target string, err error) error {
+	return fmt.Errorf("browser: navigate to %s: %w", teams.RedactURL(target), err)
 }

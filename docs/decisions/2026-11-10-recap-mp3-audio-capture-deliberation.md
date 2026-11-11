@@ -112,22 +112,33 @@ SharePoint stream and transcode it to MP3.
 When `m.IsRecap()` is `true` and `CaptureAudio(ctx, w)` is called (because
 `--audio` / `--recap-audio` or `capture_audio: true` / `audio: true` was
 enabled), extract the post-meeting audio from the bound Recap CDP targets
-(`isTargetInCaptureScope`) using in-browser Web Audio decoding
-(`extractRecapAudioJS`: reading pre-supplied `data-recap-audio-pcm` /
-`g_fileInfo.audioPcmBase64` or fetching the `<video>`/`<audio>`/`g_fileInfo`
-media source within the authenticated frame context, decoding and resampling to
-44.1 kHz mono `int16` PCM via `AudioContext` / `OfflineAudioContext`, and
-returning base64-encoded little-endian `int16` PCM chunks), then decode via
+(`isTargetInCaptureScope`) after validating that the owned target/frame's
+`t.URL` and media source URL / page metadata match the expected meeting
+recording identity via `recapExpectedIdentifiers(meetingURL)` (matching the
+transcript path's `targetMatchesIdentifiers` / `payloadMatchesIdentifiers` and
+`parseRecapPayloadForMeeting` discipline when `recapExpectedIdentifiers(meetingURL)`
+is non-empty). Enforce explicit bounded resource limits
+(`maxRecapAudioSourceBytes = 64 * 1024 * 1024` / 64 MiB compressed media blob
+cap, `maxRecapAudioDurationSec = 1800`, and
+`maxRecapAudioPCMBytes = 128 * 1024 * 1024` decoded PCM cap, configurable via
+package variables for unit tests) before allocating `decodeAudioData` or
+`Int16Array` / base64 buffers, transferring/decoding in bounded windows and
+returning a clear structured error
+(`recap audio exceeds maximum supported size/duration`) when a recording
+exceeds the cap. Decode each validated 44.1 kHz mono `int16` PCM chunk via
 `decodeAudioPayload` and encode to MP3 in Go using
 `audio.NewEncoder(w, audio.SampleRate)` (`WritePCM` + `Flush()`).
 
 * **Pros**: Preserves the single-binary pure-Go architecture (zero FFmpeg/CGO);
-  keeps SharePoint cookies inside the browser tab/iframe; enforces existing tab
-  isolation (`isTargetInCaptureScope`); reuses the battle-tested,
-  `checkptr`-safe `internal/audio.Encoder`; supports fast, deterministic
-  unit testing over loopback CDP fixtures.
+  keeps SharePoint cookies inside the browser tab/iframe; enforces both tab/frame
+  isolation (`isTargetInCaptureScope`) and recording-identity validation
+  (`recapExpectedIdentifiers(meetingURL)`); bounds memory usage on long
+  recordings; reuses the battle-tested, `checkptr`-safe
+  `internal/audio.Encoder`; supports fast, deterministic unit testing over
+  loopback CDP fixtures.
 * **Cons**: Requires the Recap target to expose a decodable media source or PCM
-  payload within the scoped page/iframe targets.
+  payload within the scoped page/iframe targets and within the configured
+  size/duration bounds.
 * **Effort**: medium | **Fit**: high.
 
 ## Trade-off Comparison
@@ -147,18 +158,26 @@ We select **Option B** and decompose the work into feature **`015-F`**
 `backlogit dep add 015-S 014-S --type blocks`) with four width-isolated tasks:
 
 1. **`015.001-T` (U1, `code` domain — `internal/browser`)**: Add
-   `extractRecapAudioJS` and `captureRecapAudioFromTargets` in
+   `extractRecapAudioJS`, configurable resource-limit variables
+   (`maxRecapAudioSourceBytes`, `maxRecapAudioDurationSec`,
+   `maxRecapAudioPCMBytes`), and
+   `captureRecapAudioFromTargets(ctx, cdpPort, boundTargetID, meetingURL, w)`
+   with `recapExpectedIdentifiers(meetingURL)` recording-identity validation in
    `internal/browser/recap.go`, record `m.cdpPort = port` in `joinHeaded`, and
    branch `(*chromeMeeting).CaptureAudio` in
    `internal/browser/meeting_chrome.go` on `m.IsRecap()` (`S` / `medium`).
 2. **`015.002-T` (U2, `code` domain — `internal/capture` & `internal/cli`)**:
    Remove the `IsRecap()` override of `captionsOnly` in
-   `internal/capture/session.go` and bind/forward `--recap-audio` alongside
-   `--audio` in `internal/cli/join.go` (`XS` / `low`).
-3. **`015.003-T` (U3, `tests` domain — `internal/browser` & `internal/capture`)**:
-   Add deterministic CDP recap audio extraction and MP3 encoding tests in
-   `internal/browser/recap_retry_test.go` and update session recap audio tests
-   in `internal/capture/session_test.go` (`S` / `low`).
+   `internal/capture/session.go`, update
+   `TestSessionRunRecapModeSkipsAudioEvenWhenCaptionsOnlyFalse` in
+   `internal/capture/session_test.go` (covering both `CaptionsOnly: true` and
+   `CaptionsOnly: false` so `go test ./...` passes at the end of `015.002-T`),
+   and bind/forward `--recap-audio` alongside `--audio` in
+   `internal/cli/join.go` (`S` / `low`).
+3. **`015.003-T` (U3, `tests` domain — `internal/browser`)**:
+   Add deterministic CDP recap audio extraction, MP3 encoding, owned-frame
+   recording-identity mismatch, and oversized-recording resource-limit unit
+   tests in `internal/browser/recap_retry_test.go` (`S` / `low`).
 4. **`015.004-T` (U4, `docs` domain)**: Document `--audio` / `--recap-audio`
    and `capture_audio: true` for Meeting Recap MP3 capture in `README.md` and
    `docs/design-docs/2026-11-09-teams-browser-caption-and-recap-capture.md`
@@ -179,9 +198,19 @@ None blocking planning or harvest.
 
 ## Risks and Mitigations
 
-* **Unrelated browser tab leakage**: Mitigated by restricting Recap audio
-  target discovery to `isTargetInCaptureScope(t, ownerPageID, ownedFrames)` on
-  the bound `capturePageID`.
+* **Unrelated browser tab or mismatched owned-frame recording leakage**:
+  Mitigated by restricting Recap audio target discovery to
+  `isTargetInCaptureScope(t, boundTargetID, ownedFrames)` AND validating that
+  the owned target/frame's `t.URL` and media source/page metadata match
+  `recapExpectedIdentifiers(meetingURL)` (`targetMatchesIdentifiers` /
+  `payloadMatchesIdentifiers`) before extracting audio.
+* **Unbounded memory growth on long recordings**: Mitigated by enforcing
+  `maxRecapAudioSourceBytes = 64 * 1024 * 1024` (64 MiB compressed media cap),
+  `maxRecapAudioDurationSec = 1800`, and
+  `maxRecapAudioPCMBytes = 128 * 1024 * 1024` (128 MiB decoded PCM cap) before
+  allocating `decodeAudioData` or `Int16Array`/base64 buffers, transferring in
+  bounded windows, and failing gracefully with
+  `recap audio exceeds maximum supported size/duration`.
 * **`shine-mp3` frame alignment and `-race` `checkptr` safety**: Mitigated by
   streaming all decoded `[]int16` mono PCM chunks exclusively through
   `audio.NewEncoder(w, audio.SampleRate)` (`WritePCM` + `Flush()`).

@@ -76,10 +76,11 @@ active stash entries in the operator-selected sequence:
   * **`015-F`** -> **`015-S`** (`blocks 014-S`):
     * `015.001-T` (`S` / `medium`, `code`): `internal/browser/recap.go`,
       `internal/browser/meeting_chrome.go`
-    * `015.002-T` (`XS` / `low`, `code`, depends on `015.001-T`):
-      `internal/capture/session.go`, `internal/cli/join.go`
+    * `015.002-T` (`S` / `low`, `code`, depends on `015.001-T`):
+      `internal/capture/session.go`, `internal/capture/session_test.go`,
+      `internal/cli/join.go`
     * `015.003-T` (`S` / `low`, `tests`, depends on `015.001-T`, `015.002-T`):
-      `internal/browser/recap_retry_test.go`, `internal/capture/session_test.go`
+      `internal/browser/recap_retry_test.go`
     * `015.004-T` (`XS` / `trivial`, `docs`, depends on `015.002-T`):
       `README.md`, `docs/design-docs/2026-11-09-teams-browser-caption-and-recap-capture.md`
   * **`016-F`** -> **`016-S`** (`blocks 015-S`):
@@ -98,6 +99,70 @@ active stash entries in the operator-selected sequence:
       `.github/skills/shipment-reconcile/SKILL.md`
     * `017.002-T` (`XS` / `low`, `code`): `internal/browser/recap.go`,
       `internal/browser/recap_test.go`
+
+## PR #37 Round 1 Copilot review remediation (P-021 C1)
+
+Remediated all 5 in-scope Copilot review threads on staging PR #37
+(`chore/stage-015-s-016-s-017-s`):
+
+1. **Thread 1 (`PRRT_kwDOTStvas62EqjQ`, comment `4535265107` on `.backlogit/queue/015.001-T.md:25`) — Validate recording identity before extracting audio**:
+   * Updated `.backlogit/queue/015.001-T.md`, `.backlogit/queue/015.003-T.md`,
+     `.backlogit/queue/015-F.md`, `.backlogit/queue/015-S.md`,
+     `.backlogit/queue/004-DL.md`,
+     `docs/decisions/2026-11-10-recap-mp3-audio-capture-deliberation.md`, and
+     `docs/plans/2026-11-10-recap-mp3-audio-capture-plan.md` so
+     `captureRecapAudioFromTargets(ctx, cdpPort, boundTargetID, meetingURL, w)`
+     receives `meetingURL string` and uses `recapExpectedIdentifiers(meetingURL)`
+     (`targetMatchesIdentifiers` / `payloadMatchesIdentifiers` matching
+     `parseRecapPayloadForMeeting`) to validate that the owned target/frame's
+     `t.URL` and media source/page metadata match the expected meeting recording
+     identity before extracting audio, and added
+     `TestCaptureRecapAudioRejectsOwnedFrameWithMismatchedRecordingIdentity` to
+     `015.003-T`.
+2. **Thread 2 (`PRRT_kwDOTStvas62Eqjz`, comment `4535265158` on `.backlogit/queue/015.001-T.md:11-12`) — Remove premature `harness-ready` labels**:
+   * Removed `harness-ready` from the `labels` of all 11 staged tasks
+     (`015.001-T`..`015.004-T`, `016.001-T`..`016.005-T`,
+     `017.001-T`..`017.002-T`), retaining only each task's domain label
+     (`code`, `tests`, or `docs`) so `_Ship`'s `harness-architect` step runs
+     and applies `harness-ready` after recording the failing harness.
+3. **Thread 3 (`PRRT_kwDOTStvas62EqkG`, comment `4535265188` on `.backlogit/queue/015.001-T.md:25`) — Bound PCM decoding and transfer for long recordings**:
+   * Updated `015.001-T`, `015.003-T`, `015-F`, `015-S`, `004-DL`, and the
+     `015-S` deliberation/plan so `extractRecapAudioJS` and
+     `captureRecapAudioFromTargets` enforce explicit bounded resource caps
+     (`maxRecapAudioSourceBytes = 64 * 1024 * 1024` / 64 MiB compressed media
+     cap, `maxRecapAudioDurationSec = 1800`, and
+     `maxRecapAudioPCMBytes = 128 * 1024 * 1024` decoded PCM cap, configurable
+     via package variables for unit tests), transfer/decode in bounded windows,
+     and reject recordings exceeding the cap with
+     `recap audio exceeds maximum supported size/duration` before allocating
+     unbounded PCM/base64 buffers, plus added
+     `TestCaptureRecapAudioRejectsOversizedRecordingExceedingResourceCap` to
+     `015.003-T`.
+4. **Thread 4 (`PRRT_kwDOTStvas62Eqkb`, comment `4535265228` on `.backlogit/queue/015.002-T.md:27`) — Move the regression-test update into the behavior-changing task**:
+   * Moved the `internal/capture/session_test.go` update
+     (`TestSessionRunRecapModeSkipsAudioEvenWhenCaptionsOnlyFalse` ->
+     `TestSessionRunRecapModeHonorsCaptionsOnlyFlag`) into `015.002-T` (`size: S`,
+     3 files: `internal/capture/session.go`, `internal/capture/session_test.go`,
+     `internal/cli/join.go`) so `go test ./...` passes completely at the end of
+     `015.002-T`, reserving `015.003-T` (`size: S`, 1 file:
+     `internal/browser/recap_retry_test.go`) for the browser-package CDP recap
+     audio extraction, MP3 encoding, owned-frame identity mismatch, and
+     resource-limit tests.
+5. **Thread 5 (`PRRT_kwDOTStvas62Eqk1`, comment `4535265267` on `docs/plans/2026-11-10-reconcile-deliberation-and-headed-sandbox-plan.md:87-91`) — Prevent archiving retained deliberations**:
+   * Updated `docs/plans/2026-11-10-reconcile-deliberation-and-headed-sandbox-plan.md`,
+     `docs/decisions/2026-11-10-reconcile-deliberation-and-headed-sandbox-deliberation.md`,
+     `.backlogit/queue/006-DL.md`, and `.backlogit/queue/017.001-T.md` so that in
+     `.github/skills/shipment-reconcile/SKILL.md` only `expected_cascade`
+     (`archive` / `PLANNED_ARCHIVE`) deliberations belong in `allowed_ids` and
+     `required_ids` for the cascade invocation itself, retained deliberations
+     (`retained_description_mention`, `retained_shared_reference`,
+     `retained_live_status`) are excluded from BOTH `required_ids` and
+     `allowed_ids`, Step 3 adds an explicit pre/post retained-deliberation
+     preservation check (`unexpected-cascade` + `git-revert-on-cascade`), and
+     Step 4 post-cascade cleanup only allows explicit archival of a
+     `retained_description_mention` deliberation whose sole referencing feature
+     just shipped while keeping `retained_shared_reference` and
+     `retained_live_status` deliberations untouched in `.backlogit/queue/`.
 
 ## Excluded / deferred entries
 

@@ -110,9 +110,10 @@ Both separately triggered Step 1 obligations were executed for `1B03802C` and
     mentions its deliberation in prose/references without setting
     `custom_fields.source_deliberation_id`, contradicting both backlogit 1.12
     and `autoharness.gates.shipment_closure.compute_linked_deliberation_disposition`.
-* **Option 1B (Chosen — Align `SKILL.md` with `compute_linked_deliberation_disposition` and backlogit 1.12 INV-12 semantics)**:
+* **Option 1B (Chosen — Align `SKILL.md` with `compute_linked_deliberation_disposition` and backlogit 1.12 INV-12 semantics with a pre/post retained-deliberation preservation check)**:
   Update `.github/skills/shipment-reconcile/SKILL.md` (Step 0(c), Cascade Close
-  Sub-Procedure step 3, and Quality Criteria) so that:
+  Sub-Procedure step 3, post-cascade source-artifact cleanup, and Quality
+  Criteria) so that:
   1. Step 0(c) records each validated linked deliberation's link kind
      (`custom_fields.source_deliberation_id` vs description/references mention)
      and evaluates its pre-close INV-12 disposition via
@@ -120,18 +121,31 @@ Both separately triggered Step 1 obligations were executed for `1B03802C` and
      retained_ambiguous -> already-archived -> retained_engine_unverified ->
      retained_live_status -> retained_shared_reference ->
      retained_description_mention -> archive`).
-  2. In Cascade Close Sub-Procedure step 3, `allowed_ids` retains all validated
-     linked deliberations of qualifying feature members, while `required_ids`
-     includes a validated linked deliberation **only** when its pre-close
-     INV-12 disposition is `archive` (`PLANNED_ARCHIVE` — i.e., linked via
-     `custom_fields.source_deliberation_id` and not matching any earlier
-     `already-archived` or `retained_*` rule, including
-     `retained_description_mention`).
-  3. Any linked deliberation retained by the engine under
-     `retained_description_mention` (when no live referrers remain outside the
-     closed shipment scope) is archived explicitly by Ship during post-cascade
-     source-artifact cleanup (`backlogit archive <dl_id>`) without triggering a
-     false `required_ids - archived_ids` halt.
+  2. In Cascade Close Sub-Procedure step 3, only deliberations classified as
+     `expected_cascade` (`archive` / `PLANNED_ARCHIVE` — linked via
+     `custom_fields.source_deliberation_id` and not matching any
+     `already-archived` or `retained_*` rule) belong in BOTH `allowed_ids` AND
+     `required_ids` for the `backlogit_ship_shipment` cascade call itself (while
+     `already-archived` deliberations are excluded from `required_ids` and
+     tolerated in `allowed_ids`). Deliberations classified into any of the
+     retained dispositions (`retained_description_mention`,
+     `retained_shared_reference`, `retained_live_status`, as well as
+     `retained_engine_unverified`, `retained_ambiguous`, `retained_read_error`)
+     are EXCLUDED from `required_ids` AND EXCLUDED from `allowed_ids` for the
+     cascade call, AND Step 3 runs an explicit **pre/post retained-deliberation
+     preservation check**: if any retained deliberation (especially
+     `retained_shared_reference` or `retained_live_status`, which must remain
+     live in `.backlogit/queue/` for other unshipped work) appears in
+     `archived_ids` or is missing from `.backlogit/queue/` immediately after the
+     cascade call, the skill MUST halt with `unexpected-cascade`
+     (`HALT — cascade archived retained deliberation {id}, revert required`) and
+     run the `git-revert-on-cascade` recovery procedure.
+  3. In post-cascade source-artifact cleanup, ONLY a
+     `retained_description_mention` deliberation whose sole referencing feature
+     just shipped and has no remaining live references may be archived
+     explicitly by the agent (`backlogit archive <dl_id>`), whereas
+     `retained_shared_reference` and `retained_live_status` deliberations MUST
+     remain in `.backlogit/queue/` untouched.
 
 ### Issue 2 (`FC763C17`): Direct-exec headed browser launcher sandbox opt-in
 

@@ -24,16 +24,21 @@ Following the accepted deliberation in
 
 1. **`1B03802C` (`.github/skills/shipment-reconcile/SKILL.md`)**:
    Reconcile Step 0(c) ("Linked-deliberation snapshot extension"), Cascade Close
-   Sub-Procedure step 3, and Quality Criteria in
-   `.github/skills/shipment-reconcile/SKILL.md` with backlogit 1.12 engine
-   behavior and `autoharness.gates.shipment_closure.compute_linked_deliberation_disposition`
+   Sub-Procedure step 3, post-cascade source-artifact cleanup, and Quality
+   Criteria in `.github/skills/shipment-reconcile/SKILL.md` with backlogit 1.12
+   engine behavior and
+   `autoharness.gates.shipment_closure.compute_linked_deliberation_disposition`
    (`LinkedDeliberationOutcome.RETAINED_DESCRIPTION_MENTION` and INV-12 outcome
-   precedence), so a linked deliberation that is retained by the engine (such as
-   one mentioned only in a feature's description or `references` without
-   `custom_fields.source_deliberation_id`) remains permitted in `allowed_ids`
-   but is NOT placed in `required_ids` (where its engine-expected absence from
-   `archived_ids` would falsely trigger `HALT — cascade did not archive required
-   artifact {id}`).
+   precedence), so that only deliberations classified as `expected_cascade`
+   (`archive` / `PLANNED_ARCHIVE`) belong in `allowed_ids` and `required_ids`
+   for the cascade invocation itself, while deliberations classified into any
+   retained disposition (`retained_description_mention`,
+   `retained_shared_reference`, `retained_live_status`) are excluded from BOTH
+   `required_ids` and `allowed_ids` for the `backlogit_ship_shipment` cascade
+   call and protected by an explicit **pre/post retained-deliberation
+   preservation check** in Step 3 that halts with `unexpected-cascade` and runs
+   `git-revert-on-cascade` if any retained deliberation is newly archived by the
+   cascade.
 2. **`FC763C17` (`internal/browser/recap.go` & `internal/browser/recap_test.go`)**:
    Make the direct-exec browser launcher (`launchCleanHeadedBrowser` /
    `cleanBrowserArgs` / `cleanHeadedBrowserArgs` in `internal/browser/recap.go`)
@@ -46,7 +51,7 @@ Following the accepted deliberation in
 
 | Requirement | Stash ID | Implementation unit | Verification |
 |---|---|---|---|
-| R1: Reconcile `.github/skills/shipment-reconcile/SKILL.md` Step 0(c), Cascade Close Sub-Procedure step 3, and Quality Criteria with backlogit 1.12 and `compute_linked_deliberation_disposition` (`retained_description_mention` / INV-12) | `1B03802C` | U1 (`017.001-T`) | Markdown / skill structure check and consistency verification against `autoharness.gates.shipment_closure` |
+| R1: Reconcile `.github/skills/shipment-reconcile/SKILL.md` Step 0(c), Cascade Close Sub-Procedure step 3 (including pre/post retained-deliberation preservation check), post-cascade cleanup, and Quality Criteria with backlogit 1.12 and `compute_linked_deliberation_disposition` (`retained_description_mention` / INV-12) | `1B03802C` | U1 (`017.001-T`) | Markdown / skill structure check and consistency verification against `autoharness.gates.shipment_closure` |
 | R2: Honor `Options.DisableSandbox` and `TEAMS_DISABLE_SANDBOX` in the direct-exec browser launcher (`launchCleanHeadedBrowser` / `cleanBrowserArgs` / `cleanHeadedBrowserArgs` in `internal/browser/recap.go`) while keeping sandbox enabled by default | `FC763C17` | U2 (`017.002-T`) | `go test -race ./internal/browser/...` |
 
 ## Implementation Units
@@ -70,31 +75,38 @@ Following the accepted deliberation in
        `retained_description_mention`, because backlogit 1.12's `ShipShipment`
        retains it rather than archiving it during the cascade).
   2. **Cascade Close Sub-Procedure preamble, step 3, and step 5**:
-     * Keep `allowed_ids` = manifest tasks + qualifying feature members +
-       every validated linked deliberation ID of each qualifying feature member
-       + the shipment record.
-     * Define `required_ids` = the shipment record and every qualifying feature
-       member (both unconditionally) + every manifest task item not truly
-       `status: archived` in the Step 0(b) pre-close declared-status snapshot +
-       every validated linked deliberation of a qualifying feature member whose
-       Step 0(c) pre-close INV-12 disposition is `archive` (`PLANNED_ARCHIVE` —
-       i.e., linked via `custom_fields.source_deliberation_id`, not
-       `already-archived` (`status: archived`), and not any `retained_*`
-       disposition such as `retained_description_mention`,
-       `retained_live_status`, `retained_shared_reference`,
-       `retained_engine_unverified`, `retained_ambiguous`, or
-       `retained_read_error`).
-     * Clarify that a validated linked deliberation with disposition
-       `retained_description_mention` (or any other `retained_*` /
-       `already-archived` outcome) is retained by backlogit 1.12 during
-       `backlogit shipment ship` and is therefore exempt from `required_ids`
-       (while remaining in `allowed_ids`); when a `retained_description_mention`
-       deliberation has no remaining live referrers outside the closed shipment
-       scope, Ship's post-cascade source-artifact cleanup step may archive it
-       explicitly via `backlogit archive <dl_id>`.
+     * Only deliberations classified as `expected_cascade` (`archive` /
+       `PLANNED_ARCHIVE` under `compute_linked_deliberation_disposition` —
+       linked via `custom_fields.source_deliberation_id` and not matching any
+       `already-archived` or `retained_*` rule) belong in BOTH `allowed_ids`
+       AND `required_ids` for the `backlogit_ship_shipment` cascade invocation
+       itself (with `already-archived` deliberations excluded from
+       `required_ids` and tolerated in `allowed_ids`).
+     * Deliberations classified into any of the retained dispositions
+       (`retained_description_mention`, `retained_shared_reference`,
+       `retained_live_status`, as well as `retained_engine_unverified`,
+       `retained_ambiguous`, `retained_read_error`) are EXCLUDED from
+       `required_ids` AND EXCLUDED from `allowed_ids` for the
+       `backlogit_ship_shipment` cascade call.
+     * Add an explicit **pre/post retained-deliberation preservation check** in
+       Step 3: if any retained deliberation (especially
+       `retained_shared_reference` or `retained_live_status`, which must remain
+       live in `.backlogit/queue/` for other unshipped work) appears in
+       `archived_ids` or is missing from `.backlogit/queue/` immediately after
+       the cascade call, the skill MUST halt with `unexpected-cascade`
+       (`HALT — cascade archived retained deliberation {id}, revert required`)
+       and run the `git-revert-on-cascade` recovery procedure.
+     * Specify in post-cascade source-artifact cleanup (Step 4 / Ship closure
+       cleanup) that ONLY a `retained_description_mention` deliberation whose
+       sole referencing feature just shipped and has no remaining live
+       references may be archived explicitly by the agent
+       (`backlogit archive <dl_id>`), whereas `retained_shared_reference` and
+       `retained_live_status` deliberations MUST remain in `.backlogit/queue/`
+       untouched.
   3. **Quality Criteria**: Update the Cascade Close Sub-Procedure bullet in
-     `## Quality Criteria` so its `required_ids` definition matches Step 0(c)
-     and Cascade Close Sub-Procedure step 3.
+     `## Quality Criteria` so its `allowed_ids`, `required_ids`, and retained-deliberation
+     preservation check definitions match Step 0(c) and Cascade Close
+     Sub-Procedure step 3.
 * **Files (1 file):** `.github/skills/shipment-reconcile/SKILL.md`.
 * **Verify:** Inspect diff against `autoharness.gates.shipment_closure.compute_linked_deliberation_disposition`,
   `prompt-builder.instructions.md`, and `markdown.instructions.md`.
@@ -207,13 +219,18 @@ skill and U2 modifies browser sandbox launch flags.
 ### Protected Invariants
 
 1. **Unconditional `required_ids` membership for the shipment record, qualifying
-   features, and non-archived manifest tasks**: U1's exemption from
-   `required_ids` applies **only** to validated linked deliberations whose
-   pre-close INV-12 disposition is `already-archived` or `retained_*`
-   (including `retained_description_mention`); it never weakens the
-   unconditional requirement on the shipment record, qualifying feature
-   members, or non-archived manifest tasks, nor does it relax the
-   `archived_ids - allowed_ids` unexpected-artifact check.
+   features, and non-archived manifest tasks, plus strict preservation of
+   retained deliberations**: Only deliberations classified as `expected_cascade`
+   (`archive` / `PLANNED_ARCHIVE`) belong in `allowed_ids` and `required_ids`
+   for the cascade call (with `already-archived` deliberations excluded from
+   `required_ids` and tolerated in `allowed_ids`). Deliberations classified into
+   any retained disposition (`retained_description_mention`,
+   `retained_shared_reference`, `retained_live_status`) are excluded from BOTH
+   `required_ids` and `allowed_ids` for `backlogit_ship_shipment`, and Step 3
+   enforces a pre/post retained-deliberation preservation check that halts with
+   `unexpected-cascade` and runs `git-revert-on-cascade` if any retained
+   deliberation appears in `archived_ids` or is missing from `.backlogit/queue/`
+   immediately after the cascade call.
 2. **Sandbox enabled by default**: When `Options.DisableSandbox` is `false` and
    `TEAMS_DISABLE_SANDBOX` is unset/empty, `cleanBrowserArgs`,
    `cleanHeadedBrowserArgs`, and `cleanBrowserArgsForOptions` MUST NOT emit
@@ -223,7 +240,7 @@ skill and U2 modifies browser sandbox launch flags.
 
 | ProposedAction | ActionRisk | Approval and containment | Expected ActionResult |
 |---|---|---|---|
-| Reconcile linked-deliberation `required_ids` rule in `.github/skills/shipment-reconcile/SKILL.md` with `compute_linked_deliberation_disposition` (`retained_description_mention`) | moderate | Preserves `allowed_ids` check and unconditional `required_ids` for shipment, qualifying features, and manifest tasks; exempts only INV-12 retained/already-archived linked deliberations | Written `shipment-reconcile` verifier and backlogit 1.12 / `autoharness` engine agree on description-linked deliberations |
+| Reconcile linked-deliberation `allowed_ids` / `required_ids` rule and add pre/post retained-deliberation preservation check in `.github/skills/shipment-reconcile/SKILL.md` | moderate | Excludes retained deliberations from both `required_ids` and `allowed_ids` for the cascade call, adds pre/post preservation check (`unexpected-cascade` + `git-revert-on-cascade`), and permits post-cascade explicit archival only for `retained_description_mention` deliberations with no remaining live references | Written `shipment-reconcile` verifier and backlogit 1.12 / `autoharness` engine agree on INV-12 dispositions while protecting `retained_shared_reference` and `retained_live_status` deliberations |
 | Emit `--no-sandbox` and `--disable-setuid-sandbox` in `internal/browser/recap.go` when `shouldDisableSandbox(opts)` is `true` | high | Off by default; requires explicit `Options.DisableSandbox: true` or `TEAMS_DISABLE_SANDBOX=1`/`true`; verified by unit tests in `recap_test.go` | `join --headed` and `captions` honor explicit sandbox opt-out in root/container environments while keeping the sandbox enabled by default |
 
 ## Runtime Verification and Closure

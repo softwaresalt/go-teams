@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/chromedp/chromedp"
 )
@@ -22,6 +23,25 @@ type Options struct {
 	Headless    bool
 	UserAgent   string
 	ExecPath    string
+	// DisableSandbox opts in to launching Chromium with --no-sandbox and
+	// --disable-setuid-sandbox. It is off by default so the browser sandbox
+	// stays enabled; the TEAMS_DISABLE_SANDBOX environment variable ("1" or
+	// "true") is an equivalent opt-in for containers that cannot run it.
+	DisableSandbox bool
+}
+
+// shouldDisableSandbox reports whether the Chromium sandbox should be disabled:
+// true when opts.DisableSandbox is set or TEAMS_DISABLE_SANDBOX is "1" or
+// "true" (case-insensitive).
+func shouldDisableSandbox(opts Options) bool {
+	if opts.DisableSandbox {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TEAMS_DISABLE_SANDBOX"))) {
+	case "1", "true":
+		return true
+	}
+	return false
 }
 
 // Flag is a single Chromium command-line flag with its value. A bool value of
@@ -34,12 +54,15 @@ type Flag struct {
 
 // StealthFlags returns the ordered set of Chromium flags that stabilize the
 // headless environment, grant synthetic media permissions, and mask automation
-// from Teams' bot-detection telemetry. The trailing headless flag reflects
-// opts.Headless: "new" when headless, or an explicit disable when headed.
+// from Teams' bot-detection telemetry. The sandbox flags are always emitted
+// explicitly: false by default (overriding chromedp's root-user no-sandbox
+// default) and true only when the operator opts in. The trailing headless flag
+// reflects opts.Headless: "new" when headless, or an explicit disable when headed.
 func StealthFlags(opts Options) []Flag {
+	noSandbox := shouldDisableSandbox(opts)
 	flags := []Flag{
-		{Name: "no-sandbox", Value: true},
-		{Name: "disable-setuid-sandbox", Value: true},
+		{Name: "no-sandbox", Value: noSandbox},
+		{Name: "disable-setuid-sandbox", Value: noSandbox},
 		{Name: "use-fake-ui-for-media-stream", Value: true},
 		{Name: "use-fake-device-for-media-stream", Value: true},
 		{Name: "disable-blink-features", Value: "AutomationControlled"},

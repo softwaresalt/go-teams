@@ -94,8 +94,14 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 	return cm, browserCtx, cleanup, nil
 }
 
-func cleanHeadlessFlags() []Flag {
+// cleanHeadlessFlags returns the minimal flags for the clean headless
+// allocator. The sandbox flags are emitted explicitly (false unless the
+// operator opted in) so chromedp's root-user no-sandbox default is overridden.
+func cleanHeadlessFlags(opts Options) []Flag {
+	noSandbox := shouldDisableSandbox(opts)
 	return []Flag{
+		{Name: "no-sandbox", Value: noSandbox},
+		{Name: "disable-setuid-sandbox", Value: noSandbox},
 		{Name: "headless", Value: "new"},
 		{Name: "use-fake-ui-for-media-stream", Value: true},
 		{Name: "auto-select-desktop-capture-source", Value: "Microsoft Teams"},
@@ -105,7 +111,7 @@ func cleanHeadlessFlags() []Flag {
 
 func cleanHeadlessAllocatorOptions(opts Options) []chromedp.ExecAllocatorOption {
 	out := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
-	for _, f := range cleanHeadlessFlags() {
+	for _, f := range cleanHeadlessFlags(opts) {
 		out = append(out, chromedp.Flag(f.Name, f.Value))
 	}
 	if opts.UserDataDir != "" {

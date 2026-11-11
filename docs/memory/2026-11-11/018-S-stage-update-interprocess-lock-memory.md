@@ -84,13 +84,17 @@ Executed Dark Factory Mode (`DARK_MODE_ACTIVE`, P-017) Stage session for Cycle 1
     and `<exe>.lock.ctl` so both locks fail closed to manual cleanup, classify
     timeout errors diagnostically in `ErrUpdateLocked` via `lockStaleAfter` and
     `isProcessAlive(pid)` for dead-PID orphaned vs. live-PID/OS-PID-reused vs.
-    active/corrupt locks, preserve legitimate `<name>.old` filenames in
-    `executablePath()` while failing closed with `ErrConcurrentUpdateModified`
-    when `os.Executable()` resolves to ` (deleted)` or `.old` when
-    `filepath.Base(os.Args[0])` does not end in `.old`, resolve symlink targets
-    (`<target>.lock` / `<target>.old`) with one immediate `os.Stat` re-probe and
-    wait-poll in pre-swap `os.Stat(exe)` / `filepath.EvalSymlinks(exe)` without
-    holding `<exe>.lock` across the network download, capture the baseline
+    active/corrupt locks, preserve legitimate `<name>.old` installations in
+    `executablePath()` only via verified launch-path provenance (requiring
+    `launchTarget` resolved from `os.Args[0]` via `exec.LookPath` /
+    `filepath.Abs` and user-space symlink walking to match `resolvedExe` by
+    `filepath.Clean` and `os.SameFile` with no sibling `<trimmed>.lock`, while
+    failing closed with `ErrConcurrentUpdateModified` on any ambiguity,
+    `launcher.old -> teams-cli` alias launch, or ` (deleted)` suffix), resolve
+    symlink targets (`<target>.lock` / `<target>.old`) with one immediate
+    `os.Stat` re-probe and wait-poll in pre-swap `os.Stat(exe)` /
+    `filepath.EvalSymlinks(exe)` without holding `<exe>.lock` across the network
+    download, capture the baseline
     snapshot at the very start of `Update` (setting
     `concurrentSwapObserved = true` ONLY when `exe` is missing or `<exe>.lock`
     exists on disk — never merely because a leftover `<exe>.old` exists beside

@@ -83,26 +83,40 @@ that peer's final rename fails, rollback also fails, leaving neither `<exe>` nor
        pre-swap and release interleaving (including a hook between initial
        unlocked token inspection and `<exe>.lock.ctl` acquisition in
        `release()`).
-     * **Executable path safety (preserving legitimate `.old` filenames vs.
-       failing closed on renamed running image), symlink target marker
-       resolution, immediate `os.Stat` re-probe, and start-of-`Update` baseline
-       snapshot + under-lock `installedVersion` / running-image identity guard
-       when `!force` (Finding 3, Comments `4543360630`, `4543766778`,
-       `4543766919`)**:
+     * **Executable path safety (verified launch-path provenance for `.old`
+       installations vs. failing closed on renamed running image or alias
+       launch), symlink target marker resolution, immediate `os.Stat` re-probe,
+       and start-of-`Update` baseline snapshot + under-lock `installedVersion` /
+       running-image identity guard when `!force` (Finding 3, Comments
+       `4543360630`, `4543766778`, `4543766919`, `4543907702`, `4544010034`)**:
        - Do NOT unconditionally strip `.old` in `executablePath()`. A configured
-         `u.cfg.ExecutablePath` ending in `.old` or a process legitimately
-         invoked as `<name>.old` (`filepath.Base(os.Args[0])` ends in `.old`)
-         MUST preserve its exact `.old` path and use `<exe>.old.lock` /
-         `<exe>.old.old` without ever redirecting to a sibling `<exe>`. When
-         `u.cfg.ExecutablePath == ""` and `os.Executable()` /
-         `filepath.EvalSymlinks` resolves to a path ending in ` (deleted)` or
-         ending in `.old` while `filepath.Base(os.Args[0])` does NOT end in
-         `.old` (corroborating that another updater renamed the running
-         executable image after launch), **fail closed** with
-         `ErrConcurrentUpdateModified` (reporting that the running binary was
-         already replaced by another update process) unless `--force` is set
-         with an explicit path, rather than silently redirecting to a sibling
-         path.
+         `u.cfg.ExecutablePath` ending in `.old` preserves its exact `.old`
+         path and uses `<exe>.old.lock` / `<exe>.old.old` without ever
+         redirecting to a sibling `<exe>`. When `u.cfg.ExecutablePath == ""`
+         and `resolvedExe` (from `os.Executable()` / `filepath.EvalSymlinks`)
+         ends in ` (deleted)`, **fail closed** with
+         `ErrConcurrentUpdateModified`. When `u.cfg.ExecutablePath == ""` and
+         `resolvedExe` ends in `.old`, require **verified launch-path
+         provenance (failing closed on any ambiguity)**:
+         1. Resolve the launch invocation path from `os.Args[0]` (via
+            `exec.LookPath` / `filepath.Abs` and walking any user-space
+            symlinks on the `os.Args[0]` path without reading `/proc/self/exe`)
+            to obtain the intended launch target path `launchTarget`.
+         2. Accept `resolvedExe` as a legitimate `.old` installation **ONLY**
+            if: (i) `launchTarget` resolves cleanly and
+            `filepath.Clean(launchTarget) == filepath.Clean(resolvedExe)` and
+            `os.SameFile(launchStat, resolvedStat)` holds (proving `os.Args[0]`
+            actually targeted `<exe>.old` rather than an alias like
+            `launcher.old -> teams-cli` whose symlink target is
+            `/path/to/teams-cli` != `/path/to/teams-cli.old`), AND (ii) no
+            sibling `<trimmed>.lock` (where
+            `<trimmed> = strings.TrimSuffix(resolvedExe, ".old")`) exists on
+            disk.
+         3. If `launchTarget` cannot be resolved, or
+            `filepath.Clean(launchTarget) != filepath.Clean(resolvedExe)` (for
+            example, `launcher.old -> teams-cli` after `teams-cli` was renamed
+            to `teams-cli.old`), or `<trimmed>.lock` exists, **fail closed**
+            with `ErrConcurrentUpdateModified`.
        - Add a helper in `internal/updater/updater.go` used by
          `executablePath()` and `downloadVerified()` that, when resolving a
          symlink or statting `exe` during the transient rename gap, resolves the
@@ -280,14 +294,22 @@ that peer's final rename fails, rollback also fails, leaving neither `<exe>` nor
        under-lock `installedVersion` / running-image identity verification and
        leaves `v3` intact on disk.
      * `TestExecutablePathPreservesLegitimateOldFilenameAndFailsClosedOnRenamedRunningImage`
-       (**`.old` filename preservation & renamed running-image fail-closed test**,
-       Comment `4543766919`): proves that a legitimate `<name>.old` binary
-       (`u.cfg.ExecutablePath` ending in `.old` or `filepath.Base(os.Args[0])`
-       ending in `.old`) preserves its `.old` path and uses `<exe>.old.lock` /
-       `<exe>.old.old`, while `u.cfg.ExecutablePath == ""` with
-       `os.Executable()` resolving to `.old` (when `filepath.Base(os.Args[0])`
-       does not end in `.old`) or ` (deleted)` fails closed with
-       `ErrConcurrentUpdateModified`.
+       (**`.old` launch-path provenance, renamed running-image, &
+       `launcher.old -> teams-cli` alias-launch fail-closed test**, Comments
+       `4543766919`, `4544010034`): proves that (a) a legitimate `<name>.old`
+       installation (`u.cfg.ExecutablePath` ending in `.old`, or
+       `u.cfg.ExecutablePath == ""` where `launchTarget` resolved from
+       `os.Args[0]` via `exec.LookPath` / `filepath.Abs` and user-space symlink
+       walking matches `resolvedExe` by `filepath.Clean` and `os.SameFile` with
+       no sibling `<trimmed>.lock`) preserves its `.old` path and uses
+       `<exe>.old.lock` / `<exe>.old.old`; (b) `u.cfg.ExecutablePath == ""`
+       with `os.Executable()` resolving to `.old` when `launchTarget != resolvedExe`,
+       when `<trimmed>.lock` exists, or when `resolvedExe` ends in ` (deleted)`
+       fails closed with `ErrConcurrentUpdateModified`; and (c) when
+       `os.Args[0]` is a `.old`-named symlink/alias (`launcher.old -> teams-cli`)
+       and `os.Executable()` reports `teams-cli.old` after a concurrent rename,
+       `executablePath()` fails closed with `ErrConcurrentUpdateModified` and
+       never acquires `teams-cli.old.lock` or modifies `teams-cli.old`.
      * Deterministic tests for both Finding 4 cases: (1) two concurrent
        `Updater.Update` calls against a non-mapped fixture binary serialize via
        `<exe>.lock` and both succeed in sequence; and (2) when `<exe>.old`

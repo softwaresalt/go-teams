@@ -192,6 +192,62 @@ func TestRedactURL(t *testing.T) {
 	}
 }
 
+func TestRedactURLMalformedStripsQueryAndFragmentBeforeSplittingPath(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"slash in query with bad fragment escape", "https://teams.microsoft.com?redirect=/secret-passcode#%zz", "https://teams.microsoft.com"},
+		{"slash in fragment with bad escape", "https://teams.microsoft.com/meet/1#/secret-passcode%zz", "https://teams.microsoft.com/meet/1"},
+		{"slash in query after path", "https://teams.microsoft.com/meet/1?next=/secret-passcode#%zz", "https://teams.microsoft.com/meet/1"},
+		{"hash before slash", "https://teams.microsoft.com#/secret-passcode%zz", "https://teams.microsoft.com"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactURL(tc.raw)
+			assert.Equal(t, tc.want, got)
+			assert.NotContains(t, got, "secret")
+		})
+	}
+}
+
+func TestRedactArgsUsesEarliestSchemeToken(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			"outer loopback url with nested https url",
+			[]string{"-u", "http://localhost/meet/1?p=secret-passcode&next=https://teams.microsoft.com/"},
+			"-u http://localhost/meet/1",
+		},
+		{
+			"malformed single-slash delimiter",
+			[]string{"-u", "https:/teams.microsoft.com/meet/1?p=secret-passcode"},
+			"-u [invalid-url]",
+		},
+		{
+			"flag attached malformed delimiter",
+			[]string{"--url=HTTPS:teams.microsoft.com/meet/1?p=secret-passcode"},
+			"--url=[invalid-url]",
+		},
+		{
+			"upper-case scheme",
+			[]string{"HTTPS://teams.microsoft.com/meet/1?p=secret-passcode"},
+			"https://teams.microsoft.com/meet/1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactArgs(tc.args)
+			assert.Equal(t, tc.want, got)
+			assert.NotContains(t, got, "secret")
+		})
+	}
+}
+
 func TestRedactURLMalformedNeverLeaksUserinfo(t *testing.T) {
 	inputs := []string{
 		"https://user:pass@teams.microsoft.com:badport/meet/123?p=tok",

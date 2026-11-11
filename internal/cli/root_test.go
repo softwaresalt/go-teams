@@ -224,19 +224,28 @@ func TestBrowserPathWiredAcrossAllCommands(t *testing.T) {
 				go func() { done <- runCmd(ctx, probe.deps(loaded), args...) }()
 
 				var got config.Config
+				finished := false
 				select {
 				case got = <-probe.cfgs:
 				case err := <-done:
+					finished = true
 					require.NoError(t, err)
-					t.Fatal("command finished without reaching the browser layer")
+					// Completion and the buffered config can both be ready.
+					select {
+					case got = <-probe.cfgs:
+					default:
+						t.Fatal("command finished without reaching the browser layer")
+					}
 				case <-time.After(10 * time.Second):
 					t.Fatal("timed out waiting for the browser layer")
 				}
 				cancel()
-				select {
-				case <-done:
-				case <-time.After(10 * time.Second):
-					t.Fatal("command did not stop after cancel")
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(10 * time.Second):
+						t.Fatal("command did not stop after cancel")
+					}
 				}
 
 				assert.Equal(t, sc.wantBrowser, got.BrowserPath)

@@ -5,6 +5,7 @@ package teams
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -165,18 +166,18 @@ func redactMalformedURL(raw string) string {
 		return invalidURLPlaceholder
 	}
 	rest := raw[len(scheme)+len("://"):]
+	// The authority ends at the first '/', '?', or '#', so the query and
+	// fragment are removed before the host is separated from the path: a
+	// secret containing '/' in either must never be promoted into the path.
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
 	head, tail := rest, ""
 	if i := strings.IndexByte(rest, '/'); i >= 0 {
 		head, tail = rest[:i], rest[i:]
 	}
 	if at := strings.LastIndexByte(head, '@'); at >= 0 {
 		head = head[at+1:]
-	}
-	if i := strings.IndexAny(head, "?#"); i >= 0 {
-		head = head[:i]
-	}
-	if i := strings.IndexAny(tail, "?#"); i >= 0 {
-		tail = tail[:i]
 	}
 	if !isCleanHostPort(head) {
 		return invalidURLPlaceholder
@@ -244,25 +245,26 @@ func RedactArgs(args []string) string {
 	return strings.Join(out, " ")
 }
 
+// httpSchemeTokenRe finds the earliest http: or https: token in an argument,
+// including malformed delimiters such as "https:/host", so everything from the
+// outermost URL onward is redacted as one unit.
+var httpSchemeTokenRe = regexp.MustCompile(`(?i)https?:`)
+
 func redactArg(a string) string {
+	if loc := httpSchemeTokenRe.FindStringIndex(a); loc != nil {
+		return a[:loc[0]] + RedactURL(a[loc[0]:])
+	}
 	i := strings.Index(a, "://")
 	if i < 0 {
 		return a
 	}
 	start := i
-	lower := strings.ToLower(a)
-	if j := strings.Index(lower, "https://"); j >= 0 {
-		start = j
-	} else if j := strings.Index(lower, "http://"); j >= 0 {
-		start = j
-	} else {
-		for start > 0 {
-			c := a[start-1]
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
-				break
-			}
-			start--
+	for start > 0 {
+		c := a[start-1]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			break
 		}
+		start--
 	}
 	return a[:start] + RedactURL(a[start:])
 }

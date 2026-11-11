@@ -196,6 +196,8 @@ internal/teams/       Teams meeting URL mutation
 internal/transcript/  Caption deduplication and Markdown writer
 internal/scheduler/   Cron schedule construction
 internal/browser/     chromedp allocator, stealth flags, and runner
+internal/updater/     Release lookup, SHA-256 verification, and executable swap
+internal/version/     Build metadata and semantic version comparison
 ```
 
 ## Development

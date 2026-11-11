@@ -63,3 +63,8 @@ descendants are the two manifest tasks; engine 1.12 `VERIFIED`).
 `backlogit shipment ship` returned `archived_ids: [014.001-T, 014.002-T, 014-F,
 014-S]` and `returned_ids: []`; both tasks kept `parent_id: 014-F`. Shipment
 `010-S` and stash entries `DF1F461F` and `FC763C17` were verified untouched.
+
+The engine retained `003-DL` (a description-only mention) while the
+`shipment-reconcile` skill prose would require it to be archived by the cascade;
+Ship followed the engine-aware helper, archived `003-DL` explicitly, and
+captured the mismatch as deferred stash entry `1B03802C` for Stage.

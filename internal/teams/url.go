@@ -107,7 +107,7 @@ func MutateJoinURL(raw string) (string, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("teams: parse meeting url: %w", err)
+		return "", fmt.Errorf("teams: meeting url is not parseable")
 	}
 	q := u.Query()
 	if isLegacyMeetupJoinPath(u.Path) {
@@ -123,4 +123,146 @@ func MutateJoinURL(raw string) (string, error) {
 
 func isLegacyMeetupJoinPath(path string) bool {
 	return path == "/l/meetup-join" || strings.HasPrefix(path, "/l/meetup-join/")
+}
+
+// invalidURLPlaceholder is returned by RedactURL when a safe scheme://host/path
+// form cannot be guaranteed.
+const invalidURLPlaceholder = "[invalid-url]"
+
+// RedactURL returns raw reduced to scheme://host/path so it can be logged or
+// embedded in errors without leaking userinfo credentials, query strings such
+// as the "p" passcode or OAuth codes, or fragments such as access tokens.
+// When raw is malformed, opaque, hostless, or not HTTP(S) and a clean form free
+// of '@', '?', '#', and control characters cannot be guaranteed, RedactURL
+// returns "[invalid-url]".
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.Opaque == "" {
+		u.User = nil
+		u.RawQuery = ""
+		u.ForceQuery = false
+		u.Fragment = ""
+		u.RawFragment = ""
+		u.Opaque = ""
+		return u.String()
+	}
+	return redactMalformedURL(raw)
+}
+
+// redactMalformedURL is the conservative fallback for URLs that url.Parse
+// cannot represent safely. It strips any userinfo (everything through the last
+// '@' before the first '/'), the query, and the fragment, and returns the
+// placeholder when what remains is not a clean scheme://host[:port]/path.
+func redactMalformedURL(raw string) string {
+	lower := strings.ToLower(raw)
+	var scheme string
+	switch {
+	case strings.HasPrefix(lower, "https://"):
+		scheme = "https"
+	case strings.HasPrefix(lower, "http://"):
+		scheme = "http"
+	default:
+		return invalidURLPlaceholder
+	}
+	rest := raw[len(scheme)+len("://"):]
+	head, tail := rest, ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		head, tail = rest[:i], rest[i:]
+	}
+	if at := strings.LastIndexByte(head, '@'); at >= 0 {
+		head = head[at+1:]
+	}
+	if i := strings.IndexAny(head, "?#"); i >= 0 {
+		head = head[:i]
+	}
+	if i := strings.IndexAny(tail, "?#"); i >= 0 {
+		tail = tail[:i]
+	}
+	if !isCleanHostPort(head) {
+		return invalidURLPlaceholder
+	}
+	out := scheme + "://" + head + tail
+	for _, r := range out {
+		if r == '@' || r == '?' || r == '#' || r <= 0x20 || r == 0x7f {
+			return invalidURLPlaceholder
+		}
+	}
+	return out
+}
+
+// isCleanHostPort reports whether s is a plausible host with an optional
+// all-numeric port. A non-numeric "port" may be a user:password pair, so it is
+// rejected rather than echoed.
+func isCleanHostPort(s string) bool {
+	if s == "" {
+		return false
+	}
+	host := s
+	bracketed := false
+	if strings.HasPrefix(s, "[") {
+		end := strings.IndexByte(s, ']')
+		if end < 0 {
+			return false
+		}
+		bracketed = true
+		host = s[:end+1]
+		if port := s[end+1:]; port != "" && !isNumericPort(port) {
+			return false
+		}
+	} else if i := strings.LastIndexByte(s, ':'); i >= 0 {
+		host = s[:i]
+		if !isNumericPort(s[i:]) {
+			return false
+		}
+	}
+	if host == "" || strings.ContainsAny(host, "%@ \t") {
+		return false
+	}
+	return bracketed || !strings.Contains(host, ":")
+}
+
+// isNumericPort reports whether s is ":" followed by one or more digits.
+func isNumericPort(s string) bool {
+	if len(s) < 2 || s[0] != ':' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// RedactArgs joins args with spaces for logging, replacing every embedded
+// HTTP(S) URL (bare, "--flag=URL", or attached "-uURL") with its RedactURL form.
+func RedactArgs(args []string) string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = redactArg(a)
+	}
+	return strings.Join(out, " ")
+}
+
+func redactArg(a string) string {
+	i := strings.Index(a, "://")
+	if i < 0 {
+		return a
+	}
+	start := i
+	lower := strings.ToLower(a)
+	if j := strings.Index(lower, "https://"); j >= 0 {
+		start = j
+	} else if j := strings.Index(lower, "http://"); j >= 0 {
+		start = j
+	} else {
+		for start > 0 {
+			c := a[start-1]
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+				break
+			}
+			start--
+		}
+	}
+	return a[:start] + RedactURL(a[start:])
 }

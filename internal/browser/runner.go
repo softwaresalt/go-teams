@@ -65,8 +65,14 @@ func (r *ChromeRunner) run(ctx context.Context, opts Options, target string) err
 	defer cancelBrowser()
 
 	if err := chromedp.Run(browserCtx, chromedp.Navigate(target)); err != nil {
-		return fmt.Errorf("browser: navigate to %s: %w", target, err)
+		return navigateError(target, err)
 	}
 	<-browserCtx.Done()
 	return nil
+}
+
+// navigateError wraps a navigation failure, replacing target with its
+// RedactURL form so passcodes, credentials, and tokens never reach logs.
+func navigateError(target string, err error) error {
+	return fmt.Errorf("browser: navigate to %s: %w", teams.RedactURL(target), err)
 }

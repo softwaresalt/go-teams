@@ -155,3 +155,84 @@ func TestValidateMeetingURL(t *testing.T) {
 		})
 	}
 }
+
+func TestRedactURL(t *testing.T) {
+	secrets := []string{"user", "pass", "tok", "frag", "secret", "oauth", "xyz"}
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"valid with userinfo query fragment", "https://user:pass@teams.microsoft.com/meet/123?p=tok#frag", "https://teams.microsoft.com/meet/123"},
+		{"passcode query", "https://teams.microsoft.com/meet/123?p=secret-passcode", "https://teams.microsoft.com/meet/123"},
+		{"oauth code and token fragment", "https://teams.microsoft.com/v2/?code=oauth#access_token=xyz", "https://teams.microsoft.com/v2/"},
+		{"force query", "https://teams.microsoft.com/meet/123?", "https://teams.microsoft.com/meet/123"},
+		{"loopback with port", "http://127.0.0.1:8080/meet/x?p=secret", "http://127.0.0.1:8080/meet/x"},
+		{"no secrets", "https://teams.microsoft.com/meet/123", "https://teams.microsoft.com/meet/123"},
+		{"malformed port with userinfo", "https://user:pass@teams.microsoft.com:badport/meet/123?p=tok", "[invalid-url]"},
+		{"malformed escape in host", "https://user:pass@bad%zz/path?p=tok#frag", "[invalid-url]"},
+		{"hostless query", "https://?p=secret", "[invalid-url]"},
+		{"opaque url", "https:user:pass@teams.microsoft.com/x?p=tok", "[invalid-url]"},
+		{"non-http scheme", "msteams://teams.microsoft.com/x?p=secret", "[invalid-url]"},
+		{"empty", "", "[invalid-url]"},
+		{"control character", "https://teams.microsoft.com/x\x00?p=secret", "[invalid-url]"},
+		{"userinfo hiding query char", "https://user:p?ss@bad%zz/x#frag", "[invalid-url]"},
+		{"relative path", "/meet/123?p=secret", "[invalid-url]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactURL(tc.raw)
+			assert.Equal(t, tc.want, got)
+			for _, s := range secrets {
+				assert.NotContains(t, got, s)
+			}
+			assert.NotContains(t, got, "?")
+			assert.NotContains(t, got, "#")
+		})
+	}
+}
+
+func TestRedactURLMalformedNeverLeaksUserinfo(t *testing.T) {
+	inputs := []string{
+		"https://user:pass@teams.microsoft.com:badport/meet/123?p=tok",
+		"https://user:pass@[::1/x?p=tok#frag",
+		"http://user:pass@host with space/x?p=tok",
+	}
+	for _, raw := range inputs {
+		got := RedactURL(raw)
+		for _, s := range []string{"user", "pass", "tok", "frag"} {
+			assert.NotContains(t, got, s, "input %q produced %q", raw, got)
+		}
+	}
+}
+
+func TestRedactArgs(t *testing.T) {
+	got := RedactArgs([]string{
+		"join", "--url=https://user:pass@teams.microsoft.com/meet/1?p=tok#frag",
+		"-uhttps://teams.microsoft.com/meet/2?p=secret2",
+		"https://teams.microsoft.com/meet/3?p=secret3", "-o", `C:\out\x.md`,
+	})
+	assert.Equal(t,
+		`join --url=https://teams.microsoft.com/meet/1 -uhttps://teams.microsoft.com/meet/2 https://teams.microsoft.com/meet/3 -o C:\out\x.md`,
+		got)
+	for _, s := range []string{"user", "pass", "tok", "frag", "secret"} {
+		assert.NotContains(t, got, s)
+	}
+}
+
+func TestValidateMeetingURLErrorsNeverEchoSecrets(t *testing.T) {
+	inputs := []string{
+		"https://example.com/x?p=secret-passcode#access_token=xyz",
+		"http://teams.microsoft.com/meet/1?p=secret-passcode",
+		"https://user:pass@teams.microsoft.com/x?code=oauth",
+		"https://user:pass@bad%zz/path?p=secret-passcode",
+		"msteams://teams.microsoft.com/x?p=secret-passcode",
+	}
+	for _, raw := range inputs {
+		err := ValidateMeetingURL(raw)
+		require.Error(t, err, raw)
+		for _, s := range []string{"secret-passcode", "xyz", "pass", "oauth", "user"} {
+			assert.NotContains(t, err.Error(), s, "input %q error %q", raw, err.Error())
+		}
+	}
+}

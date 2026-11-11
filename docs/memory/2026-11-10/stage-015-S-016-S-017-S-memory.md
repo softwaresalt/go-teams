@@ -95,8 +95,9 @@ active stash entries in the operator-selected sequence:
     * `016.005-T` (`XS` / `trivial`, `docs`, depends on `016.003-T`):
       `README.md`
   * **`017-F`** -> **`017-S`** (`blocks 016-S`):
-    * `017.001-T` (`XS` / `low`, `docs`):
-      `.github/skills/shipment-reconcile/SKILL.md`
+    * `017.001-T` (`S` / `low`, `docs`):
+      `.github/skills/shipment-reconcile/SKILL.md`,
+      `.github/agents/_ship.agent.md`
     * `017.002-T` (`XS` / `low`, `code`): `internal/browser/recap.go`,
       `internal/browser/recap_test.go`
 
@@ -163,6 +164,32 @@ Remediated all 5 in-scope Copilot review threads on staging PR #37
      `retained_description_mention` deliberation whose sole referencing feature
      just shipped while keeping `retained_shared_reference` and
      `retained_live_status` deliberations untouched in `.backlogit/queue/`.
+
+## PR #37 Round 2 Copilot review remediation (P-021 C1)
+
+Remediated the single in-scope Round 2 Copilot review thread on staging PR #37
+(`chore/stage-015-s-016-s-017-s`):
+
+1. **Thread 1 (`PRRT_kwDOTStvas62FCyn`, comment `4535428311` on `.backlogit/queue/017.001-T.md:30`) — Ship cleanup ignores deliberation retention dispositions**:
+   * Updated `.backlogit/queue/017.001-T.md` (`size: S`, 2 files:
+     `.github/skills/shipment-reconcile/SKILL.md` and
+     `.github/agents/_ship.agent.md`), `.backlogit/queue/017-F.md`,
+     `.backlogit/queue/017-S.md`, `.backlogit/queue/006-DL.md`,
+     `docs/decisions/2026-11-10-reconcile-deliberation-and-headed-sandbox-deliberation.md`,
+     and `docs/plans/2026-11-10-reconcile-deliberation-and-headed-sandbox-plan.md`
+     so `017.001-T` explicitly includes updating
+     `.github/agents/_ship.agent.md` Post-Merge Closure Step 7 ("Source artifact
+     cleanup", lines ~856–859) to honor the exact same INV-12 retention
+     dispositions and live-reference checks: only archive a linked deliberation
+     during post-merge source-artifact cleanup when its Step 0(c) /
+     `compute_linked_deliberation_disposition` outcome is `archive` (if not
+     already archived by cascade) OR `retained_description_mention` with
+     `status == "queued"` and zero remaining live references in
+     `.backlogit/queue/` after the shipment's features and tasks have been
+     archived, and never archive a deliberation whose disposition is
+     `retained_shared_reference`, `retained_live_status`,
+     `retained_engine_unverified`, `retained_ambiguous`, or
+     `retained_read_error`.
 
 ## Excluded / deferred entries
 

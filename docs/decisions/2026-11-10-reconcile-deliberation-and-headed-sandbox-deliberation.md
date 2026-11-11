@@ -110,10 +110,11 @@ Both separately triggered Step 1 obligations were executed for `1B03802C` and
     mentions its deliberation in prose/references without setting
     `custom_fields.source_deliberation_id`, contradicting both backlogit 1.12
     and `autoharness.gates.shipment_closure.compute_linked_deliberation_disposition`.
-* **Option 1B (Chosen — Align `SKILL.md` with `compute_linked_deliberation_disposition` and backlogit 1.12 INV-12 semantics with a pre/post retained-deliberation preservation check)**:
+* **Option 1B (Chosen — Align `SKILL.md` and `_ship.agent.md` with `compute_linked_deliberation_disposition` and backlogit 1.12 INV-12 semantics with a pre/post retained-deliberation preservation check)**:
   Update `.github/skills/shipment-reconcile/SKILL.md` (Step 0(c), Cascade Close
   Sub-Procedure step 3, post-cascade source-artifact cleanup, and Quality
-  Criteria) so that:
+  Criteria) and `.github/agents/_ship.agent.md` (Post-Merge Closure Step 7
+  "Source artifact cleanup", lines ~856–859) so that:
   1. Step 0(c) records each validated linked deliberation's link kind
      (`custom_fields.source_deliberation_id` vs description/references mention)
      and evaluates its pre-close INV-12 disposition via
@@ -140,12 +141,20 @@ Both separately triggered Step 1 obligations were executed for `1B03802C` and
      cascade call, the skill MUST halt with `unexpected-cascade`
      (`HALT — cascade archived retained deliberation {id}, revert required`) and
      run the `git-revert-on-cascade` recovery procedure.
-  3. In post-cascade source-artifact cleanup, ONLY a
-     `retained_description_mention` deliberation whose sole referencing feature
-     just shipped and has no remaining live references may be archived
-     explicitly by the agent (`backlogit archive <dl_id>`), whereas
-     `retained_shared_reference` and `retained_live_status` deliberations MUST
-     remain in `.backlogit/queue/` untouched.
+  3. In both `shipment-reconcile/SKILL.md` post-cascade source-artifact cleanup
+     AND `.github/agents/_ship.agent.md` Post-Merge Closure Step 7 ("Source
+     artifact cleanup", lines ~856–859), replace unconditional
+     `source_deliberation_id` archival with disposition-aware cleanup: only
+     archive a linked deliberation when its Step 0(c) /
+     `compute_linked_deliberation_disposition` outcome is `archive` (if not
+     already archived by cascade) OR `retained_description_mention` with
+     `status == "queued"` and **zero remaining live references** in
+     `.backlogit/queue/` after the shipment's features and tasks have been
+     archived; never archive a deliberation whose disposition is
+     `retained_shared_reference`, `retained_live_status`,
+     `retained_engine_unverified`, `retained_ambiguous`, or
+     `retained_read_error` (such deliberations MUST remain in
+     `.backlogit/queue/` untouched).
 
 ### Issue 2 (`FC763C17`): Direct-exec headed browser launcher sandbox opt-in
 
@@ -183,11 +192,13 @@ deliberation disposition and headed browser sandbox opt-in*) and shipment
 `backlogit dep add 017-S 016-S --type blocks`) with two strictly width-isolated
 tasks:
 
-1. **`017.001-T` (U1, `docs` / skill domain — `.github/skills/shipment-reconcile/SKILL.md`)**:
-   Reconcile Step 0(c), Cascade Close Sub-Procedure step 3, and Quality Criteria
-   in `.github/skills/shipment-reconcile/SKILL.md` with backlogit 1.12 and
+1. **`017.001-T` (U1, `docs` / skill & agent domain — `.github/skills/shipment-reconcile/SKILL.md` & `.github/agents/_ship.agent.md`)**:
+   Reconcile Step 0(c), Cascade Close Sub-Procedure step 3, post-cascade
+   cleanup, and Quality Criteria in `.github/skills/shipment-reconcile/SKILL.md`
+   AND Post-Merge Closure Step 7 ("Source artifact cleanup", lines ~856–859) in
+   `.github/agents/_ship.agent.md` with backlogit 1.12 and
    `compute_linked_deliberation_disposition` (`retained_description_mention`
-   and INV-12 retention rules) (`XS` / `low`).
+   and INV-12 retention rules and live-reference checks) (`S` / `low`).
 2. **`017.002-T` (U2, `code` domain — `internal/browser/recap.go` & `internal/browser/recap_test.go`)**:
    Make the direct-exec browser launcher (`launchCleanHeadedBrowser` /
    `cleanBrowserArgs` / `cleanHeadedBrowserArgs`) honor

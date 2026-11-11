@@ -30,6 +30,7 @@ type captureFlags struct {
 	headless         bool
 	headed           bool
 	audio            bool
+	recapAudio       bool
 }
 
 func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
@@ -47,7 +48,8 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
 	cmd.Flags().BoolVar(&f.headless, "headless", false, "run browser in headless mode")
 	cmd.Flags().BoolVar(&f.headed, "headed", false, "open a visible browser window for interactive authentication")
-	cmd.Flags().BoolVar(&f.audio, "audio", false, "also capture tab audio to an MP3 file")
+	cmd.Flags().BoolVar(&f.audio, "audio", false, "also capture meeting or recap audio to an MP3 file")
+	cmd.Flags().BoolVar(&f.recapAudio, "recap-audio", false, "also capture Meeting Recap audio to an MP3 file")
 }
 
 func applyOutputTarget(cfg *config.Config, target string) {
@@ -110,6 +112,9 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if cmd.Flags().Changed("audio") {
 		cfg.CaptureAudio = f.audio
 	}
+	if cmd.Flags().Changed("recap-audio") {
+		cfg.CaptureAudio = f.recapAudio
+	}
 }
 
 func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) []string {
@@ -161,6 +166,13 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 			out = append(out, "--audio")
 		} else {
 			out = append(out, "--audio=false")
+		}
+	}
+	if cmd.Flags().Changed("recap-audio") {
+		if f.recapAudio {
+			out = append(out, "--recap-audio")
+		} else {
+			out = append(out, "--recap-audio=false")
 		}
 	}
 	return out

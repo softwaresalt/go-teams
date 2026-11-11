@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -316,36 +317,106 @@ func TestSessionRunAppendsAISummaryWhenProvided(t *testing.T) {
 	}
 }
 
-func TestSessionRunRecapModeSkipsAudioEvenWhenCaptionsOnlyFalse(t *testing.T) {
-	dir := t.TempDir()
-	s := NewSession(SessionConfig{
-		OutputDir:    dir,
-		MeetingURL:   "https://teams.cloud.microsoft/l/meetingrecap?threadId=1",
-		BotName:      "Bot",
-		Now:          fixedTime(),
-		CaptionsOnly: false, // Even if audio was requested, Recap mode must skip live audio capture.
-	})
-	s.now = fixedTime
+type coordinatedRecapMeeting struct {
+	fakeMeeting
+	waitForAudio    bool
+	captionsStarted chan struct{}
+	audioStarted    chan struct{}
+}
 
-	fm := &fakeMeeting{
-		isRecap:        true,
-		events:         []captionPair{{"Alice", "Recap line."}},
-		aiSummary:      "Meeting notes:\nScope:\nAgreed on scope.\n",
-		audioErr:       errors.New("audio should not be called in recap mode"),
-		audioReturnNow: true,
-	}
-
-	if err := s.Run(context.Background(), fm); err != nil {
-		t.Fatalf("Run in recap mode failed: %v", err)
-	}
-	for _, call := range fm.calls() {
-		if call == "audio" {
-			t.Fatalf("CaptureAudio must not be called in recap mode; calls=%v", fm.calls())
+func (m *coordinatedRecapMeeting) EnableCaptions(ctx context.Context, sink browser.CaptionSink) error {
+	close(m.captionsStarted)
+	if m.waitForAudio {
+		select {
+		case <-m.audioStarted:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".md") {
-		t.Fatalf("expected only 1 .md file in recap mode, got %v", entries)
+	return m.fakeMeeting.EnableCaptions(ctx, sink)
+}
+
+func (m *coordinatedRecapMeeting) CaptureAudio(ctx context.Context, w io.Writer) error {
+	m.mark("audio")
+	close(m.audioStarted)
+	select {
+	case <-m.captionsStarted:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	_, err := w.Write([]byte("synthetic mp3"))
+	return err
+}
+
+func TestSessionRunRecapModeHonorsCaptionsOnlyFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		captionsOnly bool
+		wantAudio    bool
+	}{
+		{name: "default transcript only", captionsOnly: true},
+		{name: "opted in audio", wantAudio: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := NewSession(SessionConfig{
+				OutputDir: dir, MeetingURL: "https://teams.cloud.microsoft/l/meetingrecap?threadId=1",
+				BotName: "Bot", Now: fixedTime(), CaptionsOnly: tc.captionsOnly,
+			})
+			s.now = fixedTime
+			m := &coordinatedRecapMeeting{
+				fakeMeeting: fakeMeeting{
+					isRecap:   true,
+					events:    []captionPair{{speaker: "Alice", text: "Recap line."}},
+					aiSummary: "Synthetic meeting summary",
+				},
+				waitForAudio:    tc.wantAudio,
+				captionsStarted: make(chan struct{}),
+				audioStarted:    make(chan struct{}),
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := s.Run(ctx, m); err != nil {
+				t.Fatalf("run recap: %v", err)
+			}
+			audioCalled := false
+			for _, call := range m.calls() {
+				audioCalled = audioCalled || call == "audio"
+			}
+			if audioCalled != tc.wantAudio {
+				t.Errorf("CaptureAudio called = %v, want %v", audioCalled, tc.wantAudio)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("read outputs: %v", err)
+			}
+			var hasMD, hasMP3 bool
+			for _, entry := range entries {
+				if strings.HasSuffix(entry.Name(), ".md") {
+					hasMD = true
+					b, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+					if readErr != nil {
+						t.Fatalf("read transcript: %v", readErr)
+					}
+					if !strings.Contains(string(b), "Recap line.") || !strings.Contains(string(b), "Synthetic meeting summary") {
+						t.Errorf("transcript lacks recap or summary: %s", b)
+					}
+				}
+				if strings.HasSuffix(entry.Name(), ".mp3") {
+					hasMP3 = true
+					b, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+					if readErr != nil {
+						t.Fatalf("read audio: %v", readErr)
+					}
+					if string(b) != "synthetic mp3" {
+						t.Errorf("unexpected audio output: %q", b)
+					}
+				}
+			}
+			if !hasMD || hasMP3 != tc.wantAudio {
+				t.Errorf("outputs: markdown=%v mp3=%v, want markdown=true mp3=%v", hasMD, hasMP3, tc.wantAudio)
+			}
+		})
 	}
 }
 

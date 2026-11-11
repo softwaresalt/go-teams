@@ -68,9 +68,6 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	}
 
 	captionsOnly := s.cfg.CaptionsOnly
-	if rm, ok := m.(browser.RecapMeeting); ok && rm.IsRecap() {
-		captionsOnly = true
-	}
 
 	outCfg := OutputConfig{
 		Dir:              s.cfg.OutputDir,

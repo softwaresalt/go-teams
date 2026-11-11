@@ -76,6 +76,9 @@ external reviewer model.
 | Correctness | Test default cases set `TEAMS_DISABLE_SANDBOX` to empty so an ambient value cannot flip them | No action |
 | Scope | Changes stay inside the four authorized files plus `017-S` backlog, closure, and memory docs; no `010-S` or stash entry touched | No action |
 | Maintainability | One new unexported constructor; `cleanBrowserArgs` and `cleanHeadedBrowserArgs` are thin wrappers, so there is one place that builds the arguments | No action |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62TTB_`): the Ship Step 7 deliberation cleanup only enumerated `source_deliberation_id`, so a description-only deliberation (the `retained_description_mention` case) was never considered, notably on the safe-close path | Fixed in-scope (P-021 C1: completes the authorized Step 7 reconciliation); Step 7 now enumerates the Step 0(c) snapshot set or the same validated source/description/references discovery |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62TTCh`): the preservation check required retained deliberations to sit in `queue/`, rejecting a valid pre-close `done` record in `archive/` | Fixed in-scope (P-021 C1: same sentence of the authorized check); the check and report now use the snapshotted location and declared status, with Step 7 wording aligned |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62TTDQ`): the `archive`-disposition fallback in Cascade Close step 7 was unreachable because step 3 requires it in `archived_ids` and step 6 blocks step 7 otherwise | Fixed in-scope (P-021 C1: removes an unreachable branch of the authorized step); strict halt preserved, step 7 now handles only `retained_description_mention`; `_ship.agent.md` keeps the `archive` archive call only for the safe-close path |
 
 Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 

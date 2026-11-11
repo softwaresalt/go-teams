@@ -801,14 +801,17 @@ above.
      `required_ids`; retained deliberations are in **neither** set.
    * **Retained-deliberation preservation check (pre/post).** *Pre*: before
      step 1's invocation, record the retained set — every validated linked
-     deliberation with a retained disposition — and confirm each resolves to
-     exactly one record in `.backlogit/queue/` with its Step 0(c)
-     declared status. *Post*: immediately after the cascade call, confirm
+     deliberation with a retained disposition — and its snapshotted
+     location (`.backlogit/queue/` or `.backlogit/archive/`, resolved by
+     Step 0(c) from exactly one record) and declared status. *Post*:
+     immediately after the cascade call, confirm
      that no retained deliberation appears in `archived_ids` and that each
-     is still present in `.backlogit/queue/` with its pre-close declared
-     status (a `retained_shared_reference` or `retained_live_status`
+     is still present at its snapshotted location with its pre-close declared
+     status, never moved or re-statused (a `retained_shared_reference` or
+     `retained_live_status`
      deliberation must remain live for the other unshipped work that
-     depends on it). If any retained deliberation is archived or missing,
+     depends on it). If any retained deliberation is archived, moved, or
+     missing,
      halt with `unexpected-cascade`
      (`HALT — cascade archived retained deliberation {id}, revert required`),
      emit a **P-005** violation, and run the `git-revert-on-cascade`
@@ -896,7 +899,8 @@ above.
    (`archived_ids - allowed_ids` and `required_ids - archived_ids`) — so a
    vacuous `required_ids` is visible in the report rather than silent — the
    retained-deliberation preservation check outcome (retained IDs, and
-   whether each remained in `.backlogit/queue/` untouched), and
+   whether each remained at its snapshotted location, unmoved and with its
+   declared status unchanged), and
    the parent_id-preservation verification outcome (against the Step 0(b)
    snapshot).
 6. **Gate decision**: `returned_ids` empty, `archived_ids - allowed_ids`
@@ -909,11 +913,10 @@ above.
    verification failure above → the corresponding `HALT`; do
    not proceed to step 7, post-mode, or any commit step.
 7. **Post-cascade source-artifact cleanup (linked deliberations)**: runs
-   only after step 6 returns `CLOSED`, and only for linked deliberations of
-   qualifying feature members that the cascade did not already archive. Use
-   the Step 0(c) disposition snapshot, never a fresh guess:
-   * `archive` and not present in `archived_ids` → archive it explicitly
-     (`backlogit archive <dl_id>`).
+   only after step 6 returns `CLOSED`. Use the Step 0(c) disposition
+   snapshot, never a fresh guess. An `archive`-disposition deliberation is
+   never handled here: step 3 requires it in `archived_ids`, and its absence
+   halts closure before this step, so no fallback archive exists for it.
    * `retained_description_mention` with a declared `status` of `queued`
      **and zero remaining live references** → archive it explicitly
      (`backlogit archive <dl_id>`). "Zero remaining live references" means
@@ -927,8 +930,9 @@ above.
    * `already-archived` → skip and log.
    * `retained_shared_reference`, `retained_live_status`,
      `retained_engine_unverified`, `retained_ambiguous`, and
-     `retained_read_error` → **never archive**: leave the record in
-     `.backlogit/queue/` untouched and log it as retained in the report.
+     `retained_read_error` → **never archive**: leave the record at its
+     snapshotted location, unmoved and unmodified, and log it as retained in
+     the report.
    Record every archived, skipped, and retained deliberation ID with its
    disposition in the cascade-close report.
 
@@ -1112,7 +1116,7 @@ If pre-mode cannot acquire the lock because another process holds it:
 * Close-path selection is made **only** from the machine-checkable classification result (Step 0), never inferred from prose or manifest shape alone; any classifier error, ambiguity, or unresolved precondition falls back to safe-close
 * Step 0(c)'s "fully covered" check walks the qualifying feature's **full descendant tree, at every depth** (via a full `parent_id` graph, not a single-level scan of direct children only) — a manifest such as `[feature, task]` where that task has an out-of-manifest subtask must fall back to safe-close, never wrongly qualify for `CASCADE` (155-S, PR #407 review, thread PRRT_kwDORzpWpM6b2MJv)
 * The Cascade Close Sub-Procedure independently verifies `returned_ids` is empty, `archived_ids` against the two-set `allowed_ids` / `required_ids` gate (step 3: `allowed_ids` = manifest tasks + qualifying feature members + each qualifying feature member's validated linked deliberation IDs whose Step 0(c) disposition is `archive` (`expected_cascade`) or `already-archived` (tolerated) (Step 0(c), same engine-defined `source_deliberation_id` (taken as a complete literal string, never regex-scanned) / description / references sources — the latter two scanned with the exact `\b(?:DL\d+|[0-9]+(?:\.[0-9]+)*-DL)\b` matcher Backlogit's own `internal/core.deliberationIDPattern` uses, never a broader "any embedded deliberation ID" reading — and existence-and-`artifact_type: deliberation` validation Backlogit's own `collectArchiveCandidateIDs` uses — never a blanket allowance for arbitrary IDs) + the shipment record; `required_ids` = the shipment record and every qualifying feature member, both unconditionally, plus every other allowed member (a manifest task item, or a qualifying feature member's linked deliberation with disposition `archive`) NOT truly `status: archived` in the Step 0(b)/(c) pre-close declared-status snapshot; `archived_ids - allowed_ids` non-empty halts with `HALT — cascade archived unexpected artifact {id}`, `required_ids - archived_ids` non-empty halts with `HALT — cascade did not archive required artifact {id}`, evaluated as two independent, never-merged conditions — a truly pre-archived **non-shipment, non-feature** allowed member (i.e. a manifest task item, or a qualifying feature's linked deliberation, e.g. 147-F's already-archived 027-DL) has no transition to report and is correctly, expectedly absent from `archived_ids`, never a mismatch, but this tolerance never extends to the shipment record itself, which remains unconditionally required regardless of its own pre-close declared status, nor does it extend to a qualifying feature member itself, which is likewise unconditionally required regardless of its own pre-close declared status — since Backlogit's own `ShipShipment` forces every explicit qualifying feature member through `status: done` before archive-candidate collection ever runs, so it is never still `archived` by that point either), and no `parent_id` was cleared — a mismatch on any of these halts fail-closed with a P-005 violation even though the cascade path was itself permitted
-* Linked deliberations classified into any retained INV-12 disposition (`retained_description_mention`, `retained_shared_reference`, `retained_live_status`, `retained_engine_unverified`, `retained_ambiguous`, `retained_read_error`) are excluded from BOTH `allowed_ids` and `required_ids` for the cascade call; the step 3 pre/post retained-deliberation preservation check halts with `unexpected-cascade` (`HALT — cascade archived retained deliberation {id}, revert required`) and runs the `git-revert-on-cascade` recovery if one is archived or missing; step 7 post-cascade cleanup archives only an `archive`-disposition deliberation the cascade left behind, or a `retained_description_mention` deliberation with `status: queued` and zero remaining live references, and never archives any other retained disposition
+* Linked deliberations classified into any retained INV-12 disposition (`retained_description_mention`, `retained_shared_reference`, `retained_live_status`, `retained_engine_unverified`, `retained_ambiguous`, `retained_read_error`) are excluded from BOTH `allowed_ids` and `required_ids` for the cascade call; the step 3 pre/post retained-deliberation preservation check halts with `unexpected-cascade` (`HALT — cascade archived retained deliberation {id}, revert required`) and runs the `git-revert-on-cascade` recovery if one is archived, moved, or missing from its snapshotted location; step 7 post-cascade cleanup archives only a `retained_description_mention` deliberation with `status: queued` and zero remaining live references (an `archive`-disposition deliberation is required in `archived_ids` by step 3, never cleaned up in step 7), and never archives any other retained disposition
 * Safe-close computes the protected set (parent feature + unshipped siblings) from expected IDs and proves it is fully present in queue at a baseline gate before archiving anything
 * Safe-close verifies the protected set survives after every single-item archival (verify-after-each invariant), with no pre-archived exemption for protected-set members
 * Safe-close moves the shipment record to live `shipped`, verifies it, explicitly archives only that record, and verifies `archived_status: shipped` before closure completes

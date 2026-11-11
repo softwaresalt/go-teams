@@ -94,13 +94,30 @@ routing through Step 2 deliberation (`002-DL`) prior to implementation planning
   and `TestCompiledBinaryCapturesRecapToExplicitOutput`
   (`internal/cli/binary_automation_test.go`) continue to pass against local
   `httptest.Server` fixtures.
-* **R2 (URL query and fragment redaction — `EEA7F685`)**: Provide a
-  deterministic `teams.RedactURL(raw string) string` helper that strips query
-  parameters (`?p=`, `code=`, etc.), userinfo, and URL fragments (returning
-  `scheme://host/path` or `[redacted-url]` on unparseable strings containing
-  query/fragment separators) and apply it to navigation error wrapping in
-  `internal/browser/runner.go` and `internal/browser/meeting_chrome.go` as well
-  as queue argument logging in `internal/cli/queue.go`.
+* **R2 (URL userinfo, query, and fragment redaction — `EEA7F685`)**: Provide a
+  deterministic `teams.RedactURL(raw string) string` helper (and
+  `teams.RedactArgs(args []string) string`) that:
+  * For a parseable HTTP/HTTPS URL with a non-empty host (`u.Opaque == ""`):
+    clears `u.User = nil`, `u.RawQuery = ""`, `u.ForceQuery = false`,
+    `u.Fragment = ""`, and `u.Opaque = ""` (keeping only normalized
+    `scheme://host/path`).
+  * For the malformed-URL / fallback path (when `url.Parse` fails, scheme is
+    non-HTTP(S), `u.Opaque != ""`, or `u.Host == ""`): never simply slices up to
+    `?` or `#` (which would leave `https://user:secret@bad%zz/path` or
+    `https://?p=secret` leaking userinfo or tokens). Instead, if the fallback
+    cannot safely extract a clean `scheme://host/path` free of userinfo (`@`),
+    query (`?`), and fragment (`#`), it returns a constant placeholder
+    `"[invalid-url]"` (or strips any `userinfo@` before the host in addition to
+    stripping `?query` and `#fragment`, and returns `"[invalid-url]"` if any
+    `@`, `?`, `#`, or control character remains).
+  * Applies `RedactURL` / `RedactArgs` to navigation error wrapping in
+    `internal/browser/runner.go` and queue argument logging in
+    `internal/cli/queue.go`, with unit tests explicitly covering embedded
+    userinfo credentials on both a valid URL
+    (`https://user:pass@teams.microsoft.com/meet/123?p=tok#frag`) and a
+    malformed URL
+    (`https://user:pass@teams.microsoft.com:badport/meet/123?p=tok`), asserting
+    that neither `user`, `pass`, `tok`, nor `frag` ever appears in the output.
 * **R3 (Opt-in Chromium sandbox disable — `D2023898`)**: Add
   `DisableSandbox bool` to `browser.Options` (and honor `TEAMS_DISABLE_SANDBOX=1`
   or `true` when `Options.DisableSandbox` is false) so `StealthFlags(opts Options)`

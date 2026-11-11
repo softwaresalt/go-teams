@@ -60,6 +60,39 @@ objectives:
 * **`010-S`** (`010-F` + 9 tasks): Untouched in `.backlogit/queue/` (blocked on
   live Teams meeting / organizer session per operator exclusion).
 
+## Pre-PR local review remediation
+
+Addressed two findings surfaced during pre-PR local review on staging branch
+`chore/stage-013-s-014-s`:
+
+1. **Finding 1 (P1 — Malformed-URL fallback in `RedactURL` userinfo credentials):**
+   Hardened the `teams.RedactURL(raw string) string` specification across
+   `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md`, `002-DL`, and
+   `013.002-T`. For parseable HTTP/HTTPS URLs with a non-empty host
+   (`u.Opaque == ""`), `RedactURL` clears `u.User = nil`, `u.RawQuery = ""`,
+   `u.ForceQuery = false`, `u.Fragment = ""`, and `u.Opaque = ""` (keeping only
+   normalized `scheme://host/path`). For malformed or fallback URLs (when
+   `url.Parse` fails, scheme is non-HTTP(S), `u.Opaque != ""`, or
+   `u.Host == ""`), `RedactURL` never simply slices up to `?` or `#`; if it
+   cannot safely extract a clean `scheme://host/path` free of userinfo (`@`),
+   query (`?`), fragment (`#`), and control characters, it returns the constant
+   placeholder `"[invalid-url]"`. Added explicit unit test requirements for
+   embedded userinfo credentials on both a valid URL
+   (`https://user:pass@teams.microsoft.com/meet/123?p=tok#frag`) and a
+   malformed URL (`https://user:pass@teams.microsoft.com:badport/meet/123?p=tok`),
+   asserting that neither `user`, `pass`, `tok`, nor `frag` ever appears in the
+   output.
+2. **Finding 2 (P2 — Align `014-F` audio deliberation, plan, `003-DL`, and `014.001-T` on fixed golden reference test without zero-slack buffer):**
+   Aligned `docs/decisions/2026-11-10-audio-golden-test-and-ci-hygiene-deliberation.md`,
+   `docs/plans/2026-11-10-audio-golden-test-and-ci-hygiene-plan.md`, `003-DL`,
+   and `014.001-T` so that `014.001-T` tests deterministic, byte-for-byte
+   reproducibility against a fixed golden reference (pinned expected total byte
+   length, SHA-256 digest, and leading/trailing frame bytes for a deterministic
+   synthesized PCM input, plus byte-for-byte identical output across two
+   independent `NewEncoder` runs) WITHOUT constructing a zero-slack (`cap == len`)
+   buffer that would violate `checkptr` under `go test -race ./...`.
+
 ## Next step
 
 Return control to Orchestrator Step 1.5 to merge the staging artifacts to

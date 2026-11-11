@@ -21,10 +21,13 @@ determinism and CI status-check reporting:
    in `internal/audio/mp3.go`. While `009-S`'s post-merge closure record
    (`docs/closure/009-S-009-F-post-merge-closure.md`) proved at the source level
    that growing slice capacity (`cap`) without changing slice length (`len`)
-   does not alter the bytes `shine-mp3` encodes, `internal/audio/mp3_test.go`
-   currently checks only frame counts and non-empty buffer emission — it does
-   not compare the encoded MP3 output byte-for-byte against a zero-slack
-   reference or fixed SHA-256 digest.
+   does not alter the bytes `shine-mp3` encodes,    `internal/audio/mp3_test.go` currently checks only frame counts and
+   non-empty buffer emission — it does not verify deterministic byte-for-byte
+   reproducibility across encoder runs or compare the encoded MP3 output
+   against a fixed golden reference (pinned total byte length, SHA-256 digest,
+   and leading/trailing frame bytes; note that a live zero-slack `cap == len`
+   buffer MUST NOT be passed to `shine-mp3` under `-race` because that triggers
+   the exact `checkptr` fault fixed in `009-S`).
 2. **`D3EFD224`** (`low`, `task`): `.github/workflows/ci.yml` currently
    configures `paths-ignore` on both `push` and `pull_request` triggers for
    `.backlogit/**`, `docs/**`, `.autoharness/**`, and `**/*.md`. Because the
@@ -53,17 +56,26 @@ triggered Step 1 obligations were executed:
 
 ## Requirements and success criteria
 
-* **R1 (Deterministic MP3 byte-identity and fixed-reference regression test — `FE245033`)**:
-  Add a deterministic unit test in `internal/audio/mp3_test.go` that verifies:
-  1. Encoding a known deterministic PCM input (`sineMono(4 * monoSamplesPerFrame)`
-     and non-frame-aligned chunks flushed via `Flush()`) through `Encoder` (which
-     allocates `cap = len + encoderTailSlack`, including when the spare capacity
-     is pre-poisoned with non-zero values) produces byte-for-byte identical MP3
-     output to direct `mp3.NewEncoder(SampleRate, encodeChannels).Write` with an
-     exact-capacity (`cap == len`, zero-slack) stereo slice.
-  2. The encoded MP3 output for the canonical deterministic `sineMono` input
-     matches a pinned SHA-256 digest and byte length so any future `shine-mp3`
-     or `Encoder` change that alters output bytes is caught immediately.
+* **R1 (Deterministic MP3 byte-for-byte reproducibility and fixed golden reference regression test — `FE245033`)**:
+  As established in `009-S` (`docs/closure/009-S-009-F-post-merge-closure.md`
+  and `docs/compound/build-errors/shine-mp3-race-checkptr.md`), allocating a
+  zero-slack (`cap == len`) stereo buffer in `encodeFrames` triggers a Go
+  `-race` `checkptr` fault inside `shine-mp3` (`windowFilterSubband`). Therefore,
+  a unit test that runs under `go test -race ./...` MUST NOT call `shine-mp3`
+  with a zero-slack (`cap == len`) buffer. Instead, add a deterministic unit
+  test in `internal/audio/mp3_test.go` (`TestEncoderDeterministicGoldenReference`)
+  that verifies deterministic, byte-for-byte reproducibility against a **fixed
+  golden reference** without constructing a zero-slack buffer:
+  1. Encoding a deterministic synthesized mono PCM input
+     (`sineMono(4 * monoSamplesPerFrame)`, as well as non-frame-aligned chunk
+     sizes flushed via `Flush()`) across two independent `NewEncoder` runs
+     produces byte-for-byte identical MP3 output (`bytes.Equal`).
+  2. The encoded MP3 output for the canonical deterministic synthesized PCM
+     input matches a **fixed golden reference**: pinned expected total byte
+     length, pinned SHA-256 hex digest (`sha256.Sum256`), and pinned
+     leading/trailing MP3 frame bytes, catching any future `shine-mp3` or
+     `Encoder` change that alters output bytes while remaining 100% safe under
+     `go test -race ./...`.
 * **R2 (CI `pull_request` trigger hygiene — `D3EFD224`)**:
   Remove `paths-ignore` from the `pull_request:` trigger in
   `.github/workflows/ci.yml` (retaining `paths-ignore` on `push:` to `main` if
@@ -78,8 +90,8 @@ triggered Step 1 obligations were executed:
 
 | Option | Benefit | Limitation |
 |---|---|---|
-| Option A: Commit a binary `.mp3` golden file in `internal/audio/testdata/` | Direct `os.ReadFile` comparison | Adds a binary blob to git history for a pure-Go test |
-| Option B (chosen): Assert both exact byte-equality against a zero-slack (`cap == len`) reference encoder AND a pinned SHA-256 hex digest in `internal/audio/mp3_test.go`, plus remove `pull_request.paths-ignore` in `.github/workflows/ci.yml` | Proves both the `encoderTailSlack` byte-identity invariant and cross-run deterministic output without committing binary blobs; keeps CI `changes` check reporting on all PRs | None |
+| Option A: Commit a binary `.mp3` golden file in `internal/audio/testdata/` or invoke `shine-mp3` directly with a zero-slack (`cap == len`) buffer | Direct file or live buffer comparison | Binary blob pollutes git history; calling `shine-mp3` with a zero-slack (`cap == len`) buffer triggers a fatal `checkptr` crash under `go test -race ./...` (`009-S`) |
+| Option B (chosen): Assert deterministic byte-for-byte reproducibility across independent `NewEncoder` runs AND against a fixed golden reference (pinned byte length, SHA-256 hex digest, and leading/trailing frame bytes) in `internal/audio/mp3_test.go` without constructing a zero-slack buffer, plus remove `pull_request.paths-ignore` in `.github/workflows/ci.yml` | Locks in deterministic byte-for-byte MP3 output under `go test -race ./...` without violating `checkptr` or committing binary blobs; keeps CI `changes` check reporting on all PRs | None |
 
 ## Chosen direction
 
@@ -89,7 +101,7 @@ packaged in shipment **`014-S`** (chained after `013-S` via
 `backlogit dep add 014-S 013-S --type blocks`) with two width-isolated tasks:
 
 1. **`014.001-T` (U1, code/test domain)**: Add
-   `TestEncoderOutputByteIdenticalToZeroSlackAndGoldenHash` in
+   `TestEncoderDeterministicGoldenReference` in
    `internal/audio/mp3_test.go` (`XS` / `low`).
 2. **`014.002-T` (U2, CI config domain)**: Remove `paths-ignore` from the
    `pull_request` trigger in `.github/workflows/ci.yml` and align the

@@ -40,7 +40,7 @@ feature **`014-F`** and shipment **`014-S`**:
 
 | Requirement | Stash ID | Implementation unit | Verification |
 |---|---|---|---|
-| R1: Deterministic byte-for-byte and fixed SHA-256 reference regression test for `internal/audio` MP3 output | `FE245033` | U1 (`014.001-T`) | `go test -race ./internal/audio/...` (`TestEncoderOutputByteIdenticalToZeroSlackAndGoldenHash`) |
+| R1: Deterministic byte-for-byte reproducibility and fixed golden reference regression test for `internal/audio` MP3 output (without constructing a zero-slack buffer that would violate `checkptr` under `-race`) | `FE245033` | U1 (`014.001-T`) | `go test -race ./internal/audio/...` (`TestEncoderDeterministicGoldenReference`) |
 | R2: Remove `paths-ignore` from `pull_request` trigger in `.github/workflows/ci.yml` while keeping `test` job self-gated via `needs.changes.outputs.code == 'true'` | `D3EFD224` | U2 (`014.002-T`) | YAML structural verification and GitHub Actions `Detect code changes` check on PR |
 
 ## Implementation Units
@@ -48,18 +48,24 @@ feature **`014-F`** and shipment **`014-S`**:
 ### U1 (`014.001-T`) — Add deterministic fixed-reference MP3 byte-equality regression test in `internal/audio/mp3_test.go`
 
 * **Domain:** tests (Go). **Posture:** test-first. **Size:** `XS` | **Complexity:** `low`.
-* **What:** Add `TestEncoderOutputByteIdenticalToZeroSlackAndGoldenHash` in
-  `internal/audio/mp3_test.go` that:
-  1. Generates a deterministic mono PCM input via `sineMono(4 * monoSamplesPerFrame)`
-     and encodes it via `NewEncoder(&buf, SampleRate)`.
-  2. Encodes the identical interleaved dual-mono samples when the spare tail
-     capacity (`stereo[len(stereo):cap(stereo)]`) is filled with non-zero
-     sentinel values (`0x7FFF`, `-0x8000`) and asserts `bytes.Equal` with the
-     standard `Encoder` output, proving that `encoderTailSlack` capacity bytes
-     never influence the encoded MP3 stream.
-  3. Asserts the encoded MP3 byte length and `sha256.Sum256` hex digest against
-     a pinned constant reference so any future `shine-mp3` or `Encoder` change
-     that alters output bytes is caught deterministically.
+* **What:** Add `TestEncoderDeterministicGoldenReference` in
+  `internal/audio/mp3_test.go` that tests deterministic, byte-for-byte
+  reproducibility against a **fixed golden reference** WITHOUT constructing a
+  zero-slack (`cap == len`) stereo buffer (which would trigger a `shine-mp3`
+  `checkptr` fault under `go test -race ./...`, as documented in `009-S`
+  closure `docs/closure/009-S-009-F-post-merge-closure.md` and
+  `docs/compound/build-errors/shine-mp3-race-checkptr.md`):
+  1. Generates a deterministic synthesized mono PCM input via
+     `sineMono(4 * monoSamplesPerFrame)` and encodes it across two independent
+     `NewEncoder(&buf, SampleRate)` runs (including multi-chunk writes flushed
+     via `Flush()`), asserting byte-for-byte identical output (`bytes.Equal`)
+     across runs.
+  2. Asserts the encoded MP3 output against a **fixed golden reference**:
+     pinned expected total byte length, pinned SHA-256 digest
+     (`sha256.Sum256`), and pinned leading/trailing frame bytes for the
+     deterministic synthesized PCM input so any future `shine-mp3` or `Encoder`
+     change that alters output bytes is caught deterministically under
+     `go test -race ./...`.
 * **Files (1 file):** `internal/audio/mp3_test.go`.
 * **Verify:** `go test -race ./internal/audio/...` passes.
 * **Depends on:** none.
@@ -99,11 +105,15 @@ U2 (014.002-T) (independent — CI config domain)
 * **Width isolation between U1 and U2:** Keeping the Go audio test (`014.001-T`)
   and the GitHub Actions workflow update (`014.002-T`) in separate tasks
   preserves single-domain width isolation (`tests` vs `config`).
-* **Poisoned tail-capacity + SHA-256 golden assertion:** Testing both poisoned
-  spare capacity (`stereo[:len]` with non-zero bytes in `stereo[len:cap]`) and a
-  pinned SHA-256 digest directly proves that `encoderTailSlack` cannot affect
-  encoded output and locks in deterministic byte-for-byte behavior under
-  `go test -race`.
+* **Fixed golden reference + two-run byte-identity without zero-slack (`cap == len`) allocation:**
+  As documented in `docs/compound/build-errors/shine-mp3-race-checkptr.md` and
+  `docs/closure/009-S-009-F-post-merge-closure.md`, calling `shine-mp3` with a
+  zero-slack (`cap == len`) stereo slice triggers a `checkptr` runtime fault
+  under `go test -race ./...`. Testing byte-for-byte identity across two
+  independent `NewEncoder` runs and asserting against a fixed golden reference
+  (pinned total byte length, SHA-256 digest, and leading/trailing frame bytes)
+  locks in deterministic MP3 output while keeping `go test -race ./...`
+  completely `checkptr`-safe.
 
 ## Risks and Caveats
 

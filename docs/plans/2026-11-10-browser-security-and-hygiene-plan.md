@@ -88,30 +88,46 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
   `go test -race ./internal/teams/... ./internal/cli/...`.
 * **Depends on:** none.
 
-### U2 (`013.002-T`) — Add `teams.RedactURL` and scrub query/fragment tokens from navigation errors and CLI queue logs
+### U2 (`013.002-T`) — Add `teams.RedactURL` and scrub userinfo, query, and fragment tokens from navigation errors and CLI queue logs
 
 * **Domain:** code (Go). **Posture:** test-first. **Size:** `S` | **Complexity:** `low`.
 * **What:**
   1. Add `RedactURL(raw string) string` (and `RedactArgs(args []string) string`)
-     in `internal/teams/url.go`. `RedactURL` parses `raw`, clears `u.User = nil`,
-     `u.RawQuery = ""`, `u.ForceQuery = false`, and `u.Fragment = ""` (adding
-     `?<redacted>` when a query string was present so callers can see parameters
-     were stripped without exposing any key or value), and if `url.Parse` fails
-     strips everything from the first `?` or `#` onward. Furthermore, error
-     messages inside `ValidateMeetingURL` must never echo the unredacted raw URL.
+     in `internal/teams/url.go`:
+     * For a parseable HTTP/HTTPS URL with a non-empty host (`u.Opaque == ""`):
+       clear `u.User = nil`, `u.RawQuery = ""`, `u.ForceQuery = false`,
+       `u.Fragment = ""`, and `u.Opaque = ""` (keeping only normalized
+       `scheme://host/path`).
+     * For the malformed-URL / fallback path (when `url.Parse` fails, scheme is
+       non-HTTP(S), `u.Opaque != ""`, or `u.Host == ""`): do NOT simply slice up
+       to `?` or `#` (which would leave `https://user:secret@bad%zz/path` or
+       `https://?p=secret` leaking userinfo or tokens). Instead, if the fallback
+       cannot safely extract a clean `scheme://host/path` free of userinfo
+       (`@`), query (`?`), and fragment (`#`), return a constant placeholder
+       `"[invalid-url]"` (or strip any `userinfo@` before the host in addition
+       to stripping `?query` and `#fragment`, and return `"[invalid-url]"` if
+       any `@`, `?`, `#`, or control character remains).
+     * Furthermore, error messages inside `ValidateMeetingURL` must never echo
+       the unredacted raw URL.
   2. In `internal/browser/runner.go` (`ChromeRunner.run`), wrap `chromedp.Navigate`
      errors using `teams.RedactURL(target)` instead of raw `target`.
   3. In `internal/cli/queue.go` (`runQueueFile`), log `teams.RedactArgs(lineArgs)`
      instead of raw `strings.Join(lineArgs, " ")` so batch queue runs never emit
-     `?p=` passcodes or meeting query strings into `slog.Info`.
+     userinfo, `?p=` passcodes, or meeting query/fragment strings into
+     `slog.Info`.
 * **Files (3 core files + tests):** `internal/teams/url.go`,
   `internal/teams/url_test.go`, `internal/browser/runner.go`,
   `internal/cli/queue.go` (and `internal/cli/queue_test.go`).
 * **Verify:** Unit tests in `internal/teams/url_test.go` and
-  `internal/cli/queue_test.go` asserting that `?p=secret-passcode`, `code=oauth`,
-  and `#access_token=xyz` are never present in `RedactURL`, `RedactArgs`,
-  `ValidateMeetingURL` errors, `ChromeRunner.Join` navigation errors, or queue
-  logs.
+  `internal/cli/queue_test.go` asserting that:
+  * `?p=secret-passcode`, `code=oauth`, and `#access_token=xyz` are never
+    present in `RedactURL`, `RedactArgs`, `ValidateMeetingURL` errors,
+    `ChromeRunner.Join` navigation errors, or queue logs.
+  * `RedactURL` is explicitly tested with embedded userinfo credentials on both
+    a valid URL (`https://user:pass@teams.microsoft.com/meet/123?p=tok#frag`)
+    and a malformed URL
+    (`https://user:pass@teams.microsoft.com:badport/meet/123?p=tok`), asserting
+    that neither `user`, `pass`, `tok`, nor `frag` ever appears in the output.
 * **Depends on:** U1 (`013.001-T`), since both touch `internal/teams/url.go` and
   `internal/teams/url_test.go`.
 
@@ -283,9 +299,11 @@ and URL token redaction across `internal/teams`, `internal/browser`, and
    and match or be a dot-prefixed subdomain of the trusted Microsoft Teams /
    SharePoint / Microsoft 365 host allowlist.
 3. **Zero secret leakage in errors, logs, or tests:** Navigation errors and
-   queue logs must never include raw query strings (`?p=`, `code=`) or URL
-   fragments (`#access_token=`), and guardrail tests must use synthetic tokens
-   only.
+   queue logs must never include userinfo credentials (`user:pass@`), raw query
+   strings (`?p=`, `code=`), or URL fragments (`#access_token=`), including on
+   malformed URLs where `url.Parse` fails (returning `"[invalid-url]"` whenever
+   a clean `scheme://host/path` free of `@`, `?`, `#`, and control characters
+   cannot be extracted), and guardrail tests must use synthetic tokens only.
 4. **Sandbox enabled by default:** Neither `NewLiveMeeting` nor default
    `StealthFlags(Options{})` may pass `--no-sandbox` or
    `--disable-setuid-sandbox` unless explicitly opted in.

@@ -37,10 +37,12 @@ deliberation `006-DL`.
     `HALT — cascade archived retained deliberation {id}, revert required` and runs
     the Safe-Close step 6 `git-revert-on-cascade` recovery.
   * Cascade Close steps 5 and 6 report and gate on the retained set, and a new
-    step 7 performs post-cascade cleanup: it archives an `archive` deliberation the
-    cascade left behind, or a `retained_description_mention` deliberation with
+    step 7 performs post-cascade cleanup: it archives only a
+    `retained_description_mention` deliberation with
     `status: queued` and zero remaining live references, and never archives any
-    other retained disposition. The Quality Criteria bullets match.
+    other retained disposition (an `archive` deliberation is required in
+    `archived_ids` by step 3 and halts closure if absent). The Quality Criteria
+    bullets match.
   * `_ship.agent.md` Post-Merge Closure step 7 replaces the unconditional
     deliberation archive with the same disposition-aware rules.
 * `017.002-T` (`internal/browser/recap.go`, `internal/browser/recap_test.go`): the
@@ -75,6 +77,7 @@ external reviewer model.
 | Security | Sandbox stays on by default; the opt-in is the existing `shouldDisableSandbox` contract, not a new env parse. `AutomationControlled` remains absent | No action |
 | Correctness | Test default cases set `TEAMS_DISABLE_SANDBOX` to empty so an ambient value cannot flip them | No action |
 | Scope | Changes stay inside the four authorized files plus `017-S` backlog, closure, and memory docs; no `010-S` or stash entry touched | No action |
+| Correctness | Copilot round 2 (thread `PRRT_kwDOTStvas62TdA7`): the closure doc predicted `006-DL` would resolve to `retained_description_mention`, but `017-F` sets `source_deliberation_id: 006-DL`, so that link kind is present and the prediction was wrong | Fixed in-scope (P-021 C1: corrects this shipment's own closure record); the Releasability row no longer predicts a disposition and states the description-only branch has no live fixture here |
 | Maintainability | One new unexported constructor; `cleanBrowserArgs` and `cleanHeadedBrowserArgs` are thin wrappers, so there is one place that builds the arguments | No action |
 | Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62TTB_`): the Ship Step 7 deliberation cleanup only enumerated `source_deliberation_id`, so a description-only deliberation (the `retained_description_mention` case) was never considered, notably on the safe-close path | Fixed in-scope (P-021 C1: completes the authorized Step 7 reconciliation); Step 7 now enumerates the Step 0(c) snapshot set or the same validated source/description/references discovery |
 | Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62TTCh`): the preservation check required retained deliberations to sit in `queue/`, rejecting a valid pre-close `done` record in `archive/` | Fixed in-scope (P-021 C1: same sentence of the authorized check); the check and report now use the snapshotted location and declared status, with Step 7 wording aligned |
@@ -113,7 +116,7 @@ none
 |---|---|---|
 | Browser launcher default arguments | READY | Same argument list as before when no opt-in is set |
 | Browser launcher sandbox opt-in | READY | Operator sets `TEAMS_DISABLE_SANDBOX=1` or `Options.DisableSandbox` in a container that cannot run the sandbox |
-| Cascade-close specification | READY_WITH_CONDITIONS | First live exercise is this shipment's own closure: `006-DL` is expected to resolve to `retained_description_mention` and be archived by cleanup step 7 |
+| Cascade-close specification | READY_WITH_CONDITIONS | First live exercise is this shipment's own closure. `017-F` carries `source_deliberation_id: 006-DL`, so `006-DL` is not a description-only link; its disposition is whatever Step 0(c) computes at closure (planned `archive` unless a live external reference or live status retains it) and is recorded in the post-merge section. The `retained_description_mention` cleanup branch (step 7) has no live fixture in this shipment and is validated by specification review only |
 
 ## Monitoring and observation window
 

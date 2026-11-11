@@ -44,7 +44,7 @@ Two contract surfaces are addressed:
 1. **Harness review-gate fallback reconciliation (`680A62E6`)**:
    * In `.github/agents/_ship.agent.md` (Step 4.4) and
      `.github/agents/subagents/adversarial-review.agent.md` (Phase 1 step 3,
-     Phases 2–6, Output, and Quality Criteria), the P-012 item 5
+     Phases 2–7, Output, and Quality Criteria), the P-012 item 5
      `single-agent-declared-degradation` fallback must be explicitly separated
      from `dispatch_mode: multi-agent` consensus review so that:
      * When `subagent-dispatch` is active (`dispatch_mode: multi-agent`), fewer
@@ -57,15 +57,22 @@ Two contract surfaces are addressed:
        declared fallback: single-agent-declared-degradation`),
        `single-agent-declared-degradation` is an explicitly authorized
        **non-consensus** degraded outcome (`consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`)
-       that branches Phases 2–6, Output, and Quality Criteria to use
+       that branches Phases 2–7, Output, and Quality Criteria to use
        severity-only scoring (`confidence_tier: DEGRADED_SINGLE_AGENT`,
        `confidence_weight = 1.0`, ordered by `severity_score` alone),
        severity-only action routing (`P0/P1 -> safe_auto` when
        mechanical/in-scope or `gated_auto`/`manual` when architectural;
-       `P2 -> gated_auto`; `P3 -> advisory`), and a single
+       `P2 -> gated_auto`; `P3 -> advisory`), a single
        `### Degraded Single-Agent Findings (Non-Consensus)` report section
        instead of mandatory `Consensus / Majority / Plurality / Unique`
-       sections, gating Ship readiness on `P0=0, P1=0`.
+       sections, and an in-session, severity-gated Phase 7 post-remediation
+       re-review over only the files modified by `safe_auto` fixes (without
+       attempting subagent pool redispatch, retaining the hard 2-cycle recursion
+       cap, evaluating residual `P0`/`P1` severity findings under
+       `confidence_tier: DEGRADED_SINGLE_AGENT` instead of `HIGH`-confidence
+       multi-reviewer consensus findings, and recording any remaining findings
+       after 2 cycles as `post_remediation_residual: true` under
+       `DEGRADED_SINGLE_AGENT`), gating Ship readiness on `P0=0, P1=0`.
 2. **Post-closure `retained_engine_unverified` deliberation hygiene (`9A9D8106`)**:
    * Orphaned queued deliberation `006-DL` (retained at `017-S` closure because
      `backlogit 1.12.0` is not listed in the external `autoharness` Python
@@ -87,7 +94,7 @@ Two contract surfaces are addressed:
 | Requirement | Stash ID / Provenance | Implementation unit | Verification |
 |---|---|---|---|
 | R1: Reconcile `.github/agents/_ship.agent.md` Step 4.4 and `.github/agents/subagents/adversarial-review.agent.md` so `dispatch_mode: multi-agent` preserves the `< 2` independent reviewers `INSUFFICIENT_REVIEWERS` halt (`BLOCKED`) and never downgrades a failed multi-reviewer run into single-agent degradation | `680A62E6` (`015-S`, `015-F`, `015.001-T`, PR `#38`, `PRRT_kwDOTStvas62RRVH`, `008-DL`) | U1 (`019.001-T`) | Template Integrity & Schema-CLI-Docs verification + `go test -race ./...` |
-| R2: Define `dispatch_mode: single-agent-declared-degradation` in `_ship.agent.md` and `adversarial-review.agent.md` (Phases 1–6, Output, and Quality Criteria) as an explicitly authorized non-consensus P-012 item 5 fallback (`consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`) with severity-only scoring (`confidence_tier: DEGRADED_SINGLE_AGENT`, `confidence_weight = 1.0`), severity-only action routing, and a single `### Degraded Single-Agent Findings (Non-Consensus)` section gated on `P0=0, P1=0` without shipment-range restrictions (`012-S–017-S` removed) | `680A62E6` (`PRRT_kwDOTStvas62RRVH`, PR `#44` thread `PRRT_kwDOTStvas62Ve-8`, `008-DL`) | U1 (`019.001-T`) | Template Integrity & Schema-CLI-Docs verification + `go test -race ./...` |
+| R2: Define `dispatch_mode: single-agent-declared-degradation` in `_ship.agent.md` and `adversarial-review.agent.md` (Phases 1–7, Output, and Quality Criteria) as an explicitly authorized non-consensus P-012 item 5 fallback (`consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`) with severity-only scoring (`confidence_tier: DEGRADED_SINGLE_AGENT`, `confidence_weight = 1.0`), severity-only action routing, a single `### Degraded Single-Agent Findings (Non-Consensus)` section, and an in-session severity-gated Phase 7 post-remediation re-review over `safe_auto`-modified files (retaining the 2-cycle cap under `DEGRADED_SINGLE_AGENT` without pool redispatch) gated on `P0=0, P1=0` without shipment-range restrictions (`012-S–017-S` removed) | `680A62E6` (`PRRT_kwDOTStvas62RRVH`, PR `#44` threads `PRRT_kwDOTStvas62Ve-8`, `PRRT_kwDOTStvas62V-38`, `008-DL`) | U1 (`019.001-T`) | Template Integrity & Schema-CLI-Docs verification + `go test -race ./...` |
 | R3: Document the post-closure Stage/operator archival rule for zero-reference `retained_engine_unverified` deliberations and the Constitution Principle IV boundary for external `autoharness` `VERIFIED_CASCADE_ENGINE_MINOR_LINES` in `.github/skills/shipment-reconcile/SKILL.md` and `docs/compound/workflow-issues/retained-engine-unverified-deliberation-cleanup.md` | `9A9D8106` (`017-S` closure doc, `006-DL`, `008-DL`) | U2 (`019.002-T`) | Markdown / Template Integrity verification + `backlogit doctor` |
 
 ## Implementation Units
@@ -146,6 +153,17 @@ Two contract surfaces are addressed:
        records `consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`, and
        sets `confidence: "DEGRADED_SINGLE_AGENT"` on any generated P0/P1 backlog
        work item entries.
+     * In **Phase 7: Post-Remediation Re-Review (lines 254–274)**: Branch for
+       `single-agent-declared-degradation` so that after `safe_auto` fixes are
+       applied in Phase 6, Phase 7 executes an **in-session, severity-gated
+       post-remediation re-review** over only the files modified by `safe_auto`
+       fixes (without attempting subagent reviewer pool redispatch), retains the
+       hard 2-cycle recursion cap, evaluates residual `P0`/`P1` severity
+       findings under `confidence_tier: DEGRADED_SINGLE_AGENT` (applying any new
+       in-scope mechanical `safe_auto` entries and incrementing the cycle
+       counter) instead of checking for `HIGH`-confidence multi-reviewer
+       consensus findings, and records any remaining findings after 2 cycles as
+       `post_remediation_residual: true` under `DEGRADED_SINGLE_AGENT`.
      * In **Quality Criteria (including line 298)**: Qualify both the
        minimum-2-reviewers rule AND the confidence-tier / consensus-section
        requirements (`All reviewer instances must complete before Phase 3
@@ -155,8 +173,9 @@ Two contract surfaces are addressed:
        `HIGH`/`MEDIUM`/`LOW` confidence tiers, mandatory consensus sections, and
        `>= 2` returning reviewers (halting with `INSUFFICIENT_REVIEWERS` if
        `< 2` return), while `dispatch_mode: single-agent-declared-degradation`
-       enforces `DEGRADED_SINGLE_AGENT` severity-only scoring, routing, and
-       `### Degraded Single-Agent Findings (Non-Consensus)` output.
+       enforces `DEGRADED_SINGLE_AGENT` severity-only scoring, routing,
+       `### Degraded Single-Agent Findings (Non-Consensus)` output, and
+       in-session Phase 7 post-remediation re-review.
   2. In `.github/agents/_ship.agent.md` (Step 4.4, around line 465):
      * Remove the stale `(approved for 012-S–017-S)` shipment-range qualifier on
        the P-012 Item 5 Privacy / Single-Agent Fallback.
@@ -235,15 +254,18 @@ U1 (019.001-T: _ship.agent.md & adversarial-review.agent.md review fallback reco
 ## Decisions and Rationale
 
 * **Explicit `consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)` marker and
-  Phases 2–6 branching**: Distinguishes an authorized P-012 item 5 single-agent
+  Phases 2–7 branching**: Distinguishes an authorized P-012 item 5 single-agent
   degraded review from a multi-reviewer consensus report across every phase of
   `adversarial-review.agent.md` (Phases 2–3 classification, Phase 4
   severity-only scoring with `confidence_tier: DEGRADED_SINGLE_AGENT` and
   `confidence_weight = 1.0`, Phase 5 severity-only action routing, Phase 6
-  `### Degraded Single-Agent Findings (Non-Consensus)` output section, and
-  Quality Criteria), ensuring single-agent passes never emit `HIGH`/`MEDIUM`/`LOW`
-  consensus labels while keeping the `INSUFFICIENT_REVIEWERS` halt strict
-  whenever `dispatch_mode: multi-agent` is used.
+  `### Degraded Single-Agent Findings (Non-Consensus)` output section, Phase 7
+  in-session severity-gated post-remediation re-review over `safe_auto`-modified
+  files retaining the 2-cycle cap under `DEGRADED_SINGLE_AGENT` without subagent
+  pool redispatch, and Quality Criteria), ensuring single-agent passes never
+  emit `HIGH`/`MEDIUM`/`LOW` consensus labels while keeping the
+  `INSUFFICIENT_REVIEWERS` halt strict whenever `dispatch_mode: multi-agent` is
+  used.
 * **Archiving `006-DL` in Stage Step 5.6 + documenting the rule in `019.002-T`**:
   Stage's Role Boundary explicitly authorizes archiving backlog items on `main`
   during staging (`Create, update, archive backlog items, stash entries,
@@ -308,7 +330,7 @@ linked-deliberation post-closure lifecycle in `shipment-reconcile/SKILL.md`.
    is active, fewer than 2 independent reviewer instances returning structured
    results MUST halt the review gate with `INSUFFICIENT_REVIEWERS` (`BLOCKED`)
    and MUST NOT fall back to `single-agent-declared-degradation` mid-run.
-2. **Non-consensus single-agent degradation across Phases 2–6, Output, and
+2. **Non-consensus single-agent degradation across Phases 2–7, Output, and
    Quality Criteria**: Whenever `dispatch_mode: single-agent-declared-degradation`
    is entered at Phase 1 pre-dispatch capability probe under P-012 item 5, the
    review workflow MUST record
@@ -319,8 +341,14 @@ linked-deliberation post-closure lifecycle in `shipment-reconcile/SKILL.md`.
    `gated_auto`/`manual` when architectural; `P2 -> gated_auto`;
    `P3 -> advisory`), emit a single
    `### Degraded Single-Agent Findings (Non-Consensus)` section in Phase 6 /
-   Output instead of `Consensus / Majority / Plurality / Unique` sections, and
-   block on any `P0` or `P1` finding (`P0=0, P1=0` required to proceed).
+   Output instead of `Consensus / Majority / Plurality / Unique` sections,
+   execute Phase 7 post-remediation re-review in-session over only the files
+   modified by `safe_auto` fixes (without subagent pool redispatch, retaining
+   the hard 2-cycle recursion cap, evaluating residual `P0`/`P1` severity
+   findings under `confidence_tier: DEGRADED_SINGLE_AGENT`, and recording any
+   remaining findings after 2 cycles as `post_remediation_residual: true` under
+   `DEGRADED_SINGLE_AGENT`), and block on any `P0` or `P1` finding
+   (`P0=0, P1=0` required to proceed).
 3. **Fail-closed Ship Step 7 retention preserved**: During shipment closure, Ship
    MUST continue to retain `retained_engine_unverified` deliberations at
    `shipment-reconcile` Cascade Close step 7 and `_ship.agent.md` Post-Merge

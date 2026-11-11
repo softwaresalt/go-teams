@@ -77,12 +77,15 @@ Executed Dark Factory Mode (`DARK_MODE_ACTIVE`, P-017) Stage session for Cycle 1
     files: `internal/updater/updater.go`, `internal/updater/updater_test.go`):
     *Add inter-process `.lock` coordination and stale-lock recovery around
     `Updater.swap`* (updated for PR #44 Copilot review threads
-    `PRRT_kwDOTStvas62Ve9W`, `PRRT_kwDOTStvas62Ve95`, and
-    `PRRT_kwDOTStvas62Ve-c` to require `isProcessAlive` dead-holder proof
-    before stale eviction, `<exe>.lock.ctl` exclusive control lock serializing
-    stale replacement and authoritative token-verified release, and
-    paused-live-holder, two-evictor, and release-interleaved-with-replacement
-    regression tests)
+    `PRRT_kwDOTStvas62Ve9W`, `PRRT_kwDOTStvas62Ve95`, `PRRT_kwDOTStvas62Ve-c`,
+    `PRRT_kwDOTStvas62V-4v`, and `PRRT_kwDOTStvas62V-5N` to require
+    `isProcessAlive` dead-holder proof before stale eviction, crash-safe and
+    wait-bounded `<exe>.lock.ctl` exclusive control lock with owner metadata and
+    dead-owner recovery serializing stale replacement and authoritative
+    token-verified release, and paused-live-holder, two-evictor,
+    release-interleaved-with-replacement, and
+    `TestUpdateRecoverFromCrashedControlLockAndStalePrimaryLock` regression
+    tests)
   * **Task `018.002-T`** (`size: XS`, `complexity: low`, domain: `tests`,
     depends on `018.001-T`, file: `internal/cli/update_test.go`): *Add CLI unit
     and end-to-end lock contention tests for `teams-cli update`*

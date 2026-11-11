@@ -65,7 +65,9 @@ jobs:
         # rules in internal/config/gitignore_test.go.
         run: |
           python3 - <<'PY'
+          import os
           import re
+          import stat
           import subprocess
           import sys
 
@@ -75,7 +77,7 @@ jobs:
           # extracted once and then inspected, with no nested lazy quantifiers
           # that could backtrack quadratically on a crafted tracked file.
           url = re.compile(rb"https?://[^\s\"'<>]+", re.IGNORECASE)
-          passcode_query = re.compile(rb"[?&]p=([A-Za-z0-9_-]{8,})")
+          passcode_query = re.compile(rb"[?&]p=([A-Za-z0-9_-]{8,})", re.IGNORECASE)
           teams_markers = (
               b"teams.microsoft.com", b"teams.live.com",
               b"teams.cloud.microsoft", b"/meet/",
@@ -132,12 +134,15 @@ jobs:
                   findings.append((path, "tracked local environment file"))
                   continue
               try:
-                  with open(path, "rb") as handle:
-                      data = handle.read(MAX_BYTES + 1)
-              except (FileNotFoundError, IsADirectoryError):
-                  continue  # tracked but absent, or a submodule/symlink to a directory
-              if len(data) > MAX_BYTES or b"\0" in data[:8000]:
-                  continue  # oversized or binary
+                  info = os.lstat(path)
+              except FileNotFoundError:
+                  continue  # tracked but absent from the working tree
+              if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+                  continue  # symlink, submodule, directory, or oversized
+              with open(path, "rb") as handle:
+                  data = handle.read(MAX_BYTES + 1)
+              if b"\0" in data[:8000]:
+                  continue  # binary
               if has_live_passcode(data):
                   findings.append((path, "live Teams meeting passcode URL"))
               if skype.search(data):

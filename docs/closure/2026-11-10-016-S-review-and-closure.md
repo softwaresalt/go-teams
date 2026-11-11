@@ -4,11 +4,11 @@ date: 2026-11-10
 feature: 016-F
 shipment: 016-S
 branch: feat/016-s-add-teams-cli-update-self-update-command-with-sha-256-verification
-status: pending-merge
-closure_status: PENDING
-compaction_status: pending
-merge_commit: pending
-pr: pending
+status: ready
+closure_status: READY
+compaction_status: done
+merge_commit: f762dd5e2a4181a1e018821f7d01e88060fedfbf
+pr: 40
 ---
 
 ## Release scope
@@ -153,8 +153,47 @@ commit on `main`. No data migration is involved.
 
 ## Post-merge closure
 
-Pending merge of the feature PR. Post-merge closure (P-015 cascade close, source
-artifact cleanup, and P-020 compaction) is recorded here by the closure PR.
+PR #40 merged to `main` at `f762dd5e2a4181a1e018821f7d01e88060fedfbf`
+(`2026-11-11T17:52:45Z`) with a merge commit (P-009). Dark Factory Mode (P-017)
+post-merge closure ran on `post-merge/016-cli-self-update-command`:
+
+* Copilot shadow review raised six threads on PR #40 in one round. Five were fixed
+  in scope under P-021 C1 in `ba22f60` (signed-URL redaction on `*url.Error`,
+  `--check` install hint keeping `--version`, `Check` asset validation, build
+  metadata in the tag lookup, and oversized numeric pre-release ordering). One
+  (inter-process update lock) was out of scope, captured as deferred entry
+  `2D0BAA19`, answered with a reply citing that ID, and resolved with no code
+  change. All six threads were replied to and resolved.
+  `autoharness gate copilot-review` returned `SATISFIED` for the merged HEAD
+  `b3602d199134ed5bae856b17134a686b619089b9` and CI passed. The merge used a merge
+  commit with no admin fallback.
+* Verified `MERGE_CONFIRMED` via `gh pr view 40` (`state: MERGED`) and
+  `git merge-base --is-ancestor f762dd5e2a4181a1e018821f7d01e88060fedfbf
+  origin/main`.
+* `autoharness gate pipeline-topology --phase lifecycle --shipment 016-S` passed
+  on the closure branch.
+* Pre-close reconciliation: the five manifest tasks and `016-F` were already
+  archived with `status: done` (backlogit relocates a record on
+  `move --status done`), no orphan declared `shipment_id: 016-S`, and the
+  shipment record was `active`.
+* P-015 fully-covered-root verification: `016-F` is a root feature whose only
+  descendants, `016.001-T` to `016.005-T`, are all `016-S` manifest members, so the
+  classification was `CASCADE`. `backlogit shipment ship 016-S --sha
+  f762dd5e2a4181a1e018821f7d01e88060fedfbf` returned `archived_ids: [016.001-T,
+  016.002-T, 016.003-T, 016.004-T, 016.005-T, 016-F, 016-S]` and
+  `returned_ids: []`. All five tasks kept `parent_id: 016-F`, `016-S` carries
+  `archived_status: shipped`, and no archive file showed as a working-tree
+  deletion (P-007).
+* Source artifact cleanup: deliberation `005-DL` (named only in the `016-F`
+  description and `source_deliberation_id`) was retained by the engine, so Ship
+  archived it with `backlogit archive 005-DL`. Stash entry `A08726BC` was already
+  archived by Stage.
+* Mandatory P-020 `compact-context` (`target: all`) ran: the session memory was
+  compacted to
+  `docs/memory/compacted/2026-11-10-016-S-cli-self-update-command-compacted.md`
+  and the verbose original archived under `docs/archive/memory/2026-11-10/`.
+  Recorded as `compaction_status: done` above (initialized `pending` in the
+  feature PR and finalized here).
 
 ## Handoff
 

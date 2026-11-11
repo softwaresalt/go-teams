@@ -5,7 +5,10 @@ feature: 011-F
 shipment: 011-S
 branch: feat/mvp-live-captions
 status: ready-with-conditions
+closure_status: READY
 compaction_status: done
+merge_commit: d50bab42c8dc6339c8b791f0f17647dce991df82
+pr: 29
 ---
 
 ## Release scope

@@ -5,6 +5,10 @@ feature: 012-F
 shipment: 012-S
 branch: feat/transcript-blockquote-and-recap-auth
 status: ready-with-conditions
+closure_status: READY
+compaction_status: done
+merge_commit: aed3bbbc8a08c7f0d9fdc752a9b658eb704f6cfb
+pr: 30
 ---
 
 ## Release scope
@@ -76,8 +80,8 @@ Code review ran across two passes on `feat/transcript-blockquote-and-recap-auth`
 | Synthetic CLI and browser contract | READY | All unit, e2e, and six compiled CLI forms pass |
 | Local quality gates | READY | Build, vet, integration vet, CI-pinned lint, format, and race suite pass |
 | SharePoint sharing-link recap extraction | READY | Verified by unit regression and live queue capture |
-| Cold-profile headed sign-in/MFA | READY_WITH_CONDITIONS | Requires interactive operator sign-in/MFA on first use of a new `profile_dir` |
-| Shipment lifecycle | READY_WITH_CONDITIONS | Keep `012-S` active until approved merge and post-merge reconciliation |
+| Cold-profile headed sign-in/MFA | READY_WITH_CONDITIONS | Requires interactive operator sign-in/MFA on first use of a new `profile_dir` (standing operational note; not a release blocker) |
+| Shipment lifecycle | READY | Merged to `main` (PR #30, `aed3bbbc8a08c7f0d9fdc752a9b658eb704f6cfb`) and `012-S` closed via post-merge reconciliation |
 
 ## Monitoring and observation window
 
@@ -97,6 +101,31 @@ Trigger rollback on any authentication loop regression, rejected valid recap
 transcript, or malformed Markdown utterance output. Revert the merge commit on
 `main` and rebuild `teams-cli.exe` from the prior release commit. Existing
 browser profiles and exported transcripts require no migration or deletion.
+
+## Post-merge closure
+
+PR #30 merged to `main` at `aed3bbbc8a08c7f0d9fdc752a9b658eb704f6cfb`
+(`2026-11-10T22:59:41Z`). Dark Factory Mode (P-017) post-merge closure ran on
+`post-merge/012-transcript-blockquote-and-recap-auth`:
+
+* Verified `MERGE_CONFIRMED` via `gh pr view 30` (`state: MERGED`) and
+  `git merge-base --is-ancestor aed3bbbc8a08c7f0d9fdc752a9b658eb704f6cfb
+  origin/main`.
+* `autoharness gate pipeline-topology --phase lifecycle --shipment 012-S`
+  passed (`BRANCH_POST_MERGE_CLOSURE_ELIGIBLE`, `WORKTREE_TOPOLOGY_OK`).
+* P-015 fully-covered-root verification: `012-F` is a root feature (no
+  `parent_id`) whose only descendants, `012.001-T` through `012.003-T`, are
+  all explicit `012-S` manifest members, so
+  `classify_shipment_close_path` selected the cascade close path.
+* `backlogit shipment ship 012-S --sha
+  aed3bbbc8a08c7f0d9fdc752a9b658eb704f6cfb` archived exactly the required
+  set (`archived_ids: [012.001-T, 012.002-T, 012.003-T, 012-F, 012-S]`,
+  `returned_ids: []`), with every task's `parent_id` preserved and the
+  separate, unchanged `010-S` shipment and its nine tasks verified intact
+  in `.backlogit/queue/` throughout.
+* `backlogit sync` and `backlogit doctor` ran clean post-closure.
+* Mandatory P-020 `compact-context` (`target: all`) ran; recorded as
+  `compaction_status: done` above.
 
 ## Handoff
 

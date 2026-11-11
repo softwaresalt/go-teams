@@ -6,9 +6,9 @@ shipment: 015-S
 branch: feat/post-meeting-recap-mp3-audio-capture-alongside-transcript
 status: ready
 closure_status: READY
-compaction_status: pending
-merge_commit: pending
-pr: pending
+compaction_status: done
+merge_commit: 6d66531b932aba4d6f20ed18e0dd644dc8a53a39
+pr: 38
 ---
 
 ## Release scope
@@ -148,8 +148,45 @@ feature without a revert by omitting `--audio`, `--recap-audio`, and
 
 ## Post-merge closure
 
-Pending. The merge commit, PR numbers, shipment close result, source artifact
-cleanup, and compaction status are recorded here after the feature PR merges.
+PR #38 merged to `main` at `6d66531b932aba4d6f20ed18e0dd644dc8a53a39`
+(`2026-11-11T17:11:53Z`) with a merge commit (P-009). Dark Factory Mode (P-017)
+post-merge closure ran on `post-merge/015-recap-mp3-audio-capture`:
+
+* Copilot shadow review ran two rounds on PR #38. Round 1 raised five threads:
+  four were fixed in scope under P-021 C1 in `ce471b1` (VroomItemID identity,
+  audio evaluation timeout, recording-filename identity, and `--recap-audio` /
+  `--audio` precedence), and one (harness review-gate policy) was out of scope,
+  captured as deferred entry `680A62E6`, answered with a reply citing that ID, and
+  resolved with no code change. Round 2 raised one thread, fixed in scope in
+  `1d88d42` (retain the selected Recap identity for interactive selection). All six
+  threads were replied to and resolved. `autoharness gate copilot-review` returned
+  `SATISFIED` for the merged HEAD `1d88d42` and CI passed.
+* Verified `MERGE_CONFIRMED` via `gh pr view 38` (`state: MERGED`) and
+  `git merge-base --is-ancestor 6d66531b932aba4d6f20ed18e0dd644dc8a53a39
+  origin/main`.
+* `autoharness gate pipeline-topology --phase lifecycle --shipment 015-S` passed
+  on the closure branch.
+* Pre-close reconciliation: the four manifest tasks and `015-F` were already
+  archived with declared `status: done` (backlogit relocates a record on
+  `move --status done`), no orphan declared `shipment_id: 015-S`, and the shipment
+  record was `active`.
+* P-015 fully-covered-root verification: `015-F` is a root feature whose only
+  descendants, `015.001-T` to `015.004-T`, are all `015-S` manifest members, so the
+  classification was `CASCADE`. `backlogit shipment ship 015-S --sha
+  6d66531b932aba4d6f20ed18e0dd644dc8a53a39` returned `archived_ids: [015.001-T,
+  015.002-T, 015.003-T, 015.004-T, 015-F, 015-S]` and `returned_ids: []`. All four
+  tasks kept `parent_id: 015-F`, `015-S` carries `archived_status: shipped`, and
+  no archive file showed as a working-tree deletion (P-007).
+* Source artifact cleanup: deliberation `004-DL` (named only in the `015-F`
+  description and `source_deliberation_id`) was retained by the engine, so Ship
+  archived it with `backlogit archive 004-DL`. Stash entry `DF1F461F` was already
+  archived by Stage.
+* Mandatory P-020 `compact-context` (`target: all`) ran: the session memory was
+  compacted to
+  `docs/memory/compacted/2026-11-10-015-S-recap-mp3-audio-capture-compacted.md`
+  and the verbose original archived under `docs/archive/memory/2026-11-10/`.
+  Recorded as `compaction_status: done` above (initialized `pending` in the
+  feature PR and finalized here).
 
 ## Handoff
 

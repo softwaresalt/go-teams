@@ -1,24 +1,14 @@
 name: CI
 
 on:
+  # No paths-ignore: the lightweight `changes` job must run (and report a status
+  # check) on every push and pull request, including docs/backlog-only changes,
+  # so the tracked-file secret-hygiene scan is never skipped. The expensive
+  # `test` job stays self-gated on the `code` filter output below.
   push:
     branches:
       - main
-    paths-ignore:
-      - '.backlogit/**'
-      - 'docs/**'
-      - '.autoharness/**'
-      - '*.md'                # root README/CHANGELOG/AGENTS.md
-      - '.github/**/*.md'     # instructions/prompts/agents
-      - 'scripts/**/*.md'     # scripts/metrics/README.md
   pull_request:
-    paths-ignore:
-      - '.backlogit/**'
-      - 'docs/**'
-      - '.autoharness/**'
-      - '*.md'                # root README/CHANGELOG/AGENTS.md
-      - '.github/**/*.md'     # instructions/prompts/agents
-      - 'scripts/**/*.md'     # scripts/metrics/README.md
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -66,6 +56,75 @@ jobs:
               - '!**/*.md'
               - '!docs/**'
               - '!.backlogit/**'
+              - '!.autoharness/**'
+      - name: Secret hygiene check (tracked files)
+        # Runs unconditionally (never gated on steps.filter.outputs.code) so
+        # docs/backlog-only changes are still scanned. Scans every git-tracked
+        # file for tracked local .env files and credential values. Findings
+        # print the rule and path only, never the matched secret. Mirrors the
+        # rules in internal/config/gitignore_test.go.
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          MAX_BYTES = 8 << 20
+          # Live Teams meeting passcode query token (p=...) on a Teams URL.
+          passcode = re.compile(
+              rb"https?://[^\s\"'<>]*?(?:teams\.microsoft\.com|teams\.live\.com"
+              rb"|teams\.cloud\.microsoft|/meet/)[^\s\"'<>]*?[?&]p=([A-Za-z0-9_-]{8,})",
+              re.IGNORECASE,
+          )
+          skype = re.compile(rb"SKYPE-TOKEN[\"'\s:=]+eyJ[A-Za-z0-9_-]{10,}")
+          bearer = re.compile(rb"Bearer\s+eyJ[A-Za-z0-9_-]{10,}")
+          synthetic = (
+              b"synthetic", b"secret", b"example", b"fake", b"dummy",
+              b"placeholder", b"redacted", b"sample", b"test", b"tok",
+              b"passcode", b"notreal", b"changeme", b"xxxx", b"12345678",
+          )
+
+          def is_local_env(path):
+              base = path.rsplit("/", 1)[-1]
+              if base == ".env.example":
+                  return False
+              return base == ".env" or base.startswith(".env.") or base.endswith(".env")
+
+          listing = subprocess.run(
+              ["git", "ls-files", "-z"], check=True, capture_output=True
+          ).stdout
+          paths = [p.decode("utf-8", "surrogateescape") for p in listing.split(b"\0") if p]
+          if not paths:
+              sys.exit("secret hygiene: git ls-files returned no tracked files")
+
+          findings = []
+          for path in paths:
+              if is_local_env(path):
+                  findings.append((path, "tracked local environment file"))
+                  continue
+              try:
+                  with open(path, "rb") as handle:
+                      data = handle.read(MAX_BYTES + 1)
+              except (FileNotFoundError, IsADirectoryError):
+                  continue  # tracked but absent, or a submodule/symlink to a directory
+              if len(data) > MAX_BYTES or b"\0" in data[:8000]:
+                  continue  # oversized or binary
+              for match in passcode.finditer(data):
+                  if not any(m in match.group(1).lower() for m in synthetic):
+                      findings.append((path, "live Teams meeting passcode URL"))
+              if skype.search(data):
+                  findings.append((path, "SKYPE-TOKEN credential value"))
+              if bearer.search(data):
+                  findings.append((path, "bearer JWT credential value"))
+
+          for path, rule in findings:
+              # repr() neutralizes control characters so a crafted path cannot
+              # inject workflow commands into the log.
+              print(f"ERROR: tracked file {path!r} contains a {rule}")
+          if findings:
+              sys.exit(1)
+          print(f"secret hygiene: scanned {len(paths)} tracked files, no findings")
+          PY
 
   test:
     name: Build, vet, lint & test

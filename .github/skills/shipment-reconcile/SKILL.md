@@ -468,8 +468,9 @@ completion.
       and restricted to
       IDs that resolve to an **existing** artifact whose own `artifact_type`
       is `deliberation` — before `archiveItems` runs. A qualifying feature
-      with such a live linked deliberation therefore archives it during the
-      same cascade invocation. To keep the two-set gate strict without a
+      with such a live linked deliberation is therefore a cascade-archive
+      *candidate* in the same invocation, subject to the retention
+      dispositions classified below (backlogit 1.12 retains some). To keep the two-set gate strict without a
       blanket allowance for arbitrary IDs, extend Step 0(c)'s classification
       here, still **before** the cascade invocation: for each qualifying
       feature member, independently collect its linked deliberation IDs
@@ -502,6 +503,45 @@ completion.
       re-derivation, and independent of whether the engine transitions,
       skips (already truly archived), or otherwise handles any given one of
       them.
+
+      **Linked-deliberation disposition classification (017-F, backlogit
+      1.12, INV-12).** Backlogit 1.12's `ShipShipment` does **not** archive
+      every linked deliberation the engine-defined collection above finds:
+      it retains a deliberation whose link is not a
+      `custom_fields.source_deliberation_id` link, whose status is live, or
+      that other live work still references. So, still **before** the
+      cascade invocation, record for each validated linked deliberation its
+      **link kinds** (`source_deliberation_id` for the literal
+      `custom_fields.source_deliberation_id` match; `description` and
+      `references` for matches found by the
+      `\b(?:DL\d+|[0-9]+(?:\.[0-9]+)*-DL)\b` matcher — a deliberation may
+      carry several kinds) and its **pre-close INV-12 disposition**, defined
+      by reference to `autoharness.gates.shipment_closure.
+      compute_linked_deliberation_disposition` (never a separate
+      re-derivation; when that function is available, call it and copy its
+      result). Outcome precedence, first match wins:
+      `retained_read_error` (the deliberation's own record or a live-referrer
+      input is unreadable or escapes containment) ->
+      `retained_ambiguous` (the deliberation resolves to more than one
+      record) -> `already-archived` (declared `status: archived`, inert for
+      the engine) -> `retained_engine_unverified` (the installed engine
+      semantics are not verified as backlogit 1.12 behavior) ->
+      `retained_live_status` (declared status `active`, `blocked`, or
+      `review`) -> `retained_shared_reference` (a live record or stash entry
+      outside this shipment's closure scope still references it) ->
+      `retained_description_mention` (the link kinds do **not** include
+      `source_deliberation_id`, i.e. it is linked only through
+      description/references text) -> `archive` (planned archive:
+      `source_deliberation_id` link, non-live status, no live external
+      referrer, engine verified). Only `archive` is **`expected_cascade`**;
+      `already-archived` is **tolerated**; every other value is a
+      **retained** disposition. If the disposition cannot be determined
+      (function unavailable and the rules above cannot be evaluated
+      completely), classify the deliberation `retained_engine_unverified` —
+      fail closed to retain, never to archive. Add each deliberation's link
+      kinds and disposition to the pre-close snapshot; Cascade Close
+      Sub-Procedure steps 3 and 5 and post-cascade source-artifact cleanup
+      (step 7 of the Cascade Close Sub-Procedure) read them from there.
    * **CASCADE selected** → skip directly to the **Cascade Close
      Sub-Procedure** below (reusing the manifest and snapshot from (a)/(b)/(c)
      above — do not reload) in place of steps 1–10, then proceed to
@@ -734,21 +774,49 @@ above.
      (defined by reference to that determination — never a separate
      re-derivation — and independent of *how* the engine happens to
      transition any given member) + every validated linked deliberation ID
-     of each qualifying feature member captured by Step 0(c)'s
-     linked-deliberation snapshot extension above (same reference-only
+     of each qualifying feature member whose Step 0(c) disposition is
+     `archive` (**`expected_cascade`**) or `already-archived` (tolerated,
+     never required) — taken from the linked-deliberation snapshot
+     extension and disposition classification above (same reference-only
      rule: never a separate re-derivation, and never any ID beyond what
      that engine-defined, existence-and-`artifact_type`-validated
-     collection produced) + the shipment record itself.
+     collection produced) + the shipment record itself. A linked
+     deliberation classified into **any retained disposition**
+     (`retained_description_mention`, `retained_shared_reference`,
+     `retained_live_status`, `retained_engine_unverified`,
+     `retained_ambiguous`, or `retained_read_error`) is **excluded from
+     `allowed_ids`**, so that if the engine nevertheless archives it, the
+     unexpected-artifact check below fails closed instead of tolerating it.
    * **Compute `required_ids`** = the shipment record and every qualifying
      feature member (**both unconditionally** — never omitted, and never
      conditioned on either artifact's own pre-close declared status) +
      every other `allowed_ids` member (a manifest task item, or a
-     qualifying feature member's validated linked deliberation) that was
-     **not** truly `status: archived` in the pre-close declared-status
-     snapshot (Step 0(b) for manifest task items, extended by Step 0(c) for
-     qualifying feature members and their validated linked deliberations —
-     all captured **before** this step 1 invocation, never a freshly-read or
-     assumed post-close value).
+     qualifying feature member's linked deliberation with disposition
+     `archive`) that was **not** truly `status: archived` in the pre-close
+     declared-status snapshot (Step 0(b) for manifest task items, extended
+     by Step 0(c) for qualifying feature members and their linked
+     deliberations — all captured **before** this step 1 invocation, never
+     a freshly-read or assumed post-close value). `already-archived`
+     deliberations are tolerated in `allowed_ids` but never in
+     `required_ids`; retained deliberations are in **neither** set.
+   * **Retained-deliberation preservation check (pre/post).** *Pre*: before
+     step 1's invocation, record the retained set — every validated linked
+     deliberation with a retained disposition — and confirm each resolves to
+     exactly one record in `.backlogit/queue/` with its Step 0(c)
+     declared status. *Post*: immediately after the cascade call, confirm
+     that no retained deliberation appears in `archived_ids` and that each
+     is still present in `.backlogit/queue/` with its pre-close declared
+     status (a `retained_shared_reference` or `retained_live_status`
+     deliberation must remain live for the other unshipped work that
+     depends on it). If any retained deliberation is archived or missing,
+     halt with `unexpected-cascade`
+     (`HALT — cascade archived retained deliberation {id}, revert required`),
+     emit a **P-005** violation, and run the `git-revert-on-cascade`
+     recovery procedure defined in Safe-Close Mode step 6 (restore
+     `.backlogit/queue/` and `.backlogit/archive/`
+     from git, surface the violation, and never commit the mutated backlog
+     state). This check is independent of, and never merged into, the two
+     conditions below.
    * **Two separately-labelled, independently-failing conditions.** Neither
      may be evaluated as a precondition of the other, and the two MUST NOT
      be merged into a single combined test (conflating two questions into
@@ -820,21 +888,49 @@ above.
    **P-005** violation; do NOT commit the mutated backlog state.
 5. **Produce cascade-close report** recording the classifier's verdict,
    qualifying feature IDs, and their validated linked deliberation IDs
-   (all Step 0(c)), the pre-close declared-status
+   with each one's link kinds and INV-12 disposition (all Step 0(c)), the
+   pre-close declared-status
    snapshot (Step 0(b)/(c)), the `backlogit_ship_shipment` result
    (`shipment_status`, `archived_ids`, `returned_ids`, `commit_sha`),
    `allowed_ids`, `required_ids`, and both set differences
    (`archived_ids - allowed_ids` and `required_ids - archived_ids`) — so a
-   vacuous `required_ids` is visible in the report rather than silent — and
+   vacuous `required_ids` is visible in the report rather than silent — the
+   retained-deliberation preservation check outcome (retained IDs, and
+   whether each remained in `.backlogit/queue/` untouched), and
    the parent_id-preservation verification outcome (against the Step 0(b)
    snapshot).
 6. **Gate decision**: `returned_ids` empty, `archived_ids - allowed_ids`
    empty (no unexpected artifact archived), `required_ids - archived_ids`
-   empty (no required artifact left unarchived), and every `parent_id`
+   empty (no required artifact left unarchived), every retained
+   deliberation preserved (step 3 retained-deliberation preservation
+   check), and every `parent_id`
    preserved (against the Step 0(b) snapshot) →
-   `recommendation: CLOSED`. Proceed to
-   post-mode. Any verification failure above → the corresponding `HALT`; do
-   not proceed to post-mode or any commit step.
+   `recommendation: CLOSED`. Proceed to step 7, then post-mode. Any
+   verification failure above → the corresponding `HALT`; do
+   not proceed to step 7, post-mode, or any commit step.
+7. **Post-cascade source-artifact cleanup (linked deliberations)**: runs
+   only after step 6 returns `CLOSED`, and only for linked deliberations of
+   qualifying feature members that the cascade did not already archive. Use
+   the Step 0(c) disposition snapshot, never a fresh guess:
+   * `archive` and not present in `archived_ids` → archive it explicitly
+     (`backlogit archive <dl_id>`).
+   * `retained_description_mention` with a declared `status` of `queued`
+     **and zero remaining live references** → archive it explicitly
+     (`backlogit archive <dl_id>`). "Zero remaining live references" means
+     that, after the shipment's features and tasks have been archived, no
+     record in `.backlogit/queue/` (and no live stash entry) mentions the
+     deliberation ID by the Step 0(c) matcher or links it through
+     `custom_fields.source_deliberation_id`; the shipment record itself and
+     records archived by this closure do not count as live references. Any
+     remaining live reference, a status other than `queued`, or an
+     unreadable reference scan leaves it in place.
+   * `already-archived` → skip and log.
+   * `retained_shared_reference`, `retained_live_status`,
+     `retained_engine_unverified`, `retained_ambiguous`, and
+     `retained_read_error` → **never archive**: leave the record in
+     `.backlogit/queue/` untouched and log it as retained in the report.
+   Record every archived, skipped, and retained deliberation ID with its
+   disposition in the cascade-close report.
 
 ### Mixed-Role Detection Mode (`mode: detect-mixed-role`, operator-invoked, READ-ONLY)
 
@@ -1015,7 +1111,8 @@ If pre-mode cannot acquire the lock because another process holds it:
 * `mode: safe-close` runs **in place of** the cascade `backlogit_ship_shipment` call and archives only the manifest item IDs (one artifact at a time) plus the shipment record itself — **except** when Step 0's P-015 verified fully-covered-root classification selects `CASCADE`, in which case the Cascade Close Sub-Procedure runs instead and safe-close steps 1–10 are skipped entirely
 * Close-path selection is made **only** from the machine-checkable classification result (Step 0), never inferred from prose or manifest shape alone; any classifier error, ambiguity, or unresolved precondition falls back to safe-close
 * Step 0(c)'s "fully covered" check walks the qualifying feature's **full descendant tree, at every depth** (via a full `parent_id` graph, not a single-level scan of direct children only) — a manifest such as `[feature, task]` where that task has an out-of-manifest subtask must fall back to safe-close, never wrongly qualify for `CASCADE` (155-S, PR #407 review, thread PRRT_kwDORzpWpM6b2MJv)
-* The Cascade Close Sub-Procedure independently verifies `returned_ids` is empty, `archived_ids` against the two-set `allowed_ids` / `required_ids` gate (step 3: `allowed_ids` = manifest tasks + qualifying feature members + each qualifying feature member's validated linked deliberation IDs (Step 0(c), same engine-defined `source_deliberation_id` (taken as a complete literal string, never regex-scanned) / description / references sources — the latter two scanned with the exact `\b(?:DL\d+|[0-9]+(?:\.[0-9]+)*-DL)\b` matcher Backlogit's own `internal/core.deliberationIDPattern` uses, never a broader "any embedded deliberation ID" reading — and existence-and-`artifact_type: deliberation` validation Backlogit's own `collectArchiveCandidateIDs` uses — never a blanket allowance for arbitrary IDs) + the shipment record; `required_ids` = the shipment record and every qualifying feature member, both unconditionally, plus every other allowed member (a manifest task item, or a qualifying feature member's validated linked deliberation) NOT truly `status: archived` in the Step 0(b)/(c) pre-close declared-status snapshot; `archived_ids - allowed_ids` non-empty halts with `HALT — cascade archived unexpected artifact {id}`, `required_ids - archived_ids` non-empty halts with `HALT — cascade did not archive required artifact {id}`, evaluated as two independent, never-merged conditions — a truly pre-archived **non-shipment, non-feature** allowed member (i.e. a manifest task item, or a qualifying feature's linked deliberation, e.g. 147-F's already-archived 027-DL) has no transition to report and is correctly, expectedly absent from `archived_ids`, never a mismatch, but this tolerance never extends to the shipment record itself, which remains unconditionally required regardless of its own pre-close declared status, nor does it extend to a qualifying feature member itself, which is likewise unconditionally required regardless of its own pre-close declared status — since Backlogit's own `ShipShipment` forces every explicit qualifying feature member through `status: done` before archive-candidate collection ever runs, so it is never still `archived` by that point either), and no `parent_id` was cleared — a mismatch on any of these halts fail-closed with a P-005 violation even though the cascade path was itself permitted
+* The Cascade Close Sub-Procedure independently verifies `returned_ids` is empty, `archived_ids` against the two-set `allowed_ids` / `required_ids` gate (step 3: `allowed_ids` = manifest tasks + qualifying feature members + each qualifying feature member's validated linked deliberation IDs whose Step 0(c) disposition is `archive` (`expected_cascade`) or `already-archived` (tolerated) (Step 0(c), same engine-defined `source_deliberation_id` (taken as a complete literal string, never regex-scanned) / description / references sources — the latter two scanned with the exact `\b(?:DL\d+|[0-9]+(?:\.[0-9]+)*-DL)\b` matcher Backlogit's own `internal/core.deliberationIDPattern` uses, never a broader "any embedded deliberation ID" reading — and existence-and-`artifact_type: deliberation` validation Backlogit's own `collectArchiveCandidateIDs` uses — never a blanket allowance for arbitrary IDs) + the shipment record; `required_ids` = the shipment record and every qualifying feature member, both unconditionally, plus every other allowed member (a manifest task item, or a qualifying feature member's linked deliberation with disposition `archive`) NOT truly `status: archived` in the Step 0(b)/(c) pre-close declared-status snapshot; `archived_ids - allowed_ids` non-empty halts with `HALT — cascade archived unexpected artifact {id}`, `required_ids - archived_ids` non-empty halts with `HALT — cascade did not archive required artifact {id}`, evaluated as two independent, never-merged conditions — a truly pre-archived **non-shipment, non-feature** allowed member (i.e. a manifest task item, or a qualifying feature's linked deliberation, e.g. 147-F's already-archived 027-DL) has no transition to report and is correctly, expectedly absent from `archived_ids`, never a mismatch, but this tolerance never extends to the shipment record itself, which remains unconditionally required regardless of its own pre-close declared status, nor does it extend to a qualifying feature member itself, which is likewise unconditionally required regardless of its own pre-close declared status — since Backlogit's own `ShipShipment` forces every explicit qualifying feature member through `status: done` before archive-candidate collection ever runs, so it is never still `archived` by that point either), and no `parent_id` was cleared — a mismatch on any of these halts fail-closed with a P-005 violation even though the cascade path was itself permitted
+* Linked deliberations classified into any retained INV-12 disposition (`retained_description_mention`, `retained_shared_reference`, `retained_live_status`, `retained_engine_unverified`, `retained_ambiguous`, `retained_read_error`) are excluded from BOTH `allowed_ids` and `required_ids` for the cascade call; the step 3 pre/post retained-deliberation preservation check halts with `unexpected-cascade` (`HALT — cascade archived retained deliberation {id}, revert required`) and runs the `git-revert-on-cascade` recovery if one is archived or missing; step 7 post-cascade cleanup archives only an `archive`-disposition deliberation the cascade left behind, or a `retained_description_mention` deliberation with `status: queued` and zero remaining live references, and never archives any other retained disposition
 * Safe-close computes the protected set (parent feature + unshipped siblings) from expected IDs and proves it is fully present in queue at a baseline gate before archiving anything
 * Safe-close verifies the protected set survives after every single-item archival (verify-after-each invariant), with no pre-archived exemption for protected-set members
 * Safe-close moves the shipment record to live `shipped`, verifies it, explicitly archives only that record, and verifies `archived_status: shipped` before closure completes

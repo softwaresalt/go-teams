@@ -80,12 +80,12 @@ model_routing:
     model_provider: "anthropic"
     reasoning_effort: "high"
     model_family: "claude-sonnet-5.5"
-    context_tier: "default"
+    context_tier: "long_context"
   tier3:
-    model: claude-sonnet-5.5              # Frontier: planning, architecture, analysis (e.g., claude-sonnet-5)
-    model_provider: "anthropic"
-    model_family: "claude-sonnet-5.5"
+    model: gemini-4-argon              # Frontier: planning, architecture, analysis (e.g., claude-sonnet-5)
     reasoning_effort: "high"
+    model_provider: "google"
+    model_family: "gemini-4-argon"
     context_tier: "long_context"
   orchestrator:
     model_provider: "google"

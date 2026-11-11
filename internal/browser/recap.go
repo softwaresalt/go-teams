@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -37,7 +38,7 @@ const extractRecapAudioJS = `(async () => {
 	const limitError = 'recap audio exceeds maximum supported size/duration';
 	const info = window.g_fileInfo || {};
 	const pageUrl = String(location.href || '');
-	const itemId = String(info.itemId || info.driveItemId || new URL(pageUrl).searchParams.get('driveItemId') || '');
+	const itemId = String(info.itemId || info.driveItemId || info.VroomItemID || new URL(pageUrl).searchParams.get('driveItemId') || '');
 	const fileName = String(info.fileName || info.name || '');
 	const enforceIdentity = typeof recapExpectedIdentity !== 'undefined';
 	const expected = enforceIdentity ? recapExpectedIdentity : {};
@@ -75,6 +76,7 @@ const extractRecapAudioJS = `(async () => {
 	checkIdentity(pageUrl);
 	checkField('DriveItemID', info.itemId);
 	checkField('DriveItemID', info.driveItemId);
+	checkField('DriveItemID', info.VroomItemID);
 	checkField('RecordingName', info.fileName);
 	checkField('RecordingName', info.name);
 	const pcmEl = document.querySelector('[data-recap-audio-pcm]');
@@ -194,7 +196,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
 			continue
 		}
-		raw, evalErr := evalInCDPTarget(ctx, target.WebSocketDebuggerURL, expr)
+		raw, evalErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
 		if evalErr != nil {
 			lastErr = evalErr
 			continue
@@ -216,16 +218,18 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			lastErr = fmt.Errorf("browser: invalid recap audio payload: %w", err)
 			continue
 		}
-		if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(payload.PageURL)) ||
-			hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(payload.MediaURL)) ||
+		pageIdentity := recapAudioIdentity(payload.PageURL)
+		mediaIdentity := recapAudioIdentity(payload.MediaURL)
+		if hasMeetingIdentityConflict(expected, pageIdentity) ||
+			hasMeetingIdentityConflict(expected, mediaIdentity) ||
 			(expected.DriveItemID != "" && payload.ItemID != "" && !strings.EqualFold(expected.DriveItemID, payload.ItemID)) ||
 			(expected.RecordingName != "" && payload.FileName != "" && !strings.EqualFold(expected.RecordingName, payload.FileName)) {
 			lastErr = fmt.Errorf("browser: recap audio recording identity mismatch")
 			continue
 		}
 		if expected != (MeetingIdentity{}) &&
-			!hasPositiveMeetingIdentityMatch(meetingURL, payload.PageURL) &&
-			!hasPositiveMeetingIdentityMatch(meetingURL, payload.MediaURL) &&
+			!hasRecapAudioIdentityMatch(expected, pageIdentity) &&
+			!hasRecapAudioIdentityMatch(expected, mediaIdentity) &&
 			!(expected.DriveItemID != "" && strings.EqualFold(expected.DriveItemID, payload.ItemID)) &&
 			!(expected.RecordingName != "" && strings.EqualFold(expected.RecordingName, payload.FileName)) {
 			lastErr = fmt.Errorf("browser: recap audio recording identity unverified")
@@ -374,12 +378,46 @@ func hasPositiveMeetingIdentityMatch(expectedURL, candidateURL string) bool {
 	if hasMeetingIdentityConflict(exp, act) {
 		return false
 	}
+	return hasPositiveMeetingIdentityOverlap(exp, act)
+}
+
+func hasPositiveMeetingIdentityOverlap(exp, act MeetingIdentity) bool {
 	return (exp.ThreadID != "" && exp.ThreadID == act.ThreadID) ||
 		(exp.MeetingToken != "" && exp.MeetingToken == act.MeetingToken) ||
 		(exp.DriveItemID != "" && exp.DriveItemID == act.DriveItemID) ||
 		(exp.CallID != "" && exp.CallID == act.CallID) ||
 		(exp.ICalUID != "" && exp.ICalUID == act.ICalUID) ||
 		(exp.MeetID != "" && exp.MeetID == act.MeetID)
+}
+
+// recapAudioIdentity extends ExtractMeetingIdentity with a recording filename
+// taken from a direct media pathname, matching the in-page identity check that
+// accepts both a fileUrl parameter and a media URL path as a recording name.
+func recapAudioIdentity(rawURL string) MeetingIdentity {
+	id := ExtractMeetingIdentity(rawURL)
+	if id.RecordingName != "" {
+		return id
+	}
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Path == "" || strings.Contains(u.Path, "/:") {
+		return id
+	}
+	base := path.Base(u.Path)
+	switch strings.ToLower(path.Ext(base)) {
+	case ".mp4", ".mkv", ".webm", ".mov", ".m4a":
+		id.RecordingName = strings.ToLower(base)
+	}
+	return id
+}
+
+// hasRecapAudioIdentityMatch reports whether act positively matches exp
+// without conflict, additionally accepting a matching recording filename.
+func hasRecapAudioIdentityMatch(exp, act MeetingIdentity) bool {
+	if hasMeetingIdentityConflict(exp, act) {
+		return false
+	}
+	return hasPositiveMeetingIdentityOverlap(exp, act) ||
+		(exp.RecordingName != "" && exp.RecordingName == act.RecordingName)
 }
 
 func hasMeetingIdentityConflict(exp, act MeetingIdentity) bool {
@@ -1257,7 +1295,22 @@ func listCDPTargets(port int) ([]cdpTargetInfo, error) {
 	return targets, nil
 }
 
+// cdpEvalTimeout bounds short DOM probes evaluated over CDP.
+var cdpEvalTimeout = 10 * time.Second
+
+// recapAudioEvalTimeout bounds Recap audio extraction, which downloads,
+// decodes, and serializes a whole recording before returning. The caller's
+// context still cancels the evaluation earlier.
+var recapAudioEvalTimeout = 5 * time.Minute
+
 func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
+	return evalInCDPTargetWithin(ctx, wsURL, expr, cdpEvalTimeout)
+}
+
+// evalInCDPTargetWithin evaluates expr in the CDP target and waits up to
+// timeout for the result. Cancelling ctx closes the connection so a blocked
+// read returns promptly.
+func evalInCDPTargetWithin(ctx context.Context, wsURL, expr string, timeout time.Duration) (string, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	conn, _, _, err := ws.Dial(dialCtx, wsURL)
@@ -1265,7 +1318,9 @@ func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() }) // unblocks the pending read on cancellation
+	defer stop()
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	req := map[string]any{
 		"id":     1,
@@ -1286,6 +1341,9 @@ func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
 	for {
 		msg, err := readBoundedCDPMessage(conn, int64(maxRecapAudioPCMBytes)*2+65536)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
 			return "", err
 		}
 		var resp struct {

@@ -371,6 +371,10 @@ type recapAudioFixture struct {
 	unowned   atomic.Int32
 	evaluated atomic.Int32
 	frameEval atomic.Int32
+	// meetingURL overrides the requested meeting URL when non-empty.
+	meetingURL string
+	// evalDelay delays Runtime.evaluate responses on the owned frame.
+	evalDelay atomic.Int64
 }
 
 func newRecapAudioFixture(t *testing.T, frameURL, payload string) *recapAudioFixture {
@@ -429,6 +433,7 @@ func newRecapAudioFixture(t *testing.T, frameURL, payload string) *recapAudioFix
 			if r.URL.Path == "/frame" {
 				f.frameEval.Add(1)
 				value = payload
+				time.Sleep(time.Duration(f.evalDelay.Load()))
 			}
 			result = map[string]interface{}{"result": map[string]string{"value": value}}
 		}
@@ -456,8 +461,12 @@ func newRecapAudioFixture(t *testing.T, frameURL, payload string) *recapAudioFix
 
 func (f *recapAudioFixture) capture(t *testing.T) ([]byte, error) {
 	t.Helper()
+	meetingURL := harnessRecapURL
+	if f.meetingURL != "" {
+		meetingURL = f.meetingURL
+	}
 	m := &chromeMeeting{
-		opts:    MeetingOptions{MeetingURL: harnessRecapURL},
+		opts:    MeetingOptions{MeetingURL: meetingURL},
 		cdpPort: f.port, capturePageID: "owner",
 		recapEntries: []RecapTranscriptEntry{{Text: "Synthetic transcript"}},
 	}
@@ -867,3 +876,111 @@ const recapAudioDurationBeforeFetchProbeJS = `
 	  if (fetches || decodes) throw new Error('duration checked too late: fetches=' + fetches + ', decodes=' + decodes);
 	})().catch(e => { console.error(e.message); process.exitCode = 1; });
 	`
+
+func TestCaptureRecapAudioAllowsEvaluationLongerThanDOMProbeTimeout(t *testing.T) {
+	prevDOM, prevAudio := cdpEvalTimeout, recapAudioEvalTimeout
+	cdpEvalTimeout, recapAudioEvalTimeout = 100*time.Millisecond, 3*time.Second
+	t.Cleanup(func() { cdpEvalTimeout, recapAudioEvalTimeout = prevDOM, prevAudio })
+	pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+	payload := `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-a","pcmChunks":["` + pcm + `"]}`
+	f := newRecapAudioFixture(t, harnessRecapURL, payload)
+	f.evalDelay.Store(int64(400 * time.Millisecond))
+	got, err := f.capture(t)
+	if err != nil || len(got) == 0 {
+		t.Fatalf("slow audio evaluation must use the audio budget, err=%v bytes=%d", err, len(got))
+	}
+}
+
+func TestCaptureRecapAudioAcceptsRecordingNameFromMediaPath(t *testing.T) {
+	pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+	const meetingURL = "https://teams.cloud.microsoft/l/meetingrecap?fileUrl=https%3A%2F%2Fexample.invalid%2Frec%2FMeeting-A.mp4"
+	for _, tc := range []struct {
+		name, mediaURL string
+		wantErr        bool
+	}{
+		{"matching media path", "https://example.invalid/media/meeting-a.mp4?sig=1", false},
+		{"different media path", "https://example.invalid/media/meeting-b.mp4", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := `{"pageUrl":"https://teams.cloud.microsoft/l/meetingrecap","mediaUrl":"` + tc.mediaURL + `","pcmChunks":["` + pcm + `"]}`
+			f := newRecapAudioFixture(t, harnessRecapURL, payload)
+			f.meetingURL = meetingURL
+			got, err := f.capture(t)
+			if tc.wantErr != (err != nil) || tc.wantErr == (len(got) != 0) {
+				t.Errorf("err=%v bytes=%d, wantErr=%v", err, len(got), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestRecapAudioIdentityRecordingNameFromPath(t *testing.T) {
+	if got := recapAudioIdentity("https://example.invalid/a/Meeting-A.MP4?x=1").RecordingName; got != "meeting-a.mp4" {
+		t.Errorf("direct media path recording name = %q", got)
+	}
+	if got := recapAudioIdentity("https://example.invalid/:v:/p/opaque-token").RecordingName; got != "" {
+		t.Errorf("sharing link must not yield a recording name, got %q", got)
+	}
+	exp := ExtractMeetingIdentity("https://teams.cloud.microsoft/l/meetingrecap?fileUrl=https%3A%2F%2Fexample.invalid%2Fmeeting-a.mp4")
+	if !hasRecapAudioIdentityMatch(exp, recapAudioIdentity("https://example.invalid/meeting-a.mp4")) {
+		t.Error("matching recording filename must verify identity")
+	}
+	if hasRecapAudioIdentityMatch(exp, recapAudioIdentity("https://example.invalid/meeting-b.mp4")) {
+		t.Error("different recording filename must not verify identity")
+	}
+}
+
+func TestRecapAudioJSValidatesVroomItemID(t *testing.T) {
+	for _, scenario := range []string{"mismatched vroom", "vroom only"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "node", "-e", recapAudioVroomProbeJS, scenario)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("JavaScript VroomItemID probe: %v: %s", err, output)
+			}
+		})
+	}
+}
+
+// Evaluate the production expression with a VroomItemID-only recording identity.
+const recapAudioVroomProbeJS = `
+const fs = require('fs');
+const scenario = process.argv[1];
+const maxRecapAudioSourceBytes = 8, maxRecapAudioDurationSec = 2, maxRecapAudioPCMBytes = 8;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+const vroomOnly = scenario === 'vroom only';
+const pageUrl = vroomOnly
+  ? 'https://teams.cloud.microsoft/l/meetingrecap'
+  : 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a';
+const media = { currentSrc: 'https://example.invalid/audio', src: 'https://example.invalid/audio', getAttribute: () => null };
+globalThis.location = { href: pageUrl };
+globalThis.window = globalThis;
+globalThis.g_fileInfo = { VroomItemID: vroomOnly ? 'recording-a' : 'recording-b' };
+globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+globalThis.btoa = s => Buffer.from(s, 'binary').toString('base64');
+let fetches = 0;
+globalThis.fetch = async () => {
+  fetches++;
+  let read = false;
+  return { ok: true, headers: { get: () => null }, body: { getReader: () => ({
+    read: async () => read ? { done: true } : (read = true, { done: false, value: new Uint8Array(1) }),
+    cancel: async () => {}
+  }) } };
+};
+globalThis.AudioContext = class {
+  async decodeAudioData() {
+    return { duration: 1, length: 1, sampleRate: 44100, numberOfChannels: 1, getChannelData: () => new Float32Array(1) };
+  }
+  async close() {}
+};
+(async () => {
+  let result, failure;
+  try { result = await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (vroomOnly) {
+    if (failure || !result || fetches !== 1) throw new Error('VroomItemID match did not fetch: ' + String(failure || result));
+  } else if (fetches || !failure || !String(failure.message || failure).includes('identity')) {
+    throw new Error('conflicting VroomItemID was not rejected before fetch: fetches=' + fetches + ' ' + String(failure || result));
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`

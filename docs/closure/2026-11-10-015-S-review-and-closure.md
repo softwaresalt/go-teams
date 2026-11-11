@@ -65,11 +65,21 @@ transmitting repository content to an external reviewer model.
 | Correctness | `readBoundedCDPMessage` rejects reserved bits, fragmented control frames, a data frame inside a fragmented message, and unknown opcodes, and it answers pings and treats close as EOF | No action |
 | Maintainability | The extraction expression is a single JavaScript string literal in Go, tested through Node-evaluated probes | Advisory P3; see Follow-ups |
 | Scope | `015.003-T` and `015.004-T` touch only their declared files; no dependency or schema change | No action |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62RRUq`): the in-page identity check ignored `g_fileInfo.VroomItemID`, so a matching page URL could mask conflicting metadata, and a VroomItemID-only player was rejected | Fixed in-scope (P-021 C1: completes the authorized identity validation); `VroomItemID` is validated as a drive-item ID and returned in `itemId`, while generic `id`/`docId` values are still not treated as drive-item IDs. Node probes cover both cases |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62RRVc`): the 10-second DOM-probe deadline also bounded whole-recording download, decode, and serialization | Fixed in-scope (P-021 C1); audio extraction now uses `recapAudioEvalTimeout` (5 minutes) and the caller's context closes the connection on cancellation. A delayed-response test covers it |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62RRV0`): the page accepted a recording filename from `fileUrl` or a media path, but Go rejected it | Fixed in-scope (P-021 C1); `recapAudioIdentity` and `hasRecapAudioIdentityMatch` apply the same filename extraction and conflict checks to page and media URLs |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62RRWK`): `--recap-audio` took precedence over a per-entry `--audio=false` in queue runs | Fixed in-scope (P-021 C1); the two flags share one value so the last argument wins, and a mixed-alias queue regression test covers it |
+| Scope | Copilot round 1 (thread `PRRT_kwDOTStvas62RRVH`): the in-session review fallback in `_ship.agent.md` and `adversarial-review.agent.md` bypasses the insufficient-reviewer halt | Out of scope (P-021 C1: harness review-gate policy, a different contract surface); captured as deferred entry `680A62E6`, no code change made |
 
 Blocking findings: `P0=0, P1=0, P2=0, P3=1`. Outcome: `READY_WITH_FOLLOWUPS`.
 
 ## Follow-ups
 
+* Deferred scope expansion `680A62E6` (P-021 C2, provisional priority medium,
+  requires deliberation): reconcile the harness review fallback so the in-session
+  single-agent review is an explicitly authorized degraded outcome that does not
+  count as consensus, or preserve the adversarial-review insufficient-reviewer halt.
+  Captured from PR #38 Copilot thread `PRRT_kwDOTStvas62RRVH`. Stage owns triage.
 * Accepted residual risk (approved layered safety contract): Chromium's
   `decodeAudioData` does not expose a pre-decode PCM size for unknown-duration
   streams, so decode expansion inside the 64 MiB compressed-source cap can use

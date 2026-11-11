@@ -282,13 +282,18 @@ fail-closed `<exe>.lock.ctl`:
      expires while `<target>.lock` is still present), without holding
      `<exe>.lock` across the network download.
    * Capture the baseline snapshot (`os.Stat` + SHA-256) at the **very start of
-     `Update`** (before `lookup` and before any wait); if `exe` is missing or
-     `<exe>.lock` / `<exe>.old` is present at that initial check (so B had to
-     wait for an in-flight swap), mark `concurrentSwapObserved = true` and
-     reject `!force` under `<exe>.lock` (`ErrConcurrentUpdateModified`). In
-     addition, under `<exe>.lock` inside `swap` when `!force`, verify
-     installed-binary version / running-image identity before
-     `rename(exe, old)`: provide an injectable
+     `Update`** (before `lookup` and before any wait); set
+     `concurrentSwapObserved = true` ONLY when **`exe` is missing
+     (`fs.ErrNotExist`) OR `<exe>.lock` exists on disk** at that initial check
+     (so B had to wait for an in-flight swap) and reject `!force` under
+     `<exe>.lock` (`ErrConcurrentUpdateModified`) — NEVER set
+     `concurrentSwapObserved` merely because a leftover `<exe>.old` exists
+     alongside an intact `exe` when `<exe>.lock` is absent, because a leftover
+     `<exe>.old` beside an intact `exe` with no `<exe>.lock` is normal
+     post-update steady state on Windows (preserving stale-backup cleanup at the
+     start of `swap` and `TestUpdateReplacesStaleOldFile`). In addition, under
+     `<exe>.lock` inside `swap` when `!force`, verify installed-binary version /
+     running-image identity before `rename(exe, old)`: provide an injectable
      `installedVersion func(ctx context.Context, exePath string) (string, error)`
      (or running-executable `os.SameFile` + SHA-256 identity check when
      `u.cfg.ExecutablePath == ""`) that inspects the on-disk `exe` under
@@ -405,6 +410,14 @@ We select **Option C** and synthesize covering feature **`018-F`**
    non-mapped fixture binary (pausing Updater A inside `swap` after
    `rename(exe, old)` while Updater B runs pre-swap `executablePath` /
    `os.Stat(exe)`), and clean abort when `<exe>.old` is locked (`XS` / `low`).
+3. **Explicit P-012 Item 5 bootstrap authorization (`018-S` before `019-S`,
+   Comment `4543907745`)**: Because the operator explicitly ordered Option 2
+   (`018-S`) before Option 3 (`019-S`), `007-DL`, `018-F`, `018-S`, and the
+   `018-S` plan record explicit P-012 Item 5 bootstrap authorization for
+   reviewing `018-S` (and `019-S` prior to `019.001-T` landing) under the
+   `single-agent-declared-degradation` review gate (`P0=0, P1=0` severity-gated
+   in-session review in `mode: report-only`) when subagent dispatch is
+   unavailable.
 
 ## Rejected Alternatives
 

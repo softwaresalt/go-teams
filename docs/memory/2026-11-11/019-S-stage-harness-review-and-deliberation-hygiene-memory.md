@@ -115,7 +115,12 @@ hygiene*), chained after **`018-S`** via `backlogit dep add 019-S 018-S --type b
     `deliberation_id` excluding the cleanup stash entry itself, vs. historical
     audit citations)
   * **Shipment `019-S`**: `items: [019-F, 019.001-T, 019.002-T]`, `status: queued`,
-    chained after `018-S` via `backlogit dep add 019-S 018-S --type blocks`
+    chained after `018-S` via `backlogit dep add 019-S 018-S --type blocks` per
+    operator Track B (`018-S`) -> Track C (`019-S`) ordering (with explicit
+    P-012 Item 5 bootstrap authorization recorded across `007-DL`, `018-F`,
+    `018-S`, `008-DL`, `019-F`, `019-S`, and both plans for reviewing `018-S`
+    and `019-S` under `single-agent-declared-degradation` when subagent dispatch
+    is unavailable prior to `019.001-T` landing)
 * **Stash & Orphaned Deliberation Archival**:
   * Archived `680A62E6` via `backlogit stash archive 680A62E6`.
   * Archived `9A9D8106` via `backlogit stash archive 9A9D8106`.

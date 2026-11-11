@@ -396,8 +396,18 @@ exclusive and unambiguous across every downstream phase:
      `post_remediation_review: true`) in-session Phase 7 post-remediation
      re-review.
    * Gates Ship Step 4.4 readiness on `P0=0, P1=0` (any `P0`/`P1` blocks with
-     `BLOCKED`; `P2`/`P3` require follow-up or acknowledgment) and removes the
-     stale `(approved for 012-S–017-S)` range cap in `_ship.agent.md`.
+     `BLOCKED`; `P2` requires follow-up or acknowledgment) and replaces the
+     stale `(approved for 012-S–017-S)` range ceiling in `_ship.agent.md` Step
+     4.4 with the permanent P-012 Item 5 + `008-DL` / `019-F` contract
+     (governed by `TOOL_DEGRADED: subagent-dispatch` rather than a hard-coded
+     shipment ID range). Because the operator explicitly ordered Option 2
+     (`018-S`) before Option 3 (`019-S`), explicit **P-012 Item 5 bootstrap
+     authorization** is recorded across `007-DL`, `018-F`, `018-S`, the `018-S`
+     plan, `008-DL`, `019-F`, `019-S`, and the `019-S` plan authorizing `018-S`
+     (and `019-S` prior to `019.001-T` landing) to use the
+     `single-agent-declared-degradation` review gate (`P0=0, P1=0`
+     severity-gated in-session review in `mode: report-only`) when subagent
+     dispatch is unavailable.
 
 * **Pros**: Directly resolves PR #38 thread `PRRT_kwDOTStvas62RRVH`; preserves
   the `INSUFFICIENT_REVIEWERS` halt when multi-agent dispatch is active; prevents

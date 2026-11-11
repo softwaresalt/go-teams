@@ -91,11 +91,14 @@ Executed Dark Factory Mode (`DARK_MODE_ACTIVE`, P-017) Stage session for Cycle 1
     (`<target>.lock` / `<target>.old`) with one immediate `os.Stat` re-probe and
     wait-poll in pre-swap `os.Stat(exe)` / `filepath.EvalSymlinks(exe)` without
     holding `<exe>.lock` across the network download, capture the baseline
-    snapshot at the very start of `Update` (`concurrentSwapObserved`) and verify
-    both baseline fingerprint and `installedVersion` / running-image identity
-    under `<exe>.lock` when `!force` (`ErrDowngrade` /
-    `ErrConcurrentUpdateModified`), return `(release func() error, err error)`
-    from `acquireSwapLock` using
+    snapshot at the very start of `Update` (setting
+    `concurrentSwapObserved = true` ONLY when `exe` is missing or `<exe>.lock`
+    exists on disk — never merely because a leftover `<exe>.old` exists beside
+    an intact `exe` with no `<exe>.lock`, preserving
+    `TestUpdateReplacesStaleOldFile`) and verify both baseline fingerprint and
+    `installedVersion` / running-image identity under `<exe>.lock` when `!force`
+    (`ErrDowngrade` / `ErrConcurrentUpdateModified`), return
+    `(release func() error, err error)` from `acquireSwapLock` using
     `context.WithTimeout(context.WithoutCancel(ctx), u.ctlLockWaitTimeout)` and
     `errors.Join(swapErr, relErr)` while setting `res.Updated = true` if
     `rename(tmp, exe)` succeeded and only `release()` errored, abort cleanly at
@@ -121,7 +124,10 @@ Executed Dark Factory Mode (`DARK_MODE_ACTIVE`, P-017) Stage session for Cycle 1
     `os.Stat(exe)`, and clean abort when `<exe>.old` is locked by a running
     Windows process)
   * **Shipment `018-S`**: `items: [018-F, 018.001-T, 018.002-T]`, `status: queued`
-    (no upstream shipment blocker; immediately eligible for `_Ship` claim)
+    (no upstream shipment blocker; immediately eligible for `_Ship` claim;
+    carries explicit P-012 Item 5 bootstrap authorization to use the
+    `single-agent-declared-degradation` review gate in `mode: report-only` when
+    subagent dispatch is unavailable prior to `019.001-T` landing)
 * **Stash Archival**:
   * Archived `2D0BAA19` via `backlogit stash archive 2D0BAA19`.
 

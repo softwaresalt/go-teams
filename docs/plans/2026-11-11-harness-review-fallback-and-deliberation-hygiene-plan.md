@@ -252,8 +252,11 @@ Two contract surfaces are addressed:
        `authorized_contract_scope` is present) in-session Phase 7
        post-remediation re-review.
   2. In `.github/agents/_ship.agent.md` (Step 4.4, around line 465):
-     * Remove the stale `(approved for 012-S–017-S)` shipment-range qualifier on
-       the P-012 Item 5 Privacy / Single-Agent Fallback.
+     * Replace the stale `(approved for 012-S–017-S)` shipment-range qualifier
+       on the P-012 Item 5 Privacy / Single-Agent Fallback with the permanent
+       P-012 Item 5 + `008-DL` / `019-F` contract (governed by
+       `TOOL_DEGRADED: subagent-dispatch` rather than a hard-coded shipment ID
+       range).
      * Map reviewer JSON severities deterministically (`CRITICAL -> P0`,
        `MAJOR -> P1`, `MINOR -> P2`, with no ambiguous split of `MAJOR`) and
        explicitly distinguish the two modes (Finding 5 & Comment `4543766839`):
@@ -353,9 +356,18 @@ U1 (019.001-T: _ship.agent.md & adversarial-review.agent.md review fallback reco
   └──> U2 (019.002-T: shipment-reconcile/SKILL.md & compound learning doc for retained_engine_unverified)
 ```
 
-* Shipment sequencing: `019-S` is chained after `018-S` via
-  `backlogit dep add 019-S 018-S --type blocks` so `_Ship` executes `018-S`
-  first and `019-S` unlocks automatically once `018-S` ships.
+* Shipment sequencing & P-012 Item 5 bootstrap authorization (Comment
+  `4543907745`): `019-S` is chained after `018-S` via
+  `backlogit dep add 019-S 018-S --type blocks` per the operator's Track B
+  (`018-S`) -> Track C (`019-S`) ordering so `_Ship` executes `018-S` first and
+  `019-S` unlocks automatically once `018-S` ships. Explicit **P-012 Item 5
+  bootstrap authorization** is recorded across `007-DL`, `018-F`, `018-S`, the
+  `018-S` plan, `008-DL`, `019-F`, `019-S`, and this plan authorizing `018-S`
+  (and `019-S` prior to `019.001-T` landing) to use the
+  `single-agent-declared-degradation` review gate (`P0=0, P1=0` severity-gated
+  in-session review in `mode: report-only` with
+  `consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`) when subagent
+  dispatch is unavailable.
 
 ## Decisions and Rationale
 

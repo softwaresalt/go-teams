@@ -373,6 +373,8 @@ type recapAudioFixture struct {
 	frameEval atomic.Int32
 	// meetingURL overrides the requested meeting URL when non-empty.
 	meetingURL string
+	// recapAudioURL is the retained selected-Recap URL, as set during Join.
+	recapAudioURL string
 	// evalDelay delays Runtime.evaluate responses on the owned frame.
 	evalDelay atomic.Int64
 }
@@ -467,7 +469,7 @@ func (f *recapAudioFixture) capture(t *testing.T) ([]byte, error) {
 	}
 	m := &chromeMeeting{
 		opts:    MeetingOptions{MeetingURL: meetingURL},
-		cdpPort: f.port, capturePageID: "owner",
+		cdpPort: f.port, capturePageID: "owner", recapAudioURL: f.recapAudioURL,
 		recapEntries: []RecapTranscriptEntry{{Text: "Synthetic transcript"}},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -984,3 +986,42 @@ globalThis.AudioContext = class {
   }
 })().catch(e => { console.error(e.message); process.exitCode = 1; });
 `
+
+func TestCaptureRecapAudioUsesRetainedIdentityForInteractiveSelection(t *testing.T) {
+	pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+	for _, tc := range []struct {
+		name, itemID string
+		wantErr      bool
+	}{
+		{"selected recording", "recording-a", false},
+		{"different recording", "recording-b", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := `{"pageUrl":"` + harnessRecapURL + `","itemId":"` + tc.itemID + `","pcmChunks":["` + pcm + `"]}`
+			f := newRecapAudioFixture(t, harnessRecapURL, payload)
+			f.meetingURL = "https://teams.microsoft.com/v2/"
+			f.recapAudioURL = harnessRecapURL
+			got, err := f.capture(t)
+			if tc.wantErr != (err != nil) || tc.wantErr == (len(got) != 0) {
+				t.Errorf("err=%v bytes=%d, wantErr=%v", err, len(got), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestRetainRecapAudioIdentity(t *testing.T) {
+	m := &chromeMeeting{opts: MeetingOptions{MeetingURL: "https://teams.microsoft.com/v2/"}}
+	m.retainRecapAudioIdentity("https://teams.cloud.microsoft/l/meetingrecap")
+	if m.recapAudioURL != "" {
+		t.Errorf("page without identity must not be retained, got %q", m.recapAudioURL)
+	}
+	m.retainRecapAudioIdentity(harnessRecapURL)
+	if m.recapAudioURL != harnessRecapURL {
+		t.Errorf("selected recap identity not retained, got %q", m.recapAudioURL)
+	}
+	specific := &chromeMeeting{opts: MeetingOptions{MeetingURL: harnessRecapURL}}
+	specific.retainRecapAudioIdentity("https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-b")
+	if specific.recapAudioURL != "" {
+		t.Errorf("requested identity must stay authoritative, got %q", specific.recapAudioURL)
+	}
+}

@@ -42,7 +42,11 @@ type chromeMeeting struct {
 	attachedCtx          context.Context
 	recapEntries         []RecapTranscriptEntry
 	recapMeta            MeetingMetadata
-	aiSummary            string
+	// recapAudioURL is the selected Recap page URL retained when the requested
+	// URL carries no recording identity (interactive Recap selection), so audio
+	// validation still binds to the recording that supplied the transcript.
+	recapAudioURL string
+	aiSummary     string
 }
 
 func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
@@ -57,6 +61,21 @@ func (m *chromeMeeting) AISummary() string {
 // MeetingMetadata implements MetadataProvider.
 func (m *chromeMeeting) MeetingMetadata() MeetingMetadata {
 	return m.recapMeta
+}
+
+// retainRecapAudioIdentity records pageURL as the identity source for Recap
+// audio validation when the requested meeting URL carries no recording
+// identity (for example the default Teams home URL used when the operator
+// selects a Recap interactively). A requested URL that has an identity always
+// stays authoritative, so recording isolation is never relaxed.
+func (m *chromeMeeting) retainRecapAudioIdentity(pageURL string) {
+	if ExtractMeetingIdentity(m.opts.MeetingURL) != (MeetingIdentity{}) {
+		return
+	}
+	if ExtractMeetingIdentity(pageURL) == (MeetingIdentity{}) {
+		return
+	}
+	m.recapAudioURL = pageURL
 }
 
 // IsRecap implements RecapMeeting.
@@ -356,6 +375,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 							}
 							enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
 							m.recapMeta = meta
+							m.retainRecapAudioIdentity(mainPage.URL)
 							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
 							return nil
 						}
@@ -686,6 +706,7 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 				}
 				enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
 				m.recapMeta = meta
+				m.retainRecapAudioIdentity(mainPageURL)
 				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
 				return true
 			}
@@ -1066,7 +1087,11 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 		return fmt.Errorf("browser: audio writer must not be nil")
 	}
 	if m.IsRecap() {
-		return captureRecapAudioFromTargets(ctx, m.cdpPort, m.capturePageID, m.opts.MeetingURL, w)
+		meetingURL := m.opts.MeetingURL
+		if m.recapAudioURL != "" {
+			meetingURL = m.recapAudioURL
+		}
+		return captureRecapAudioFromTargets(ctx, m.cdpPort, m.capturePageID, meetingURL, w)
 	}
 	targetCtx, cancelTarget := m.targetContext(ctx)
 	defer cancelTarget()

@@ -73,7 +73,15 @@ Flags for the root command, `captions`, and `join`:
 * `--bot-name`: display name injected when joining as an unauthenticated guest
 * `--browser-path`: explicit Chrome, Edge, or Brave executable path (also reads `TEAMS_BROWSER_PATH`)
 * `--headed` / `--headless`: control whether the browser window is visible
-* `--audio`: also capture tab audio to an `.mp3` file alongside the `.md` transcript
+* `--audio`: also capture meeting or recap audio to an `.mp3` file alongside the `.md` transcript
+* `--recap-audio`: also capture Meeting Recap audio to an `.mp3` file alongside the `.md` transcript
+
+Meeting Recap URLs write only the `.md` transcript by default. Enabling audio
+with `--audio`, `--recap-audio`, or `capture_audio: true` (alias `audio: true`)
+in the config file also writes a companion `.mp3` file next to the transcript,
+extracted from the recording that belongs to the requested Recap. Recap audio
+is rejected rather than captured when its recording identity cannot be verified
+or when it exceeds the supported size or duration limits.
 
 `--browser-path` and `--profile-dir` are also accepted by `auth` and `schedule`,
 and `browser_path` in the config file applies to every command.
@@ -133,6 +141,7 @@ output_dir: /home/user/.config/teams-cli/transcripts
 profile_dir: /home/user/.config/teams-cli/profile
 bot_name: Transcription Agent
 headless: true
+capture_audio: false # true also writes an .mp3 for live meetings and Meeting Recaps
 meetings:
   - name: standup
     url: https://teams.microsoft.com/l/meetup-join/...

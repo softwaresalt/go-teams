@@ -6,7 +6,9 @@ shipment: 013-S
 branch: feat/013-s-browser-security-secret-hygiene-and-execpath-configuration
 status: ready
 closure_status: READY
-compaction_status: pending
+compaction_status: done
+merge_commit: dbf1e2293adb0a3fbc300b9329a44b3a9ccff5b1
+pr: 33
 ---
 
 ## Release scope
@@ -113,7 +115,51 @@ rebuild `teams-cli.exe` from the prior release commit. As a no-revert
 mitigation, set `TEAMS_DISABLE_SANDBOX=1` for sandbox launch failures. No data
 migration or profile changes are involved.
 
+## Post-merge closure
+
+PR #33 merged to `main` at `dbf1e2293adb0a3fbc300b9329a44b3a9ccff5b1`
+(`2026-11-11T04:05:59Z`) with a merge commit (P-009). Dark Factory Mode (P-017)
+post-merge closure ran on
+`post-merge/013-browser-security-secret-hygiene-and-execpath-configuration`:
+
+* Copilot shadow review ran two rounds on PR #33. Round 1: four threads, three
+  fixed (query and fragment removed before the host and path split, earliest
+  scheme token in queue-argument redaction, flaky wiring test) and one deferred
+  under P-021 C1 to stash entry `FC763C17` (headed direct-exec launcher sandbox
+  opt-in, a different contract surface). Round 2: two threads, both fixed
+  (mandatory Git index extensions fail closed, outer non-HTTP scheme
+  redaction). `autoharness gate copilot-review` returned `SATISFIED` and CI
+  passed for the merged HEAD.
+* Verified `MERGE_CONFIRMED` via `gh pr view 33` (`state: MERGED`) and
+  `git merge-base --is-ancestor dbf1e2293adb0a3fbc300b9329a44b3a9ccff5b1
+  origin/main`.
+* `autoharness gate pipeline-topology --phase lifecycle --shipment 013-S`
+  passed (`BRANCH_POST_MERGE_CLOSURE_ELIGIBLE`, `WORKTREE_TOPOLOGY_OK`).
+* P-015 fully-covered-root verification: `013-F` is a root feature whose only
+  descendants, `013.001-T` through `013.005-T`, are all `013-S` manifest
+  members, so the cascade close path was selected. The pre-close snapshot
+  recorded every task as `status: done` (already relocated to
+  `.backlogit/archive/`), `013-F` as `active`, and `parent_id: 013-F` on all
+  five tasks.
+* `backlogit shipment ship 013-S --sha dbf1e2293adb0a3fbc300b9329a44b3a9ccff5b1`
+  returned `archived_ids: [013.001-T, 013.002-T, 013.003-T, 013.004-T,
+  013.005-T, 013-F, 013-S]` and `returned_ids: []`. Every task kept
+  `parent_id: 013-F`, and `013-S` carries `archived_status: shipped`.
+* Source artifact cleanup: the engine did not archive deliberation `002-DL`
+  (named in the `013-F` description only), so Ship archived it explicitly with
+  `backlogit archive 002-DL` (`archived_status: queued`). No stash entry
+  carries `source_stash_id` for this scope; the five consumed stash entries
+  were already archived by Stage, and `DF1F461F` was left untouched.
+* Shipments `010-S` and `014-S` and their tasks were verified byte-identical
+  in `.backlogit/queue/` before and after closure.
+* Mandatory P-020 `compact-context` (`target: all`) ran; the session memory
+  was compacted to
+  `docs/memory/compacted/2026-11-10-013-S-browser-security-compacted.md`
+  and the verbose original archived under `docs/archive/memory/`. Recorded as
+  `compaction_status: done` above.
+
 ## Handoff
 
 Related [decision](../decisions/2026-11-10-browser-security-and-hygiene-deliberation.md)
 and [plan](../plans/2026-11-10-browser-security-and-hygiene-plan.md).
+Follow-up: stash entry `FC763C17` for Stage deliberation.

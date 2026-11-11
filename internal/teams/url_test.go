@@ -234,6 +234,21 @@ func TestRedactArgsUsesEarliestSchemeToken(t *testing.T) {
 			"--url=[invalid-url]",
 		},
 		{
+			"outer non-http scheme with nested https url",
+			[]string{"--url=msteams://teams.microsoft.com/meet/1?p=secret-passcode&next=https://teams.microsoft.com/"},
+			"--url=[invalid-url]",
+		},
+		{
+			"outer non-http scheme bare",
+			[]string{"msteams://teams.microsoft.com/meet/1?p=secret-passcode"},
+			"[invalid-url]",
+		},
+		{
+			"attached flag with http scheme",
+			[]string{"-uhttps://teams.microsoft.com/meet/1?p=secret-passcode"},
+			"-uhttps://teams.microsoft.com/meet/1",
+		},
+		{
 			"upper-case scheme",
 			[]string{"HTTPS://teams.microsoft.com/meet/1?p=secret-passcode"},
 			"https://teams.microsoft.com/meet/1",

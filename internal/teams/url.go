@@ -251,20 +251,30 @@ func RedactArgs(args []string) string {
 var httpSchemeTokenRe = regexp.MustCompile(`(?i)https?:`)
 
 func redactArg(a string) string {
-	if loc := httpSchemeTokenRe.FindStringIndex(a); loc != nil {
-		return a[:loc[0]] + RedactURL(a[loc[0]:])
-	}
+	loc := httpSchemeTokenRe.FindStringIndex(a)
 	i := strings.Index(a, "://")
-	if i < 0 {
+	var start int
+	switch {
+	case loc == nil && i < 0:
 		return a
-	}
-	start := i
-	for start > 0 {
-		c := a[start-1]
-		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
-			break
+	case i < 0:
+		start = loc[0]
+	default:
+		start = i
+		for start > 0 && isASCIILetter(a[start-1]) {
+			start--
 		}
-		start--
+		// An http(s) token that is itself the scheme of the first "://" may be
+		// glued to a flag ("-uhttps://"), and an http(s) token that precedes
+		// the first "://" belongs to an earlier, malformed URL. Both start at
+		// the http token; otherwise the first "://" scheme starts the URL.
+		if loc != nil && (loc[0] < start || loc[1] == i+1) {
+			start = loc[0]
+		}
 	}
 	return a[:start] + RedactURL(a[start:])
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

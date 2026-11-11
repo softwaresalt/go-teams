@@ -248,7 +248,36 @@ func parseGitIndexPaths(data []byte) ([]string, error) {
 			paths = append(paths, p)
 		}
 	}
+	if err := rejectMandatoryIndexExtensions(data, pos); err != nil {
+		return nil, err
+	}
 	return paths, nil
+}
+
+// errUnsupportedIndexExtension reports an index whose entries are incomplete
+// without an extension this parser does not implement.
+var errUnsupportedIndexExtension = errors.New("git index uses an unsupported mandatory extension")
+
+// rejectMandatoryIndexExtensions walks the extension blocks that follow the
+// entries (up to the 20-byte checksum). Git treats an extension as optional
+// only when its signature starts with an uppercase ASCII letter; anything else,
+// such as the split-index "link" extension that stores only delta entries,
+// is mandatory and changes which paths are tracked. Because this parser cannot
+// resolve those, it fails closed instead of returning a partial inventory.
+func rejectMandatoryIndexExtensions(data []byte, pos int) error {
+	end := len(data) - 20
+	for pos+8 <= end {
+		sig := data[pos : pos+4]
+		size := int(binary.BigEndian.Uint32(data[pos+4 : pos+8]))
+		if sig[0] < 'A' || sig[0] > 'Z' {
+			return fmt.Errorf("%w: %q", errUnsupportedIndexExtension, sig)
+		}
+		if size < 0 || size > end-pos-8 {
+			return errors.New("git index extension is truncated")
+		}
+		pos += 8 + size
+	}
+	return nil
 }
 
 // readIndexVarint decodes git's offset-encoded varint used by index v4 and
@@ -446,7 +475,8 @@ func buildIndexV2(version uint32, paths []string, extended bool) []byte {
 		}
 		buf.Write(entry)
 	}
-	buf.WriteString("TREE\x00\x00\x00\x00") // trailing extension, ignored
+	buf.WriteString("TREE\x00\x00\x00\x00") // optional trailing extension, ignored
+	buf.Write(make([]byte, 20))             // checksum trailer
 	return buf.Bytes()
 }
 
@@ -471,6 +501,7 @@ func buildIndexV4(paths []string) []byte {
 		buf.WriteByte(0)
 		prev = p
 	}
+	buf.Write(make([]byte, 20)) // checksum trailer
 	return buf.Bytes()
 }
 
@@ -509,6 +540,31 @@ func TestParseGitIndexPathsRejectsMalformedInput(t *testing.T) {
 	}
 }
 
+func TestParseGitIndexPathsRejectsMandatoryExtensions(t *testing.T) {
+	// A split index stores only delta entries and points at the rest through
+	// the lowercase (mandatory) "link" extension.
+	good := buildIndexV2(2, []string{"a.txt"}, false)
+	body := good[:len(good)-20]
+	split := append(append([]byte{}, body...), []byte("link\x00\x00\x00\x00")...)
+	split = append(split, make([]byte, 20)...)
+
+	_, err := parseGitIndexPaths(split)
+	require.ErrorIs(t, err, errUnsupportedIndexExtension)
+
+	// The same fixture without the mandatory extension still parses.
+	got, err := parseGitIndexPaths(good)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a.txt"}, got)
+
+	// A mandatory extension must also fail closed through trackedFiles when git
+	// is unavailable.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "index"), split, 0o600))
+	_, err = enumerateTrackedFiles(root, func(string) ([]string, error) { return nil, errors.New("git not available") })
+	require.ErrorIs(t, err, errUnsupportedIndexExtension)
+}
+
 func TestTrackedFilesFailsClosedWithoutGitOrIndex(t *testing.T) {
 	failingGit := func(string) ([]string, error) { return nil, errors.New("git not available") }
 
@@ -540,6 +596,9 @@ func TestTrackedFilesIndexParserMatchesGitLsFiles(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "index"))
 	require.NoError(t, err)
 	got, err := parseGitIndexPaths(data)
+	if errors.Is(err, errUnsupportedIndexExtension) {
+		t.Skipf("index uses a mandatory extension the pure-Go parser rejects by design: %v", err)
+	}
 	require.NoError(t, err)
 
 	sort.Strings(want)

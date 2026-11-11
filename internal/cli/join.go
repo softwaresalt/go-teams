@@ -47,7 +47,10 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
 	cmd.Flags().BoolVar(&f.headless, "headless", false, "run browser in headless mode")
 	cmd.Flags().BoolVar(&f.headed, "headed", false, "open a visible browser window for interactive authentication")
-	cmd.Flags().BoolVar(&f.audio, "audio", false, "also capture tab audio to an MP3 file")
+	cmd.Flags().BoolVar(&f.audio, "audio", false, "also capture meeting or recap audio to an MP3 file")
+	// --recap-audio is an alias that shares state with --audio so the argument
+	// that appears last wins, including for per-entry queue overrides.
+	cmd.Flags().BoolVar(&f.audio, "recap-audio", false, "also capture Meeting Recap audio to an MP3 file")
 }
 
 func applyOutputTarget(cfg *config.Config, target string) {
@@ -107,7 +110,7 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if f.headed {
 		cfg.Headless = false
 	}
-	if cmd.Flags().Changed("audio") {
+	if cmd.Flags().Changed("audio") || cmd.Flags().Changed("recap-audio") {
 		cfg.CaptureAudio = f.audio
 	}
 }
@@ -156,11 +159,16 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 	if f.headed {
 		out = append(out, "--headed")
 	}
-	if cmd.Flags().Changed("audio") {
+	// Both flags share f.audio, so forward the resolved value under each flag
+	// that was set; the values agree, so their order cannot matter downstream.
+	for _, name := range []string{"audio", "recap-audio"} {
+		if !cmd.Flags().Changed(name) {
+			continue
+		}
 		if f.audio {
-			out = append(out, "--audio")
+			out = append(out, "--"+name)
 		} else {
-			out = append(out, "--audio=false")
+			out = append(out, "--"+name+"=false")
 		}
 	}
 	return out

@@ -197,3 +197,28 @@ func TestSanitizeQueueArgsForLogRedactsURLSecrets(t *testing.T) {
 		assert.NotContains(t, got, s)
 	}
 }
+
+func TestQueueFileHonorsPerEntryAudioAliasOverrides(t *testing.T) {
+	dir := t.TempDir()
+	queuePath := filepath.Join(dir, "transcript-queue.txt")
+	const base = "https://teams.cloud.microsoft/l/meetingrecap?threadId="
+	queue := strings.Join([]string{
+		`-u "` + base + `inherit"`,
+		`-u "` + base + `audio-off" --audio=false`,
+		`-u "` + base + `recap-off" --recap-audio=false`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(queuePath, []byte(queue), 0o600))
+
+	got := map[string]bool{}
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) { c := validConfig(); c.Headless = true; return c, nil },
+		newRunner:  func(config.Config) browser.Runner { return &fakeRunner{} },
+		newMeeting: func(ctx context.Context, c config.Config, url string) (browser.Meeting, context.Context, func(), error) {
+			got[strings.TrimPrefix(url, base)] = c.CaptureAudio
+			return nil, ctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession { return recorderSession{&captureRecorder{}} },
+	}
+	require.NoError(t, runCmd(context.Background(), d, "--queue", queuePath, "--recap-audio"))
+	assert.Equal(t, map[string]bool{"inherit": true, "audio-off": false, "recap-off": false}, got)
+}

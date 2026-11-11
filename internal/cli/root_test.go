@@ -13,6 +13,7 @@ import (
 
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/config"
+	"github.com/spf13/cobra"
 )
 
 type fakeRunner struct {
@@ -329,4 +330,48 @@ func TestCLIOutputFileFlagAndPositionalArg(t *testing.T) {
 	err = runCmd(context.Background(), d, "https://teams.cloud.microsoft/l/meetingrecap?threadId=2", `C:\out\direct.md`)
 	require.NoError(t, err)
 	assert.Equal(t, `C:\out\direct.md`, gotCfg.OutputFile)
+}
+
+func TestRecapAudioFlagAndQueueForwarding(t *testing.T) {
+	for _, name := range []string{"root", "captions", "join"} {
+		for _, flag := range []string{"audio", "recap-audio"} {
+			for _, value := range []string{"true", "false"} {
+				t.Run(name+"/"+flag+"="+value, func(t *testing.T) {
+					root := newRootCommand(defaultDeps())
+					cmd := root
+					if name != "root" {
+						var err error
+						cmd, _, err = root.Find([]string{name})
+						if err != nil {
+							t.Fatalf("find command: %v", err)
+						}
+					}
+					if cmd.Flags().Lookup(flag) == nil {
+						t.Fatalf("%s does not register --%s", name, flag)
+					}
+					// Bind directly so the same flag state can be checked in both
+					// applyCaptureFlags and inheritedQueueFlags.
+					var f captureFlags
+					testCmd := &cobra.Command{Use: name}
+					bindCaptureFlags(testCmd, &f)
+					if err := testCmd.Flags().Parse([]string{"--" + flag + "=" + value}); err != nil {
+						t.Fatalf("parse flag: %v", err)
+					}
+					cfg := config.Config{CaptureAudio: value == "false"}
+					applyCaptureFlags(testCmd, &cfg, f)
+					if cfg.CaptureAudio != (value == "true") {
+						t.Errorf("CaptureAudio = %v for --%s=%s", cfg.CaptureAudio, flag, value)
+					}
+					want := "--" + flag
+					if value == "false" {
+						want += "=false"
+					}
+					got := inheritedQueueFlags(testCmd, "", f)
+					if len(got) != 1 || got[0] != want {
+						t.Errorf("queue flags = %v, want [%s]", got, want)
+					}
+				})
+			}
+		}
+	}
 }

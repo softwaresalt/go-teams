@@ -126,7 +126,11 @@ Output file at `docs/closure/{YYYY-MM-DD}-{slug}-adversarial-review.md`.
    | 5 | Anchor Reviewer + Reviewer-A (Tier 1) + Reviewer-B (Tier 2) + Reviewer-C (Tier 3) + Reviewer-D (Tier 1/Tier 2 variant) | Reviewer-A (Tier 1) + Reviewer-B (Tier 2) + Reviewer-C (Tier 3) + Reviewer-D (Tier 1/Tier 2 variant) + Reviewer-E (Tier 2/Tier 3 variant) |
 
    Record a declared fallback for the Anchor Reviewer whenever the anchor route is
-   configured but unavailable.
+   configured but unavailable. When cross-model / multi-agent reviewer dispatch is
+   unavailable or restricted by runtime privacy / no-third-party-transmission policy
+   (P-012 item 5), log `TOOL_DEGRADED: subagent-dispatch — declared fallback:
+   single-agent-declared-degradation` and run the full multi-persona review rubric
+   in-session without external model transmission.
 4. Apply anchor and alternate model provider assignments:
    * Read `openai`, `gpt-5.6-sol`, and
      `high` (or `anchor_provider`,

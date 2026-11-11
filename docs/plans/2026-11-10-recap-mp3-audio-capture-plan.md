@@ -125,8 +125,11 @@ shipment **`015-S`**:
        and return once the MP3 stream is flushed.
 * **Files (2 files):** `internal/browser/recap.go`,
   `internal/browser/meeting_chrome.go`.
-* **Verify:** `go build ./...` and `go vet ./...` pass; unit tests in U3
-  exercise `captureRecapAudioFromTargets` and `chromeMeeting.CaptureAudio`.
+* **Verify (Wave-Staged Full-Suite Gate Resolution):** `go build ./...`,
+  `go vet ./...`, `go test -race ./internal/browser/...`, and repo-wide
+  `go test -race ./...` pass 100% at the end of `015.001-T` (because the Wave-2
+  red-phase harnesses for `015.002-T` are staged in
+  `logs/staged-harnesses/015.002-T/` until `015.002-T` begins).
 * **Depends on:** none.
 
 ### U2 (`015.002-T`) — Wire Recap audio option in `capture.Session` and `internal/cli`
@@ -168,8 +171,18 @@ shipment **`015-S`**:
        when `cmd.Flags().Changed("recap-audio")`.
 * **Files (3 files):** `internal/capture/session.go`,
   `internal/capture/session_test.go`, `internal/cli/join.go`.
-* **Verify:** `go test -race ./internal/capture/... ./internal/cli/...` and
-  `go test -race ./...` pass completely.
+* **Verify (Wave-Staged Full-Suite Gate Resolution & Rule B):** At the start of
+  `015.002-T`, activate the staged Wave-2 red-phase harness from
+  `logs/staged-harnesses/015.002-T/` (replacing the obsolete pre-`015-S`
+  `TestSessionRunRecapModeSkipsAudioEvenWhenCaptionsOnlyFalse` with
+  `TestSessionRunRecapModeHonorsCaptionsOnlyFlag` in
+  `internal/capture/session_test.go` per PR #37 Copilot review thread
+  `PRRT_kwDOTStvas62Eqkb` and activating `TestRecapAudioFlagAndQueueForwarding`
+  in `internal/cli/recap_audio_harness_test.go` or `internal/cli/root_test.go`),
+  confirm the red-phase failure, implement `internal/capture/session.go` and
+  `internal/cli/join.go` (and remove `logs/staged-harnesses/015.002-T/`), and
+  verify that `go test -race ./internal/capture/... ./internal/cli/...` and
+  repo-wide `go test -race ./...` pass 100% at the end of `015.002-T`.
 * **Depends on:** U1 (`015.001-T`).
 
 ### U3 (`015.003-T`) — Add deterministic browser CDP unit tests for Recap MP3 audio capture, identity validation, and resource limits
@@ -201,8 +214,12 @@ shipment **`015-S`**:
      * `TestCaptureRecapAudioReturnsErrorWhenNoAudioAvailable`: verifies
        `m.CaptureAudio(ctx, &buf)` on a recap `chromeMeeting` returns a
        descriptive error when no scoped target provides recap audio.
-* **Files (1 file):** `internal/browser/recap_retry_test.go`.
-* **Verify:** `go test -race ./internal/browser/...` passes with 0 failures.
+* **Files (1 file):** `internal/browser/recap_retry_test.go` (plus authorized
+  Rule B consolidation of `internal/browser/recap_audio_harness_test.go` into
+  `internal/browser/recap_retry_test.go` and addition of `joinHeaded`
+  `m.cdpPort` persistence and pre-allocation resource-limit test cases).
+* **Verify (Rule A & Rule B):** `go test -race ./internal/browser/...` and
+  repo-wide `go test -race ./...` pass with 0 failures.
 * **Depends on:** U1 (`015.001-T`), U2 (`015.002-T`).
 
 ### U4 (`015.004-T`) — Document Recap MP3 audio capture in `README.md` and capture design doc
@@ -220,8 +237,10 @@ shipment **`015-S`**:
      `internal/audio.NewEncoder`.
 * **Files (2 files):** `README.md`,
   `docs/design-docs/2026-11-09-teams-browser-caption-and-recap-capture.md`.
-* **Verify:** Markdown linting / formatting rules (`markdown.instructions.md`)
-  and `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` pass.
+* **Verify (Rule A):** Markdown linting / formatting rules
+  (`markdown.instructions.md`) and
+  `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`
+  pass.
 * **Depends on:** U2 (`015.002-T`).
 
 ## Dependency Graph
@@ -360,3 +379,124 @@ decision: PASS
 
 **Gate verdict:** `PASS` (`0 P0, 0 P1, 0 P2, 0 P3`). Ready for harvest into
 feature `015-F` and shipment `015-S`.
+
+## Stage Harness Resolution (2026-11-11)
+
+* The Wave-1 red-phase harness file
+  (`internal/browser/recap_audio_harness_test.go`) is active on disk while the
+  Wave-2 red-phase harness files for `015.002-T`
+  (`capture_recap_audio_harness_test.go` and `cli_recap_audio_harness_test.go`)
+  are staged in `logs/staged-harnesses/015.002-T/`, `go vet ./...` passes
+  (`Compilation: PASS`), and
+  `go test ./internal/browser/... -run TestCaptureRecapAudio` fails all 4 test
+  functions (`Red Phase: CONFIRMED`) while `internal/capture` and `internal/cli`
+  pass 100%.
+* Per `.github/instructions/constitution.instructions.md` Governance ("This
+  constitution supersedes all other development practices in this workspace")
+  and Principle I ("Errors are returned, never panicked, from library code"), Go
+  red-phase harnesses in this workspace NEVER use `panic()` stubs; they use
+  error-returning stubs (`fmt.Errorf("not implemented: ...")` or zero values) or
+  fail against the unimplemented production behavior.
+* Pre-allocation resource-limit checks (`maxRecapAudioSourceBytes`,
+  `maxRecapAudioDurationSec`, `maxRecapAudioPCMBytes`) and `joinHeaded`
+  `m.cdpPort = port` persistence are verified during `015.001-T` / `015.003-T`
+  build execution.
+* All four tasks in `015-S` (`015.001-T`..`015.004-T`) carry `harness-ready`.
+
+## Stage Gate Conflict Resolution (2026-11-11)
+
+* **Rule A — Wave-Staged Full-Suite Gate Resolution (`go test -race ./...` passes 100% at the end of EVERY task)**:
+  * The `015.002-T` Wave-2 red-phase harness files
+    (`capture_recap_audio_harness_test.go` and `cli_recap_audio_harness_test.go`)
+    are staged in `logs/staged-harnesses/015.002-T/` while `015.001-T` executes,
+    so `internal/capture` and `internal/cli` currently pass 100% and ONLY
+    `internal/browser/recap_audio_harness_test.go` (`015.001-T`) fails in
+    `go test ./...`.
+  * Therefore, EVERY task in `015-S` (`015.001-T`, `015.002-T`, `015.003-T`,
+    `015.004-T`) runs and passes the full repository test suite
+    `go test -race ./...` at the end of its task loop:
+    * `015.001-T` per-task verification gate: implements
+      `internal/browser/recap.go` and `internal/browser/meeting_chrome.go` (and
+      consolidates/updates `internal/browser` tests), and runs
+      `go build ./...`, `go vet ./...`, `go test -race ./internal/browser/...`,
+      and repo-wide `go test -race ./...` (passes 100%).
+    * `015.002-T` per-task verification gate: at task start, activates the
+      Wave-2 harness from `logs/staged-harnesses/015.002-T/` (replacing
+      `TestSessionRunRecapModeSkipsAudioEvenWhenCaptionsOnlyFalse` with
+      `TestSessionRunRecapModeHonorsCaptionsOnlyFlag` in
+      `internal/capture/session_test.go` and adding
+      `TestRecapAudioFlagAndQueueForwarding` in
+      `internal/cli/recap_audio_harness_test.go` / `internal/cli/root_test.go`),
+      confirms the red failure for `015.002-T`, implements
+      `internal/capture/session.go` and `internal/cli/join.go` (and removes
+      `logs/staged-harnesses/015.002-T/`), and runs
+      `go test -race ./internal/capture/... ./internal/cli/...` and repo-wide
+      `go test -race ./...` (passes 100%).
+    * `015.003-T` per-task verification gate: ensures all four browser recap
+      audio tests plus `joinHeaded` `m.cdpPort` persistence and pre-allocation
+      resource-limit checks are in `internal/browser/recap_retry_test.go`
+      (removing `internal/browser/recap_audio_harness_test.go`), and runs
+      `go test -race ./internal/browser/...` and repo-wide `go test -race ./...`
+      (passes 100%).
+    * `015.004-T` per-task verification gate: runs
+      `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`
+      and repo-wide `go test -race ./...` (passes 100%).
+* **Rule B — Authorized `*_test.go` edits vs. `build-feature` anti-cheating guardrail**:
+  * `build-feature/SKILL.md`'s rule ("Do NOT modify test files (`*_test.go`) to
+    make them pass") forbids weakening or deleting red-phase harness assertions
+    to cheat a failing test; it explicitly PERMITS and REQUIRES the planned test
+    updates that are part of the authorized task scope:
+    * In `015.002-T`: removing/replacing the obsolete pre-`015-S`
+      `TestSessionRunRecapModeSkipsAudioEvenWhenCaptionsOnlyFalse` in
+      `internal/capture/session_test.go` (which asserted the old pre-`015-S`
+      behavior that `CaptionsOnly=false` was ignored in Recap mode, and which
+      PR #37 Copilot review thread `PRRT_kwDOTStvas62Eqkb` explicitly required
+      moving into `015.002-T`), and keeping/consolidating
+      `TestSessionRunRecapModeHonorsCaptionsOnlyFlag` in
+      `internal/capture/session_test.go` and
+      `TestRecapAudioFlagAndQueueForwarding` in
+      `internal/cli/recap_audio_harness_test.go` (or `internal/cli/root_test.go`).
+    * In `015.001-T` / `015.003-T`: adding the `joinHeaded` `m.cdpPort`
+      persistence and pre-allocation resource-limit test cases in
+      `internal/browser/recap_retry_test.go` (and consolidating
+      `internal/browser/recap_audio_harness_test.go` into
+      `internal/browser/recap_retry_test.go` in `015.003-T`).
+
+## Stage Approved Layered Resource-Cap Safety Contract (2026-11-11)
+
+Because Web Audio's `AudioContext.decodeAudioData` in Chromium does not expose a
+pre-decode streaming PCM API, the approved safety contract for `015-S` is the
+following 4-layer defense-in-depth design (with native Chromium `decodeAudioData`
+expansion on unknown-duration streams within the 64 MiB compressed cap recorded
+as an explicit, accepted residual risk isolated to the browser tab process):
+
+1. **Layer 1 (Pre-fetch known-duration check in `extractRecapAudioJS`)**: Before
+   calling `fetch(mediaUrl)`, check `media.duration` (and `info.duration` /
+   `info.durationSeconds`); if finite and `> 0` and (`> maxRecapAudioDurationSec`
+   or `Math.ceil(duration * 44100) * 2 > maxRecapAudioPCMBytes`), throw
+   `recap audio exceeds maximum supported size/duration` immediately before
+   `fetch` (verified by `TestRecapAudioJSRejectsKnownOversizedDurationBeforeFetch`).
+2. **Layer 2 (Pre-decode compressed-source byte cap in `extractRecapAudioJS`)**:
+   Check `Content-Length` and streamed `reader.read()` byte total against
+   `maxRecapAudioSourceBytes` (`64 MiB`) and cancel the stream + throw
+   `recap audio exceeds maximum supported size/duration` before calling
+   `decodeAudioData` (verified by
+   `TestCaptureRecapAudioRejectsOversizedRecordingExceedingResourceCap`).
+3. **Layer 3 (Post-decode / Pre-Int16Array & Pre-base64 PCM cap in `extractRecapAudioJS`)**:
+   Immediately after `decodeAudioData` returns `buffer` and BEFORE allocating
+   any `Int16Array` or base64 chunk, check
+   `!Number.isFinite(buffer.duration) || buffer.duration > maxRecapAudioDurationSec || buffer.length * 2 > maxRecapAudioPCMBytes || outputLength * 2 > maxRecapAudioPCMBytes`
+   and throw `recap audio exceeds maximum supported size/duration`.
+4. **Layer 4 (Pre-allocation CDP WebSocket frame-header and fragmented-message cap in `evalInCDPTarget` + Go payload validation)**:
+   In `evalInCDPTarget` in `internal/browser/recap.go`, read WebSocket frames
+   using `ws.ReadHeader(conn)` and enforce a transport byte limit
+   `maxCDPBytes := int64(maxRecapAudioPCMBytes)*2 + 65536` (so when
+   `maxRecapAudioPCMBytes = 8`, `maxCDPBytes = 65552`, which is `< 1 MiB` and
+   `< 32 MiB`) BEFORE allocating the frame buffer
+   (`if hdr.Length > maxCDPBytes || totalBytes+hdr.Length > maxCDPBytes { return "", fmt.Errorf("browser: cdp response exceeds maximum supported size/duration") }`),
+   and then in `captureRecapAudioFromTargets` validate `SourceBytes`,
+   `DurationSec`, and decoded base64 PCM bytes before MP3 encoding (verified by
+   `TestRecapAudioCDPRejectsOversizedFrameHeaderBeforeBody` and
+   `TestRecapAudioCDPRejectsOversizedFragmentedMessage`).
+
+

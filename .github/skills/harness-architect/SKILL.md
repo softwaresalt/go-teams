@@ -92,7 +92,7 @@ For each task, select the appropriate harness strategy:
 1. Create test files that express the task intent as compilable tests.
 2. Prefer table-driven or parameterized tests when the task describes
    multiple scenarios.
-3. Create matching production stubs with `panic("not implemented: ...")` bodies
+3. Create matching production stubs with error-returning or zero-value bodies (e.g., `return fmt.Errorf("not implemented: ...")`, never `panic()` per Go safety rules)
    so the module compiles while the tests still fail for the intended
    reason.
 4. Keep signatures, types, and module names aligned with the current
@@ -124,7 +124,7 @@ with a non-compiling harness.
 #### Step 5.2: Red phase check
 
 Run `go test ./...` for the harness tests. ALL tests MUST fail with
-the expected failure marker (`panic("not implemented: ...")`).
+the expected failure marker (not-implemented error or failing test assertion).
 
 If any test passes (false positive) or fails with an unexpected error
 (compilation vs runtime), fix the harness.

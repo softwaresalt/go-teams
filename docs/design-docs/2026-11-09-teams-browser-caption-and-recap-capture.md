@@ -64,6 +64,21 @@ extracting recording filenames so opaque sharing tokens do not reject valid
 `.mp4` names in `g_fileInfo.name`. Recap captions are finite, so this path
 exits after writing the extracted entries instead of waiting for cancellation.
 
+Recap audio is opt-in (`--audio`, `--recap-audio`, `capture_audio: true`, or
+`audio: true`); `capture.Session` honors `CaptionsOnly` for Recap sessions, so
+the default remains a transcript-only `.md`. When enabled, `CaptureAudio` runs
+concurrently with transcript extraction. It evaluates an extraction expression
+over CDP only in targets owned by the bound Recap page (the CDP port and page
+ID are persisted at join, including headed launches) and rejects any target
+whose recording identity (drive item, recording name, meeting token, or
+thread) conflicts with, or cannot be positively matched to, the requested
+Recap. The expression fetches the recording, decodes it with Web Audio, and
+returns 44.1 kHz mono PCM chunks that `internal/audio.NewEncoder` encodes to
+MP3. Size is bounded in layers: a known-duration check before fetch, a source
+byte cap before decode, a decoded PCM cap before allocation, and a CDP
+WebSocket frame/message cap before buffering. Browser-internal decode expansion
+of unknown-duration streams within the source cap is an accepted residual risk.
+
 ## Teams AI summary
 
 The page script selects Notes and AI notes when present, then invokes Copy all.
@@ -93,6 +108,8 @@ Tenant policy, localization, and UI changes can prevent summary extraction.
 | `--output-file` | Explicit transcript path |
 | `--output-dir` | Directory regardless of extension |
 | `--headless` | Headless clean-browser launch |
+| `--audio` | Also capture meeting or Recap audio to a same-basename `.mp3` |
+| `--recap-audio` | Also capture Meeting Recap audio to a same-basename `.mp3` |
 
 Positional inputs override flags. Output flags resolve as `--output-file`
 over `--output` over `--output-dir`. Existing directory targets remain

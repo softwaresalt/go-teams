@@ -71,10 +71,14 @@ jobs:
 
           MAX_BYTES = 8 << 20
           # Live Teams meeting passcode query token (p=...) on a Teams URL.
-          passcode = re.compile(
-              rb"https?://[^\s\"'<>]*?(?:teams\.microsoft\.com|teams\.live\.com"
-              rb"|teams\.cloud\.microsoft|/meet/)[^\s\"'<>]*?[?&]p=([A-Za-z0-9_-]{8,})",
-              re.IGNORECASE,
+          # Matching is done in linear time on purpose: candidate URLs are
+          # extracted once and then inspected, with no nested lazy quantifiers
+          # that could backtrack quadratically on a crafted tracked file.
+          url = re.compile(rb"https?://[^\s\"'<>]+", re.IGNORECASE)
+          passcode_query = re.compile(rb"[?&]p=([A-Za-z0-9_-]{8,})")
+          teams_markers = (
+              b"teams.microsoft.com", b"teams.live.com",
+              b"teams.cloud.microsoft", b"/meet/",
           )
           skype = re.compile(rb"SKYPE-TOKEN[\"'\s:=]+eyJ[A-Za-z0-9_-]{10,}")
           bearer = re.compile(rb"Bearer\s+eyJ[A-Za-z0-9_-]{10,}")
@@ -85,6 +89,29 @@ jobs:
               b"placeholder", b"redacted", b"sample", b"test", b"token",
               b"passcode", b"notreal", b"changeme", b"xxxx",
           )
+
+          def has_live_passcode(data):
+              for candidate in url.finditer(data):
+                  text = candidate.group(0)
+                  lowered = text.lower()
+                  # Earliest point at which a Teams marker is complete; a
+                  # passcode counts only when its p= follows that point.
+                  ends = [
+                      idx + len(marker)
+                      for marker in teams_markers
+                      for idx in (lowered.find(marker),)
+                      if idx >= 0
+                  ]
+                  if not ends:
+                      continue
+                  marker_end = min(ends)
+                  for query in passcode_query.finditer(text):
+                      if query.start() < marker_end:
+                          continue
+                      value = query.group(1).lower()
+                      if not any(m in value for m in synthetic):
+                          return True
+              return False
 
           def is_local_env(path):
               base = path.rsplit("/", 1)[-1]
@@ -111,9 +138,8 @@ jobs:
                   continue  # tracked but absent, or a submodule/symlink to a directory
               if len(data) > MAX_BYTES or b"\0" in data[:8000]:
                   continue  # oversized or binary
-              for match in passcode.finditer(data):
-                  if not any(m in match.group(1).lower() for m in synthetic):
-                      findings.append((path, "live Teams meeting passcode URL"))
+              if has_live_passcode(data):
+                  findings.append((path, "live Teams meeting passcode URL"))
               if skype.search(data):
                   findings.append((path, "SKYPE-TOKEN credential value"))
               if bearer.search(data):

@@ -84,7 +84,13 @@ hygiene*), chained after **`018-S`** via `backlogit dep add 019-S 018-S --type b
     files: `.github/agents/_ship.agent.md`,
     `.github/agents/subagents/adversarial-review.agent.md`): *Reconcile
     `_ship.agent.md` and `adversarial-review.agent.md` single-agent degraded
-    fallback with `INSUFFICIENT_REVIEWERS` halt*
+    fallback with `INSUFFICIENT_REVIEWERS` halt* (updated for PR #44 Copilot
+    review thread `PRRT_kwDOTStvas62Ve-8` to branch Phases 2–6, Output, and
+    Quality Criteria for `single-agent-declared-degradation` with
+    `consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`, Phase 4
+    severity-only scoring with `confidence_tier: DEGRADED_SINGLE_AGENT` and
+    `confidence_weight = 1.0`, Phase 5 severity-only action routing, and Phase 6
+    `### Degraded Single-Agent Findings (Non-Consensus)` output section)
   * **Task `019.002-T`** (`size: XS`, `complexity: low`, domain: `docs`,
     depends on `019.001-T`, files: `.github/skills/shipment-reconcile/SKILL.md`,
     `docs/compound/workflow-issues/retained-engine-unverified-deliberation-cleanup.md`):

@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/chromedp/chromedp"
+
+	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
 const teamsHomeURL = "https://teams.microsoft.com"
@@ -42,7 +44,12 @@ func (r *ChromeRunner) Authenticate(ctx context.Context) error {
 }
 
 // Join implements Runner. It forces headless mode and navigates to meetingURL.
+// meetingURL is validated before any browser is allocated, so a disallowed
+// initial URL never launches Chromium.
 func (r *ChromeRunner) Join(ctx context.Context, meetingURL string) error {
+	if err := teams.ValidateMeetingURL(meetingURL); err != nil {
+		return fmt.Errorf("browser: reject meeting url: %w", err)
+	}
 	opts := r.options
 	opts.Headless = true
 	return r.run(ctx, opts, meetingURL)

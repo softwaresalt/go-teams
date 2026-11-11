@@ -36,20 +36,26 @@ gaps were captured as `DEFERRED SCOPE EXPANSION` stash entries under P-021 C2:
    explicit `chromedp.Flag("no-sandbox", false)`.
 3. **`A99EEABD`** (`medium`, `feature`): `teams.ValidateMeetingURL` in
    `internal/teams/url.go` accepts any `http://` or `https://` URL with a
-   non-empty host, leaving initial-URL ingress unconstrained instead of
-   constraining remote initial navigation targets to trusted Microsoft Teams,
-   SharePoint, and Microsoft 365 HTTPS domains (plus local loopback HTTP/HTTPS
-   fixtures used by end-to-end and compiled-binary tests, while recording
-   post-navigation HTTP/JS redirects inside Chromium as a documented residual
-   risk).
+   non-empty host, and `ChromeRunner.Join` in `internal/browser/runner.go:45-61`
+   passes its `meetingURL` argument directly to `r.run` / `chromedp.Navigate`
+   without calling `teams.ValidateMeetingURL` before browser allocation. This
+   leaves initial-URL ingress unconstrained instead of constraining remote
+   initial navigation targets to trusted Microsoft Teams, SharePoint, and
+   Microsoft 365 HTTPS domains (plus local loopback HTTP/HTTPS fixtures used by
+   end-to-end and compiled-binary tests, while recording post-navigation HTTP/JS
+   redirects inside Chromium as a documented residual risk).
 4. **`3084A83E`** (`medium`, `task`): Although `.gitignore` ignores `.env` and
    `.env.*` (while keeping `!.env.example`), it does not yet include `*.env`
    wildcard coverage, and the repository lacks an automated, deterministic
    pure-Go test guardrail that verifies `.gitignore` secret-file coverage and
    scans git-tracked repository files (strictly from the authoritative Git
    index, paired with an always-run CI check in `014.002-T` for docs/backlog-only
-   PRs) for accidental live Teams passcode or token markers (`?p=` on real
-   meeting URLs, raw `SKYPE-TOKEN` JWTs) without embedding any secret material.
+   PRs) for accidental live Teams passcode URLs (`?p=` on real meeting URLs) or
+   actual credential values associated with `SKYPE-TOKEN`
+   (`SKYPE-TOKEN["'\s:=]+eyJ[A-Za-z0-9_-]{10,}` and
+   `Bearer\s+eyJ[A-Za-z0-9_-]{10,}`, without triggering false positives on bare
+   `"SKYPE-TOKEN"` storage-key references in `internal/browser/recap.go`,
+   `internal/browser/meeting_chrome.go`, or documentation).
 5. **`87CDB97A`** (`medium`, `feature`): Production browser executable-path
    (`ExecPath`) portability. While `011-S` added `ResolveExecPath` in
    `internal/browser/allocator.go`, `BrowserPath` (`browser_path`) in
@@ -89,24 +95,30 @@ routing through Step 2 deliberation (`002-DL`) prior to implementation planning
 
 ## Requirements and success criteria
 
-* **R1 (Initial-URL ingress allowlist, loopback fixture boundary, and redirect residual-risk boundary — `A99EEABD`)**:
-  `teams.ValidateMeetingURL` must enforce **initial-URL ingress validation**
-  before browser navigation: it must reject arbitrary untrusted remote initial
-  hosts and plain `http://` on non-loopback hosts, allow `https://` URLs whose
-  hostname matches or is a dot-subdomain of trusted Microsoft Teams / Microsoft
-  365 domains (`teams.microsoft.com`, `teams.live.com`, `teams.cloud.microsoft`,
+* **R1 (Initial-URL ingress allowlist, `ChromeRunner.Join` pre-allocation validation, loopback fixture boundary, and redirect residual-risk boundary — `A99EEABD`)**:
+  `teams.ValidateMeetingURL` and `ChromeRunner.Join` must enforce **initial-URL
+  ingress validation** before browser allocation and navigation:
+  `ValidateMeetingURL` must reject arbitrary untrusted remote initial hosts and
+  plain `http://` on non-loopback hosts, allow `https://` URLs whose hostname
+  matches or is a dot-subdomain of trusted Microsoft Teams / Microsoft 365
+  domains (`teams.microsoft.com`, `teams.live.com`, `teams.cloud.microsoft`,
   `sharepoint.com`, `microsoft.com`, `office.com`, `sfx.ms`, `aka.ms`), and
   allow `http://` or `https://` on loopback hosts (`127.0.0.1`, `localhost`,
   `::1`) so `TestCaptionsCommandEndToEndWritesMarkdownFile`
   (`internal/cli/e2e_test.go`) and
   `TestCompiledBinaryCapturesRecapToExplicitOutput`
   (`internal/cli/binary_automation_test.go`) continue to pass against local
-  `httptest.Server` fixtures. Post-navigation HTTP 3xx or client-side JS
-  redirects inside Chromium (for example, an allowed loopback endpoint
-  redirecting to an untrusted remote host) are explicitly recorded as a
-  documented residual risk, because CDP-level redirect blocking across federated
-  Microsoft 365 / ADFS / Okta / Duo IdP sign-in flows would break enterprise
-  authentication and is outside the `ValidateMeetingURL` contract.
+  `httptest.Server` fixtures. Furthermore, `ChromeRunner.Join(ctx, meetingURL)`
+  in `internal/browser/runner.go` must call `teams.ValidateMeetingURL(meetingURL)`
+  BEFORE calling `r.run(ctx, opts, meetingURL)` (before allocating a browser),
+  covered by a direct unit regression test in `internal/browser/runner_test.go`
+  rejecting a disallowed URL before browser launch without leaking query
+  secrets. Post-navigation HTTP 3xx or client-side JS redirects inside Chromium
+  (for example, an allowed loopback endpoint redirecting to an untrusted remote
+  host) are explicitly recorded as a documented residual risk, because CDP-level
+  redirect blocking across federated Microsoft 365 / ADFS / Okta / Duo IdP
+  sign-in flows would break enterprise authentication and is outside the
+  `ValidateMeetingURL` contract.
 * **R2 (URL userinfo, query, and fragment redaction + `splitQueueArgs` parse error sanitization — `EEA7F685`)**:
   Provide a deterministic `teams.RedactURL(raw string) string` helper (and
   `teams.RedactArgs(args []string) string`) that:
@@ -159,7 +171,7 @@ routing through Step 2 deliberation (`002-DL`) prior to implementation planning
   `internal/cli/root_test.go` verifying that `config.Config.BrowserPath` and
   `--browser-path` flow into `browser.Options.ExecPath` across `root`, `join`,
   `captions`, `auth`, and `schedule`.
-* **R5 (Repository secret-hygiene via authoritative Git index + always-run CI check — `3084A83E`)**:
+* **R5 (Repository secret-hygiene via authoritative Git index + credential-value matching + always-run CI check — `3084A83E`)**:
   Ensure `.gitignore` covers `.env`, `.env.*`, and `*.env` (while keeping
   `!.env.example` tracked) and add a deterministic, pure-Go guardrail test in
   `internal/config/gitignore_test.go` (`013.005-T`) that verifies `.gitignore`
@@ -167,12 +179,23 @@ routing through Step 2 deliberation (`002-DL`) prior to implementation planning
   authoritative Git index** (`git ls-files -z`, falling back only to a pure-Go
   `.git/index` binary parser and failing closed with `t.Fatalf` if neither is
   readable — **never** falling back to a workspace directory walk that would
-  inspect legitimate ignored local `.env` files). In addition, cross-reference
-  `014.002-T` (`014-S`, which owns `.github/workflows/ci.yml` for width
-  isolation) to add an unconditional tracked-file secret-scan step inside the
-  always-run `changes` job of `.github/workflows/ci.yml` so docs/backlog-only
-  PRs are also scanned for committed secrets even when the Go `test` job is
-  skipped.
+  inspect legitimate ignored local `.env` files). The secret scanner MUST detect
+  an **actual credential value associated with `SKYPE-TOKEN`** (such as
+  `SKYPE-TOKEN["'\s:=]+eyJ[A-Za-z0-9_-]{10,}` and
+  `Bearer\s+eyJ[A-Za-z0-9_-]{10,}`) as well as non-synthetic live Teams
+  `/meet/<id>?p=<token>` passcode URLs (`[?&]p=[A-Za-z0-9_-]{8,}`), while
+  explicitly permitting bare `"SKYPE-TOKEN"` storage-key identifier references
+  in `internal/browser/recap.go`, `internal/browser/meeting_chrome.go`, and
+  markdown documentation. `internal/config/gitignore_test.go` must include both
+  a negative test case (confirming marker-only source/docs references to
+  `SKYPE-TOKEN` pass) and a positive test case (confirming a synthetic
+  `SKYPE-TOKEN` JWT credential assignment and a live-shaped `?p=` passcode URL
+  are rejected). In addition, cross-reference `014.002-T` (`014-S`, which owns
+  `.github/workflows/ci.yml` for width isolation) to add an unconditional
+  tracked-file secret-scan step inside the always-run `changes` job of
+  `.github/workflows/ci.yml` using the same credential-value rule so
+  docs/backlog-only PRs are also scanned for committed secrets even when the Go
+  `test` job is skipped.
 
 ## Options
 
@@ -192,15 +215,18 @@ each well under the 2-hour rule:
 
 1. **`013.001-T` (U1)**: Enforce initial-URL ingress allowlist for trusted
    Microsoft Teams / SharePoint / Microsoft 365 HTTPS hosts and loopback
-   HTTP/HTTPS fixture support in `teams.ValidateMeetingURL`
-   (`internal/teams/url.go`, `internal/teams/url_test.go`), recording
-   post-navigation redirects as a documented residual risk.
+   HTTP/HTTPS fixture support in `teams.ValidateMeetingURL` AND validate
+   `meetingURL` via `teams.ValidateMeetingURL` in `ChromeRunner.Join` before
+   browser allocation (`internal/teams/url.go`, `internal/teams/url_test.go`,
+   `internal/browser/runner.go`, `internal/browser/runner_test.go`), with a
+   direct runner regression test rejecting a disallowed URL before browser
+   launch and recording post-navigation redirects as a documented residual risk.
 2. **`013.002-T` (U2)**: Add `teams.RedactURL` / `teams.RedactArgs` in
    `internal/teams/url.go`, remove the raw line from `splitQueueArgs`
    unterminated-quote errors in `internal/cli/queue.go`, and redact URLs in
    navigation errors and queue logs (`internal/browser/runner.go`,
-   `internal/cli/queue.go`, plus unit tests including unmatched-quote passcode
-   regression coverage).
+   `internal/browser/runner_test.go`, `internal/cli/queue.go`, plus unit tests
+   including unmatched-quote passcode regression coverage).
 3. **`013.003-T` (U3)**: Explicitly set `no-sandbox: false` and
    `disable-setuid-sandbox: false` when opt-in is off (and `Value: true` when
    opted in via `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX`) in both
@@ -216,9 +242,13 @@ each well under the 2-hour rule:
    `.gitignore` and authoritative Git-index (`git ls-files -z` / `.git/index`
    binary parser, failing closed with `t.Fatalf` and no workspace walk fallback)
    secret-hygiene guardrail test (`.gitignore`,
-   `internal/config/gitignore_test.go`), paired with an unconditional
-   tracked-file secret scan in `.github/workflows/ci.yml` (`014.002-T`) for
-   docs/backlog-only PRs.
+   `internal/config/gitignore_test.go`) that detects actual credential values
+   associated with `SKYPE-TOKEN` (`SKYPE-TOKEN["'\s:=]+eyJ[A-Za-z0-9_-]{10,}`
+   and `Bearer\s+eyJ[A-Za-z0-9_-]{10,}`) and live Teams `?p=` passcode URLs
+   while allowing bare `"SKYPE-TOKEN"` storage-key references in source and
+   docs, with negative and positive scanner unit test cases, paired with an
+   unconditional tracked-file secret scan in `.github/workflows/ci.yml`
+   (`014.002-T`) for docs/backlog-only PRs.
 
 ## Open questions
 

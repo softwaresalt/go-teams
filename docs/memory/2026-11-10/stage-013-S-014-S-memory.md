@@ -147,6 +147,36 @@ Addressed all five P-021 C1 in-scope Copilot review comments on staging PR #32
    residual risk so federated Microsoft 365 / ADFS / Okta / Duo IdP sign-in
    flows are not broken.
 
+## PR #32 Copilot review remediation — Round 2 (2 in-scope threads)
+
+Addressed both round-2 P-021 C1 in-scope Copilot review comments on staging
+PR #32 (`chore/stage-013-s-014-s`):
+
+1. **Thread `PRRT_kwDOTStvas62AOTk` (Comment `4533335069` — validate `meetingURL` in `ChromeRunner.Join` before browser allocation):**
+   Updated `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md` (U1 and
+   U2), `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `002-DL`, `013.001-T`, and `013.002-T` so `ChromeRunner.Join(ctx, meetingURL)`
+   in `internal/browser/runner.go` calls `teams.ValidateMeetingURL(meetingURL)`
+   BEFORE calling `r.run(ctx, opts, meetingURL)` (before allocating a browser),
+   returning a redacted validation error immediately on a disallowed URL, with a
+   direct unit regression test in `internal/browser/runner_test.go` asserting
+   that `NewChromeRunner(...).Join(ctx, "https://evil.example.com/meet/123?p=secret")`
+   returns an error without launching a browser and without leaking `secret`.
+2. **Thread `PRRT_kwDOTStvas62AOT6` (Comment `4533335107` — match actual credential value associated with `SKYPE-TOKEN`, not bare storage-key references):**
+   Updated `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md` (U5),
+   `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `002-DL`, `013.005-T`, `docs/plans/2026-11-10-audio-golden-test-and-ci-hygiene-plan.md`
+   (U2), `docs/decisions/2026-11-10-audio-golden-test-and-ci-hygiene-deliberation.md`,
+   `003-DL`, and `014.002-T` to replace the bare `SKYPE-TOKEN` substring rule
+   with detection of an actual credential value associated with `SKYPE-TOKEN`
+   (`SKYPE-TOKEN["'\s:=]+eyJ[A-Za-z0-9_-]{10,}` and
+   `Bearer\s+eyJ[A-Za-z0-9_-]{10,}`), explicitly permitting bare `"SKYPE-TOKEN"`
+   storage-key references in `internal/browser/recap.go`,
+   `internal/browser/meeting_chrome.go`, and markdown documentation, and
+   requiring both negative (marker-only source/docs) and positive (synthetic
+   `SKYPE-TOKEN` JWT credential assignment and live-shaped `?p=` passcode URL)
+   scanner unit test cases in `013.005-T` (`internal/config/gitignore_test.go`).
+
 ## Next step
 
 Return control to Orchestrator Step 1.5 to merge the staging artifacts to

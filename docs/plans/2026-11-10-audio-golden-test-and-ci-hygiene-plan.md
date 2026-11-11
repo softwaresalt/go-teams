@@ -93,8 +93,13 @@ feature **`014-F`** and shipment **`014-S`**:
        `.env.example`) exists in the Git index, or
      * any tracked file (including `docs/**` plans/decisions or `.backlogit/**`
        stash/queue items) contains a live Teams passcode query token
-       (`[?&]p=[A-Za-z0-9_-]{8,}` outside synthetic test placeholders), raw
-       `SKYPE-TOKEN`, or `Bearer eyJ` JWT token.
+       (`[?&]p=[A-Za-z0-9_-]{8,}` on a Teams meeting URL outside allowlisted
+       synthetic test/doc placeholders), an **actual credential value associated
+       with `SKYPE-TOKEN`** (`SKYPE-TOKEN["'\s:=]+eyJ[A-Za-z0-9_-]{10,}` —
+       explicitly allowing bare `"SKYPE-TOKEN"` storage-key identifier
+       references in `internal/browser/recap.go`,
+       `internal/browser/meeting_chrome.go`, and markdown documentation), or a
+       `Bearer\s+eyJ[A-Za-z0-9_-]{10,}` JWT token.
   4. Preserve all SHA-pinned action references (`actions/checkout@11bd7190...`,
      `dorny/paths-filter@d1c1ffe0...`), `persist-credentials: false`, and
      least-privilege `permissions` per `ci-security.instructions.md`.

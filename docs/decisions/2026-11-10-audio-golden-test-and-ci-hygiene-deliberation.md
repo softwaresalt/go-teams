@@ -86,9 +86,14 @@ triggered Step 1 obligations were executed:
   `dorny/paths-filter` `code` denylist, AND add an unconditional
   `Secret hygiene check (tracked files)` step inside the always-run `changes`
   job that scans all git-tracked files (`git ls-files -z`) for tracked `.env`
-  files (other than `.env.example`) and forbidden secret patterns
-  (`[?&]p=[A-Za-z0-9_-]{8,}`, `SKYPE-TOKEN`, `Bearer eyJ`) on every PR and
-  push, including docs/backlog-only PRs.
+  files (other than `.env.example`) and forbidden credential-value patterns
+  (live Teams passcode URLs matching `[?&]p=[A-Za-z0-9_-]{8,}` outside
+  allowlisted synthetic placeholders, actual credential values associated with
+  `SKYPE-TOKEN` matching `SKYPE-TOKEN["'\s:=]+eyJ[A-Za-z0-9_-]{10,}` without
+  flagging bare `"SKYPE-TOKEN"` storage-key references in
+  `internal/browser/recap.go`, `internal/browser/meeting_chrome.go`, or
+  documentation, and `Bearer\s+eyJ[A-Za-z0-9_-]{10,}` JWT tokens) on every PR
+  and push, including docs/backlog-only PRs.
 
 ## Options
 

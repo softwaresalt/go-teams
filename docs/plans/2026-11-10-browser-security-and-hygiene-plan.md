@@ -25,18 +25,26 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
 
 1. `teams.ValidateMeetingURL` (`internal/teams/url.go`) currently accepts any
    `http://` or `https://` URL with a non-empty host (`http://example.com/x`),
-   leaving remote navigation unconstrained instead of enforcing trusted
-   Microsoft Teams / SharePoint / Microsoft 365 `https://` hosts while
-   preserving `http://` and `https://` loopback (`127.0.0.1`, `localhost`,
-   `::1`) for local `httptest.Server` e2e and binary acceptance fixtures.
+   leaving initial-URL ingress unconstrained instead of enforcing trusted
+   Microsoft Teams / SharePoint / Microsoft 365 `https://` hosts on initial
+   navigation while preserving `http://` and `https://` loopback (`127.0.0.1`,
+   `localhost`, `::1`) for local `httptest.Server` e2e and binary acceptance
+   fixtures (post-navigation HTTP/JS redirects inside Chromium are documented
+   as residual risk).
 2. `ChromeRunner.run` (`internal/browser/runner.go`), `chromeMeeting.Join`
-   (`internal/browser/meeting_chrome.go`), and `runQueueFile`
+   (`internal/browser/meeting_chrome.go`), and `runQueueFile` / `splitQueueArgs`
    (`internal/cli/queue.go`) can surface raw URLs containing `?p=<passcode>`,
-   `code=`, or `#` fragments in error messages or structured logs.
+   `code=`, or `#` fragments in error messages (including `splitQueueArgs`
+   unterminated-quote errors) or structured logs.
 3. `StealthFlags(opts Options)` (`internal/browser/allocator.go`)
-   unconditionally sets `no-sandbox: true` and `disable-setuid-sandbox: true`
-   instead of defaulting to Chromium sandbox enabled and gating sandbox disable
-   behind an explicit opt-in (`Options.DisableSandbox` or
+   unconditionally sets `no-sandbox: true` and `disable-setuid-sandbox: true`,
+   and omitting `no-sandbox` in `StealthFlags` or `cleanHeadlessFlags`
+   (`internal/browser/meeting.go`) still allows `chromedp` v0.15.1's
+   `DefaultExecAllocatorOptions` (`chromedp.NoSandbox`) to add `--no-sandbox`
+   automatically when running as root. Both flag builders must explicitly emit
+   `Flag{Name: "no-sandbox", Value: false}` and
+   `Flag{Name: "disable-setuid-sandbox", Value: false}` unless sandbox disable
+   is explicitly opted in (`Options.DisableSandbox` or
    `TEAMS_DISABLE_SANDBOX`).
 4. While `011-S` wired `ResolveExecPath`, `config.Config.BrowserPath`
    (`browser_path`), and `--browser-path` on `root`, `join`, and `captions`,
@@ -48,36 +56,48 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
 5. `.gitignore` covers `.env` and `.env.*` (`!.env.example`) but lacks `*.env`
    wildcard coverage and a deterministic pure-Go guardrail test in
    `internal/config/gitignore_test.go` verifying `.gitignore` secret rules and
-   scanning tracked files for accidental live Teams passcode or token strings.
+   scanning git-tracked files (strictly from the authoritative Git index, with
+   an always-run CI check in `014.002-T` covering docs/backlog-only PRs) for
+   accidental live Teams passcode or token strings.
 
 ## Requirements Trace
 
 | Requirement | Stash ID | Implementation unit | Verification |
 |---|---|---|---|
-| R1: Trusted Microsoft/Teams/SharePoint/Office HTTPS host allowlist + loopback HTTP/HTTPS fixture support | `A99EEABD` | U1 (`013.001-T`) | `go test -race ./internal/teams/...` (`TestValidateMeetingURL`, `TestMutateJoinURLErrors`) and `./internal/cli/...` |
-| R2: Redact query strings (`?p=`, `code=`) and fragments from navigation errors and logs | `EEA7F685` | U2 (`013.002-T`) | `go test -race ./internal/teams/... ./internal/browser/... ./internal/cli/...` (`TestRedactURL`, `TestRunnerJoinErrorRedactsURL`, `TestQueueLogsRedactURL`) |
-| R3: Default Chromium sandbox enabled in `StealthFlags`; opt-in via `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX=1` | `D2023898` | U3 (`013.003-T`) | `go test -race ./internal/browser/...` (`TestStealthFlagsDefaultSandboxEnabled`, `TestStealthFlagsOptInDisableSandbox`) |
+| R1: Initial-URL ingress allowlist for trusted Microsoft/Teams/SharePoint/Office HTTPS hosts + loopback HTTP/HTTPS fixture support (post-navigation redirects documented as residual risk) | `A99EEABD` | U1 (`013.001-T`) | `go test -race ./internal/teams/...` (`TestValidateMeetingURL`, `TestMutateJoinURLErrors`) and `./internal/cli/...` |
+| R2: Redact userinfo, query strings (`?p=`, `code=`), and fragments from navigation errors, `splitQueueArgs` parse errors, and queue logs | `EEA7F685` | U2 (`013.002-T`) | `go test -race ./internal/teams/... ./internal/browser/... ./internal/cli/...` (`TestRedactURL`, `TestRunnerJoinErrorRedactsURL`, `TestQueueLogsAndParseErrorsRedactURL`) |
+| R3: Explicitly set `no-sandbox: false` and `disable-setuid-sandbox: false` when opt-in is off in both `StealthFlags` (`AllocatorOptions`) and `cleanHeadlessFlags` (`cleanHeadlessAllocatorOptions`); opt-in via `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX=1` | `D2023898` | U3 (`013.003-T`) | `go test -race ./internal/browser/...` (`TestStealthFlagsDefaultSandboxEnabled`, `TestStealthFlagsOptInDisableSandbox`, `TestEffectiveAllocatorLaunchArgsSandboxOptInAndRootOverride`) |
 | R4: Complete `--browser-path` / `browser_path` (`ExecPath`) CLI and config wiring across `auth`, `schedule`, `root`, `join`, `captions` | `87CDB97A` | U4 (`013.004-T`) | `go test -race ./internal/config/... ./internal/cli/...` (`TestSaveLoadRoundTrip`, `TestBrowserPathWiredAcrossAllCommands`) |
-| R5: `.gitignore` `*.env` coverage + pure-Go repository secret-hygiene guardrail test | `3084A83E` | U5 (`013.005-T`) | `go test -race ./internal/config/...` (`TestGitignoreCoversLocalEnvAndSecretPatterns`, `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`) |
+| R5: `.gitignore` `*.env` coverage + authoritative Git-index secret-hygiene guardrail test in `internal/config/gitignore_test.go` (paired with always-run CI secret check in `014.002-T` for docs-only PRs) | `3084A83E` | U5 (`013.005-T`) + `014.002-T` | `go test -race ./internal/config/...` (`TestGitignoreCoversLocalEnvAndSecretPatterns`, `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`) + CI `changes` secret-hygiene step |
 
 ## Implementation Units
 
-### U1 (`013.001-T`) — Enforce trusted Teams/Microsoft HTTPS host allowlist and loopback fixture boundary in `ValidateMeetingURL`
+### U1 (`013.001-T`) — Enforce initial-URL ingress allowlist for trusted Teams/Microsoft HTTPS hosts and loopback fixture boundary in `ValidateMeetingURL`
 
 * **Domain:** code (Go). **Posture:** test-first. **Size:** `S` | **Complexity:** `low`.
-* **What:** Update `ValidateMeetingURL` in `internal/teams/url.go` so that:
+* **What:** Update `ValidateMeetingURL` in `internal/teams/url.go` to enforce
+  initial-URL ingress validation before browser navigation:
   1. Loopback hosts (`localhost`, `127.0.0.1`, `::1`, retrieved via
      `u.Hostname()`) are permitted over both `http` and `https` (preserving
      `httptest.NewServer` fixtures in `internal/cli/e2e_test.go` and
      `internal/cli/binary_automation_test.go`).
-  2. Non-loopback hosts MUST use `https` (rejecting plain `http://` on remote
-     hosts) and their lowercase `u.Hostname()` MUST match or be a dot-prefixed
-     subdomain of an allowed Microsoft 365 / Teams / SharePoint host suffix:
-     `teams.microsoft.com`, `teams.live.com`, `teams.cloud.microsoft`,
-     `sharepoint.com`, `microsoft.com`, `office.com`, `sfx.ms`, `aka.ms`.
-  3. Any other remote host (such as `http://example.com/x`,
+  2. Non-loopback initial URLs MUST use `https` (rejecting plain `http://` on
+     remote hosts) and their lowercase `u.Hostname()` MUST match or be a
+     dot-prefixed subdomain of an allowed Microsoft 365 / Teams / SharePoint
+     host suffix: `teams.microsoft.com`, `teams.live.com`,
+     `teams.cloud.microsoft`, `sharepoint.com`, `microsoft.com`, `office.com`,
+     `sfx.ms`, `aka.ms`.
+  3. Any other remote initial host (such as `http://example.com/x`,
      `https://example.com/x`, or `https://evil-teams.microsoft.com.attacker.example/x`)
-     is rejected with an actionable error.
+     is rejected with an actionable error before navigation begins.
+  4. **Scope & residual risk:** `ValidateMeetingURL` governs **initial-URL
+     ingress validation** prior to `chromedp.Navigate`. Post-navigation HTTP
+     3xx or client-side JavaScript redirects inside Chromium (for example, an
+     allowed loopback endpoint or shortener redirecting to an untrusted remote
+     host) are explicitly recorded as a documented residual risk: enforcing
+     in-browser CDP request interception across Microsoft 365 federated OAuth /
+     ADFS / Okta / Duo IdP sign-in redirects would break enterprise tenant
+     authentication flows and is outside the `ValidateMeetingURL` contract.
 * **Files (2 files):** `internal/teams/url.go`, `internal/teams/url_test.go`.
 * **Verify:** Update `TestValidateMeetingURL` in `internal/teams/url_test.go`
   to cover trusted HTTPS hosts (`teams.microsoft.com`, `teams.cloud.microsoft`,
@@ -88,7 +108,7 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
   `go test -race ./internal/teams/... ./internal/cli/...`.
 * **Depends on:** none.
 
-### U2 (`013.002-T`) — Add `teams.RedactURL` and scrub userinfo, query, and fragment tokens from navigation errors and CLI queue logs
+### U2 (`013.002-T`) — Add `teams.RedactURL` and scrub userinfo, query, and fragment tokens from navigation errors, `splitQueueArgs` parse errors, and CLI queue logs
 
 * **Domain:** code (Go). **Posture:** test-first. **Size:** `S` | **Complexity:** `low`.
 * **What:**
@@ -111,10 +131,16 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
        the unredacted raw URL.
   2. In `internal/browser/runner.go` (`ChromeRunner.run`), wrap `chromedp.Navigate`
      errors using `teams.RedactURL(target)` instead of raw `target`.
-  3. In `internal/cli/queue.go` (`runQueueFile`), log `teams.RedactArgs(lineArgs)`
-     instead of raw `strings.Join(lineArgs, " ")` so batch queue runs never emit
-     userinfo, `?p=` passcodes, or meeting query/fragment strings into
-     `slog.Info`.
+  3. In `internal/cli/queue.go`:
+     * In `splitQueueArgs(line string)`: remove the raw `line` from the
+       unterminated-quote parse error (`return nil, fmt.Errorf("unterminated quote in queue line")`
+       instead of `fmt.Errorf("unterminated quote in %q", line)`) so an
+       unmatched quote on a queue line containing a passcode-bearing URL never
+       exposes the raw URL or `?p=` passcode when `runQueueFile` propagates the
+       error before argument tokenization/logging.
+     * In `runQueueFile`: log `teams.RedactArgs(lineArgs)` instead of raw
+       `strings.Join(lineArgs, " ")` so batch queue runs never emit userinfo,
+       `?p=` passcodes, or meeting query/fragment strings into `slog.Info`.
 * **Files (3 core files + tests):** `internal/teams/url.go`,
   `internal/teams/url_test.go`, `internal/browser/runner.go`,
   `internal/cli/queue.go` (and `internal/cli/queue_test.go`).
@@ -128,29 +154,49 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
     and a malformed URL
     (`https://user:pass@teams.microsoft.com:badport/meet/123?p=tok`), asserting
     that neither `user`, `pass`, `tok`, nor `frag` ever appears in the output.
+  * An unmatched-quote regression test in `internal/cli/queue_test.go` passes a
+    queue line with an unmatched quote and a `?p=secret-passcode` URL (e.g.
+    `join --url "https://teams.microsoft.com/meet/123?p=secret-passcode`) to
+    both `splitQueueArgs` and `runQueueFile`, asserting that the returned error
+    contains neither `secret-passcode` nor the raw URL.
 * **Depends on:** U1 (`013.001-T`), since both touch `internal/teams/url.go` and
   `internal/teams/url_test.go`.
 
-### U3 (`013.003-T`) — Make Chromium `--no-sandbox` opt-in in `browser.StealthFlags`
+### U3 (`013.003-T`) — Explicitly set `no-sandbox: false` when opt-in is off in `AllocatorOptions` and `cleanHeadlessAllocatorOptions`
 
-* **Domain:** code (Go). **Posture:** test-first. **Size:** `XS` | **Complexity:** `low`.
+* **Domain:** code (Go). **Posture:** test-first. **Size:** `S` | **Complexity:** `low`.
 * **What:**
   1. Add `DisableSandbox bool` to `browser.Options` in
      `internal/browser/allocator.go`.
   2. Add a helper `shouldDisableSandbox(opts Options) bool` that returns `true`
      only when `opts.DisableSandbox` is `true` OR when the environment variable
      `TEAMS_DISABLE_SANDBOX` is `"1"` or `"true"` (case-insensitive).
-  3. Update `StealthFlags(opts Options)` so `no-sandbox: true` and
-     `disable-setuid-sandbox: true` are included ONLY when
-     `shouldDisableSandbox(opts)` is `true`. By default (`Options{}` with
-     `TEAMS_DISABLE_SANDBOX` unset), the Chromium sandbox remains enabled.
-* **Files (2 files):** `internal/browser/allocator.go`,
-  `internal/browser/allocator_test.go`.
-* **Verify:** Update `TestStealthFlagsPresent` in
-  `internal/browser/allocator_test.go` to verify default `StealthFlags` omits
-  `no-sandbox` and `disable-setuid-sandbox`, and add
-  `TestStealthFlagsOptInDisableSandbox` verifying both `Options{DisableSandbox: true}`
-  and `TEAMS_DISABLE_SANDBOX=1` include those two flags.
+  3. Update both `StealthFlags(opts Options)` (`internal/browser/allocator.go`,
+     used by `AllocatorOptions`) and `cleanHeadlessFlags(opts Options)`
+     (`internal/browser/meeting.go`, used by `cleanHeadlessAllocatorOptions`)
+     so that:
+     * When `shouldDisableSandbox(opts)` is `false` (default), both explicitly
+       emit `Flag{Name: "no-sandbox", Value: false}` and
+       `Flag{Name: "disable-setuid-sandbox", Value: false}` — which translate
+       to `chromedp.Flag("no-sandbox", false)` and
+       `chromedp.Flag("disable-setuid-sandbox", false)`, explicitly overriding
+       `chromedp.NoSandbox` in `chromedp.DefaultExecAllocatorOptions` even when
+       `chromedp` v0.15.1 runs as root (`os.Geteuid() == 0`).
+     * When `shouldDisableSandbox(opts)` is `true`, both emit
+       `Flag{Name: "no-sandbox", Value: true}` and
+       `Flag{Name: "disable-setuid-sandbox", Value: true}`.
+* **Files (3 files in `internal/browser`):** `internal/browser/allocator.go`,
+  `internal/browser/meeting.go`, `internal/browser/allocator_test.go`.
+* **Verify:** Update `internal/browser/allocator_test.go` to:
+  * Verify `StealthFlags` and `cleanHeadlessFlags` emit `no-sandbox: false` and
+    `disable-setuid-sandbox: false` by default and `Value: true` when
+    `Options{DisableSandbox: true}` or `TEAMS_DISABLE_SANDBOX=1` is set.
+  * Verify effective launch arguments for both `AllocatorOptions(opts)` and
+    `cleanHeadlessAllocatorOptions(opts)` — including simulated root launches
+    where `chromedp.NoSandbox` / `chromedp.Flag("no-sandbox", true)` is preset
+    before applying the allocator options — confirming `--no-sandbox` and
+    `--disable-setuid-sandbox` are absent from the effective Chromium command
+    line when opt-in is off and present when opt-in is on.
 * **Depends on:** none.
 
 ### U4 (`013.004-T`) — Complete `--browser-path` and `BrowserPath` (`ExecPath`) CLI/config wiring across all subcommands
@@ -172,7 +218,7 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
 * **Verify:** `go test -race ./internal/config/... ./internal/cli/...` passes.
 * **Depends on:** none.
 
-### U5 (`013.005-T`) — Verify `.gitignore` local-env coverage and add pure-Go repository secret-hygiene guardrail test
+### U5 (`013.005-T`) — Verify `.gitignore` local-env coverage and add authoritative Git-index repository secret-hygiene guardrail test
 
 * **Domain:** config / test guardrail. **Posture:** test-first. **Size:** `S` | **Complexity:** `low`.
 * **What:**
@@ -183,15 +229,30 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
      * `TestGitignoreCoversLocalEnvAndSecretPatterns`: reads the repository root
        `.gitignore` and verifies required ignore entries (`.env`, `.env.*`,
        `*.env`, `!.env.example`, `.mcp.json`, `bin/`, `logs/`, `transcripts/`).
-     * `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`: walks repository
-       files (or `git ls-files` when available, falling back to a workspace walk
-       excluding `.git/`, `bin/`, `logs/`, `transcripts/`, `.copilot/`,
-       `.engram/`, `.graphtor/`) and verifies that no tracked `.env` file (other
-       than `.env.example`) exists and no tracked file contains a non-synthetic
-       live Teams `/meet/<id>?p=<token>` passcode URL or raw `eyJ...` JWT bound
-       to `SKYPE-TOKEN`, without embedding any real secret in the test source.
+     * `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`: enumerates tracked
+       repository files **strictly from the authoritative Git index** — first
+       attempting `git ls-files -z` (searching `PATH` and standard Windows Git
+       install locations), and if `git` is unavailable, parsing the repository's
+       `.git/index` binary file (`DIRC` v2/v3/v4 entry paths) directly in pure
+       Go. If neither `git ls-files -z` nor `.git/index` is readable, the test
+       MUST fail closed with `t.Fatalf` (prerequisite failure — never `t.Skip`
+       and **never fall back to a filesystem/workspace walk**, which would scan
+       legitimate ignored local files such as `.env` or `local.env` and report
+       false-positive tracked leaks). Verifies that no tracked `.env` file
+       (other than `.env.example`) exists in the Git index and no tracked file
+       contains a non-synthetic live Teams `/meet/<id>?p=<token>` passcode URL
+       or raw `eyJ...` JWT bound to `SKYPE-TOKEN`, without embedding any real
+       secret in the test source.
+  3. **CI enforcement on docs/backlog-only PRs (cross-reference `014.002-T`):**
+     Because `014.002-T` (`014-S`) owns `.github/workflows/ci.yml` to preserve
+     width isolation, `014.002-T` adds an unconditional tracked-file
+     secret-hygiene check step in the always-run `changes` job of
+     `.github/workflows/ci.yml` (independent of `needs.changes.outputs.code == 'true'`)
+     that scans `git ls-files -z` on every PR and push — including
+     docs/backlog-only PRs where the `test` job is skipped.
 * **Files (2 files):** `.gitignore`, `internal/config/gitignore_test.go`.
-* **Verify:** `go test -race ./internal/config/...` passes.
+* **Verify:** `go test -race ./internal/config/...` passes (including unit
+  coverage for the `.git/index` parser and prerequisite-failure path).
 * **Depends on:** U4 (`013.004-T`) to serialize test additions in
   `internal/config/`.
 
@@ -213,26 +274,49 @@ U4 (013.004-T) ──▶ U5 (013.005-T)
 
 ## Decisions and Rationale
 
-* **Allow loopback over HTTP/HTTPS alongside trusted HTTPS Microsoft domains**:
+* **Initial-URL ingress allowlist for loopback HTTP/HTTPS and trusted HTTPS Microsoft domains (with post-navigation redirects documented as residual risk)**:
   `TestCaptionsCommandEndToEndWritesMarkdownFile` and
   `TestCompiledBinaryCapturesRecapToExplicitOutput` start a local
   `httptest.NewServer` (`http://127.0.0.1:<port>`). Allowing loopback hosts
   (`127.0.0.1`, `localhost`, `::1`) over `http`/`https` while requiring `https`
   and an explicit Microsoft/Teams/SharePoint/Office domain suffix for all
-  non-loopback hosts closes the arbitrary remote host SSRF/phishing vector
-  without breaking local test fixtures.
-* **Opt-in sandbox disable in `StealthFlags`**: `NewLiveMeeting` already runs
-  with the Chromium sandbox enabled; changing `StealthFlags` to omit
-  `no-sandbox` and `disable-setuid-sandbox` unless `Options.DisableSandbox` or
-  `TEAMS_DISABLE_SANDBOX=1` is set unifies the default security posture across
-  `ChromeRunner` (`auth`, `Runner.Join`) and `AllocatorOptions`.
-* **Pure-Go secret-hygiene guardrail test**: Implementing the guardrail as a
-  standard `go test` in `internal/config/gitignore_test.go` ensures it runs
-  automatically in every local and CI `go test -race ./...` execution without
-  requiring external third-party CI actions or unpinned containers.
+  non-loopback initial URLs enforces initial-URL ingress validation before
+  navigation without breaking local test fixtures. Post-navigation HTTP/JS
+  redirects inside Chromium are recorded as a documented residual risk because
+  blocking third-party redirect hops in CDP would break enterprise federated
+  IdP (ADFS, Okta, Duo, Ping) authentication flows.
+* **Explicit `no-sandbox: false` when opt-in is off in both `StealthFlags` and `cleanHeadlessFlags`**:
+  In `chromedp` v0.15.1, `DefaultExecAllocatorOptions` includes
+  `chromedp.NoSandbox`, which automatically adds `--no-sandbox` when the
+  process runs as root (`os.Geteuid() == 0`) unless explicitly overridden by a
+  subsequent `chromedp.Flag("no-sandbox", false)`. Emitting
+  `Flag{Name: "no-sandbox", Value: false}` and
+  `Flag{Name: "disable-setuid-sandbox", Value: false}` in both
+  `StealthFlags(opts)` (`AllocatorOptions`) and `cleanHeadlessFlags(opts)`
+  (`cleanHeadlessAllocatorOptions` in `internal/browser/meeting.go`) whenever
+  `!shouldDisableSandbox(opts)` guarantees that `--no-sandbox` is never active
+  unless explicitly opted in via `Options.DisableSandbox` or
+  `TEAMS_DISABLE_SANDBOX=1`.
+* **Authoritative Git-index secret-hygiene guardrail test + always-run CI check (`014.002-T`)**:
+  Implementing the guardrail in `internal/config/gitignore_test.go` using the
+  authoritative Git index (`git ls-files -z` with a pure-Go `.git/index` binary
+  parser fallback and fail-closed `t.Fatalf` if neither is readable — never a
+  workspace walk) prevents false positives on legitimate ignored local `.env`
+  files. Pairing it with an unconditional `git ls-files` secret-hygiene step in
+  the always-run `changes` job of `.github/workflows/ci.yml` (`014.002-T`)
+  ensures docs/backlog-only PRs are also scanned in CI even when the Go `test`
+  job is skipped.
 
 ## Risks and Caveats
 
+* **Post-navigation redirects (documented residual risk)**: `ValidateMeetingURL`
+  validates the initial target URL before `chromedp.Navigate` (and inside
+  `MutateJoinURL`). If an allowed initial endpoint (such as a local loopback
+  server or an `aka.ms` link) issues an HTTP 3xx or JavaScript redirect to an
+  untrusted remote host after initial navigation, Chromium will follow it.
+  Intercepting post-navigation redirects at the CDP network layer is intentionally
+  out of scope for `ValidateMeetingURL` to avoid breaking federated enterprise
+  SSO/IdP login redirects, and is recorded as a residual risk.
 * **Existing unit tests using `http://example.com/x`**: `TestValidateMeetingURL`
   in `internal/teams/url_test.go` and `TestScheduleCommandInvalidCron` in
   `internal/cli/root_test.go` (which only validates cron parsing before any job
@@ -240,9 +324,11 @@ U4 (013.004-T) ──▶ U5 (013.005-T)
   `http://example.com/x` is now rejected while `http://127.0.0.1:8080/meet/x`
   and `https://teams.microsoft.com/l/meetup-join/x` succeed.
 * **Existing unit test `TestStealthFlagsPresent`**: Updated in U3 so the default
-  case asserts `no-sandbox` and `disable-setuid-sandbox` are absent and a
-  dedicated opt-in test asserts their presence when `DisableSandbox: true` or
-  `TEAMS_DISABLE_SANDBOX=1`.
+  case asserts `no-sandbox: false` and `disable-setuid-sandbox: false` are
+  present and effective allocator launch args exclude `--no-sandbox` (including
+  when `NoSandbox` is preset as in root launches), while a dedicated opt-in
+  test asserts `Value: true` and `--no-sandbox` presence when
+  `DisableSandbox: true` or `TEAMS_DISABLE_SANDBOX=1`.
 
 ## Constitution Check
 
@@ -295,28 +381,41 @@ and URL token redaction across `internal/teams`, `internal/browser`, and
    must remain valid in `ValidateMeetingURL` over `http://` and `https://` so
    `TestCaptionsCommandEndToEndWritesMarkdownFile` and
    `TestCompiledBinaryCapturesRecapToExplicitOutput` continue to run offline.
-2. **Trusted remote HTTPS enforcement:** Non-loopback URLs must use `https://`
-   and match or be a dot-prefixed subdomain of the trusted Microsoft Teams /
-   SharePoint / Microsoft 365 host allowlist.
-3. **Zero secret leakage in errors, logs, or tests:** Navigation errors and
-   queue logs must never include userinfo credentials (`user:pass@`), raw query
-   strings (`?p=`, `code=`), or URL fragments (`#access_token=`), including on
-   malformed URLs where `url.Parse` fails (returning `"[invalid-url]"` whenever
-   a clean `scheme://host/path` free of `@`, `?`, `#`, and control characters
-   cannot be extracted), and guardrail tests must use synthetic tokens only.
-4. **Sandbox enabled by default:** Neither `NewLiveMeeting` nor default
-   `StealthFlags(Options{})` may pass `--no-sandbox` or
-   `--disable-setuid-sandbox` unless explicitly opted in.
+2. **Trusted remote HTTPS initial-URL ingress enforcement:** Non-loopback
+   initial URLs must use `https://` and match or be a dot-prefixed subdomain of
+   the trusted Microsoft Teams / SharePoint / Microsoft 365 host allowlist
+   (with post-navigation redirects documented as residual risk).
+3. **Zero secret leakage in errors, logs, or tests:** Navigation errors,
+   `splitQueueArgs` unmatched-quote parse errors, and queue logs must never
+   include userinfo credentials (`user:pass@`), raw query strings (`?p=`,
+   `code=`), or URL fragments (`#access_token=`), including on malformed URLs
+   where `url.Parse` fails (returning `"[invalid-url]"` whenever a clean
+   `scheme://host/path` free of `@`, `?`, `#`, and control characters cannot be
+   extracted) and on queue lines that fail quote tokenization before argument
+   logging, and guardrail tests must use synthetic tokens only.
+4. **Sandbox enabled by default (including root launches):** Both
+   `StealthFlags(opts)` (`AllocatorOptions`) and `cleanHeadlessFlags(opts)`
+   (`cleanHeadlessAllocatorOptions` in `internal/browser/meeting.go`) must
+   explicitly emit `no-sandbox: false` and `disable-setuid-sandbox: false` when
+   opt-in is off so `chromedp.NoSandbox` in `DefaultExecAllocatorOptions` is
+   overridden even when running as root.
+5. **Authoritative Git-index secret scanning:** Tracked-file secret scanning in
+   `internal/config/gitignore_test.go` must read tracked paths strictly from
+   `git ls-files -z` or pure-Go `.git/index` parsing (failing closed with
+   `t.Fatalf` if neither is available, and never falling back to a workspace
+   directory walk that could inspect ignored `.env` files), while CI's
+   always-run `changes` job (`014.002-T`) scans tracked files on every PR
+   including docs/backlog-only PRs.
 
 ### Risky Actions (`strict-safety`)
 
 | ProposedAction | ActionRisk | Approval and containment | Expected ActionResult |
 |---|---|---|---|
-| Restrict `teams.ValidateMeetingURL` to trusted HTTPS Microsoft/Teams/SharePoint/Office hosts plus HTTP/HTTPS loopback (`127.0.0.1`, `localhost`, `::1`) | high | Pure-Go host/scheme check in `internal/teams/url.go`; verified against unit, e2e, and compiled-binary loopback tests | Rejects arbitrary untrusted remote hosts and plain remote HTTP while preserving all Teams/SharePoint URLs and local loopback test fixtures |
-| Redact query strings and fragments via `teams.RedactURL` / `teams.RedactArgs` in `runner.go` and `queue.go` | moderate | Preserves `MutateJoinURL` output handed to `chromedp.Navigate`; redacts only error strings and log attributes | Passcodes (`?p=`) and OAuth parameters never appear in returned navigation errors or queue logs |
-| Change `browser.StealthFlags` default to omit `--no-sandbox` and `--disable-setuid-sandbox` unless `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX=1` is set | high | Aligns `StealthFlags` with `NewLiveMeeting`; container/CI environments needing `--no-sandbox` can set `TEAMS_DISABLE_SANDBOX=1` | Production Chromium instances run with OS sandboxing enabled by default |
+| Restrict `teams.ValidateMeetingURL` initial-URL ingress to trusted HTTPS Microsoft/Teams/SharePoint/Office hosts plus HTTP/HTTPS loopback (`127.0.0.1`, `localhost`, `::1`), recording post-navigation redirects as residual risk | high | Pure-Go initial-URL host/scheme check in `internal/teams/url.go`; verified against unit, e2e, and compiled-binary loopback tests | Rejects arbitrary untrusted remote initial URLs and plain remote HTTP before navigation while preserving Teams/SharePoint URLs and local loopback test fixtures; post-navigation redirects documented as residual risk |
+| Redact userinfo, query strings, and fragments via `teams.RedactURL` / `teams.RedactArgs` in `runner.go` and `queue.go`, and remove raw line from `splitQueueArgs` unmatched-quote error | moderate | Preserves `MutateJoinURL` output handed to `chromedp.Navigate`; redacts error strings, `splitQueueArgs` parse errors, and log attributes | Passcodes (`?p=`), userinfo, and OAuth parameters never appear in returned navigation errors, `splitQueueArgs` errors, or queue logs |
+| Explicitly emit `no-sandbox: false` and `disable-setuid-sandbox: false` in `StealthFlags` (`AllocatorOptions`) and `cleanHeadlessFlags` (`cleanHeadlessAllocatorOptions`) unless `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX=1` is set | high | Overrides `chromedp.NoSandbox` in `DefaultExecAllocatorOptions` even on root launches; container/CI environments needing `--no-sandbox` can set `TEAMS_DISABLE_SANDBOX=1` | Production Chromium instances run with OS sandboxing enabled by default across both `AllocatorOptions` and `cleanHeadlessAllocatorOptions` |
 | Wire `--browser-path` and `--profile-dir` onto `auth` and `schedule` subcommands | low | Additive Cobra flags matching `root`, `join`, and `captions` | All five CLI entry points honor `--browser-path` and `browser_path` |
-| Add `*.env` to `.gitignore` and add pure-Go secret-hygiene guardrail tests in `internal/config/gitignore_test.go` | low | Read-only workspace inspection in tests; uses only synthetic patterns | Prevents accidental tracking of `.env` files or live meeting passcode URLs |
+| Add `*.env` to `.gitignore` and add authoritative Git-index secret-hygiene guardrail tests in `internal/config/gitignore_test.go` (paired with always-run CI check in `014.002-T`) | low | Strictly inspects Git index (`git ls-files -z` or `.git/index` binary parser; fails closed with `t.Fatalf`, no workspace walk fallback); uses synthetic patterns only | Prevents accidental tracking of `.env` files or live meeting passcode URLs without false positives on local ignored `.env` files, and scans docs-only PRs in CI via `014.002-T` |
 
 ## Runtime Verification and Closure
 
@@ -360,12 +459,19 @@ decision: PASS
   URL validation and sanitization in a single foundational package imported by
   `internal/browser` and `internal/cli` without circular dependencies.
 * **Security Lens Reviewer (triggered by trust boundary, sandbox posture, and secret hygiene):**
-  **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`). Host allowlist uses dot-boundary suffix
-  matching (`host == d || strings.HasSuffix(host, "."+d)`) so lookalike domains
-  (`teams.microsoft.com.evil.example`) are rejected; plain `http://` is
-  restricted strictly to loopback (`127.0.0.1`, `localhost`, `::1`); `RedactURL`
-  strips userinfo, query strings, and fragments; `StealthFlags` enables the
-  Chromium sandbox by default.
+  **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`). Initial-URL host allowlist uses
+  dot-boundary suffix matching (`host == d || strings.HasSuffix(host, "."+d)`)
+  so lookalike domains (`teams.microsoft.com.evil.example`) are rejected on
+  initial navigation while post-navigation HTTP/JS redirects are explicitly
+  documented as residual risk; plain `http://` is restricted strictly to
+  loopback (`127.0.0.1`, `localhost`, `::1`); `RedactURL` strips userinfo,
+  query strings, and fragments and `splitQueueArgs` omits the raw line from
+  unmatched-quote errors; `StealthFlags` and `cleanHeadlessFlags` explicitly
+  set `no-sandbox: false` and `disable-setuid-sandbox: false` by default
+  (overriding `chromedp.NoSandbox` even as root); tracked-file secret scanning
+  uses the authoritative Git index (`git ls-files -z` or `.git/index` parser,
+  failing closed with `t.Fatalf` and no workspace walk) and is paired with an
+  always-run CI check in `014.002-T`.
 
 **Gate verdict:** `PASS` (`0 P0, 0 P1, 0 P2, 0 P3`). Ready for harvest into
 `013-F` and shipment `013-S`.

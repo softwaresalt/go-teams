@@ -47,7 +47,7 @@ objectives:
     `dispatch_mode: single-agent-declared-degradation`)
 * **Backlog hierarchy and shipments:**
   * **`013-F`**: `013.001-T` (`S`), `013.002-T` (`S`, depends on `013.001-T`),
-    `013.003-T` (`XS`), `013.004-T` (`S`), `013.005-T` (`S`, depends on
+    `013.003-T` (`S`), `013.004-T` (`S`), `013.005-T` (`S`, depends on
     `013.004-T`) → packaged in **`013-S`** (`high`, depends on shipped
     predecessor `012-S`).
   * **`014-F`**: `014.001-T` (`XS`), `014.002-T` (`XS`) → packaged in
@@ -92,6 +92,60 @@ Addressed two findings surfaced during pre-PR local review on staging branch
    synthesized PCM input, plus byte-for-byte identical output across two
    independent `NewEncoder` runs) WITHOUT constructing a zero-slack (`cap == len`)
    buffer that would violate `checkptr` under `go test -race ./...`.
+
+## PR #32 Copilot review remediation (5 in-scope threads)
+
+Addressed all five P-021 C1 in-scope Copilot review comments on staging PR #32
+(`chore/stage-013-s-014-s`):
+
+1. **Thread 1 (`PRRT_kwDOTStvas61_xCt` — `splitQueueArgs` raw line in parse error):**
+   Updated `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md` (U2),
+   `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `002-DL`, and `013.002-T` so `splitQueueArgs` in `internal/cli/queue.go`
+   removes the raw `line` from its unmatched-quote error (`fmt.Errorf("unterminated quote in queue line")`)
+   and required an unmatched-quote regression test in `internal/cli/queue_test.go`
+   with a `?p=` passcode URL asserting the returned error from `splitQueueArgs`
+   and `runQueueFile` contains no passcode or raw URL.
+2. **Thread 2 (`PRRT_kwDOTStvas61_xDb` — explicitly set `no-sandbox: false` when opt-in is off):**
+   Updated `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md` (U3),
+   `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `002-DL`, and `013.003-T` (adding `internal/browser/meeting.go` to the file
+   list, `size: S` across 3 files in `internal/browser`) so that when sandbox
+   disable is NOT opted in, both `StealthFlags(opts)` (`AllocatorOptions`) and
+   `cleanHeadlessFlags(opts)` (`cleanHeadlessAllocatorOptions` in `meeting.go`)
+   explicitly emit `Flag{Name: "no-sandbox", Value: false}` and
+   `Flag{Name: "disable-setuid-sandbox", Value: false}` (overriding
+   `chromedp.NoSandbox` in `DefaultExecAllocatorOptions` even on root launches),
+   with unit tests in `allocator_test.go` verifying effective launch arguments
+   including simulated root launches.
+3. **Thread 3 (`PRRT_kwDOTStvas61_xD9` — scan docs-only changes for committed secrets in CI):**
+   Updated `013-S` (`docs/plans/2026-11-10-browser-security-and-hygiene-plan.md`,
+   `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `002-DL`, `013.005-T`) and `014-S`
+   (`docs/plans/2026-11-10-audio-golden-test-and-ci-hygiene-plan.md`,
+   `docs/decisions/2026-11-10-audio-golden-test-and-ci-hygiene-deliberation.md`,
+   `003-DL`, `014-F`, `014.002-T`) so `014.002-T` (which owns
+   `.github/workflows/ci.yml` for width isolation) adds an unconditional
+   `Secret hygiene check (tracked files)` step inside the always-run `changes`
+   job that scans `git ls-files -z` for tracked `.env` files and forbidden
+   secret patterns (`[?&]p=[A-Za-z0-9_-]{8,}`, `SKYPE-TOKEN`, `Bearer eyJ`) on
+   every PR and push, including docs/backlog-only PRs.
+4. **Thread 4 (`PRRT_kwDOTStvas61_xEb` — authoritative Git index for tracked-file secret scanning, no workspace walk fallback):**
+   Updated `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md` (U5),
+   `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `002-DL`, and `013.005-T` to remove the workspace directory walk fallback
+   entirely: `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` obtains the
+   tracked-file inventory strictly from `git ls-files -z` or by parsing
+   `.git/index` (`DIRC` v2/v3/v4) in pure Go, and fails closed with `t.Fatalf`
+   if neither is readable (never scanning untracked local `.env` files).
+5. **Thread 5 (`PRRT_kwDOTStvas61_xE6` — narrow SSRF claim to initial-URL ingress validation and record redirects as residual risk):**
+   Updated `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md` (U1 and
+   Risk Hardening), `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   `002-DL`, and `013.001-T` to explicitly narrow the claim to initial-URL
+   ingress validation (`ValidateMeetingURL` before initial navigation) and
+   record post-navigation HTTP/JS redirects inside Chromium as a documented
+   residual risk so federated Microsoft 365 / ADFS / Okta / Duo IdP sign-in
+   flows are not broken.
 
 ## Next step
 

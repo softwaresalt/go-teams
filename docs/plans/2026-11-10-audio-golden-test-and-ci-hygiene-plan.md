@@ -30,18 +30,22 @@ feature **`014-F`** and shipment **`014-S`**:
    recorded in `docs/closure/009-S-009-F-post-merge-closure.md` into an
    automated test guarantee.
 2. **`D3EFD224`**: `.github/workflows/ci.yml` currently specifies `paths-ignore`
-   on the `pull_request` trigger, preventing the `Detect code changes`
-   (`changes`) job from running and reporting a status check on
-   documentation- or backlog-only PRs. Removing `paths-ignore` from
-   `pull_request:` allows `changes` to run and report on every PR while `Build,
-   vet, lint & test` remains gated by `if: needs.changes.outputs.code == 'true'`.
+   on the `pull_request` (and `push`) triggers, preventing the `Detect code
+   changes` (`changes`) job from running and reporting a status check on
+   documentation- or backlog-only PRs, and leaving docs/backlog-only PRs with no
+   CI secret-hygiene scan when `Build, vet, lint & test` (`test`) is skipped.
+   Removing `paths-ignore` and adding an unconditional tracked-file
+   secret-hygiene check step inside the always-run `changes` job allows
+   `changes` to run, scan all git-tracked files (`git ls-files`) for committed
+   secrets, and report on every PR and push while `Build, vet, lint & test`
+   remains gated by `if: needs.changes.outputs.code == 'true'`.
 
 ## Requirements Trace
 
 | Requirement | Stash ID | Implementation unit | Verification |
 |---|---|---|---|
 | R1: Deterministic byte-for-byte reproducibility and fixed golden reference regression test for `internal/audio` MP3 output (without constructing a zero-slack buffer that would violate `checkptr` under `-race`) | `FE245033` | U1 (`014.001-T`) | `go test -race ./internal/audio/...` (`TestEncoderDeterministicGoldenReference`) |
-| R2: Remove `paths-ignore` from `pull_request` trigger in `.github/workflows/ci.yml` while keeping `test` job self-gated via `needs.changes.outputs.code == 'true'` | `D3EFD224` | U2 (`014.002-T`) | YAML structural verification and GitHub Actions `Detect code changes` check on PR |
+| R2: Remove `paths-ignore` in `.github/workflows/ci.yml` and add an always-run tracked-file secret-hygiene scan step in the `changes` job (independent of `needs.changes.outputs.code == 'true'`) while keeping `test` job self-gated for code changes | `D3EFD224` (`+ 3084A83E` CI companion) | U2 (`014.002-T`) | YAML structural verification, CI secret-scan step on docs-only change, and GitHub Actions `Detect code changes` check on PR |
 
 ## Implementation Units
 
@@ -70,23 +74,35 @@ feature **`014-F`** and shipment **`014-S`**:
 * **Verify:** `go test -race ./internal/audio/...` passes.
 * **Depends on:** none.
 
-### U2 (`014.002-T`) — Remove `paths-ignore` from `pull_request` trigger in `.github/workflows/ci.yml`
+### U2 (`014.002-T`) — Remove `paths-ignore` and add always-run tracked-file secret-hygiene check in `.github/workflows/ci.yml`
 
-* **Domain:** config (CI workflow). **Posture:** migration-first / config hygiene. **Size:** `XS` | **Complexity:** `trivial`.
+* **Domain:** config (CI workflow). **Posture:** migration-first / config hygiene. **Size:** `XS` | **Complexity:** `low`.
 * **What:**
-  1. In `.github/workflows/ci.yml`, replace the `pull_request: paths-ignore: [...]`
-     block with an unconditional `pull_request:` trigger so the lightweight
-     `Detect code changes` (`changes`) job runs and reports on every PR.
+  1. In `.github/workflows/ci.yml`, remove the `paths-ignore` blocks from the
+     `pull_request:` and `push:` triggers so the lightweight `Detect code
+     changes` (`changes`) job runs and reports on every PR and push (including
+     docs/backlog-only changes).
   2. Add `'!.autoharness/**'` to the `dorny/paths-filter` `code` filter block in
-     the `changes` job so `.autoharness/**`-only PR diffs are excluded from
-     triggering `Build, vet, lint & test`, matching the `push` trigger's
-     `paths-ignore` list.
-  3. Preserve all SHA-pinned action references (`actions/checkout@11bd7190...`,
+     the `changes` job so `.autoharness/**`-only diffs are excluded from
+     triggering `Build, vet, lint & test`.
+  3. Add an unconditional `Secret hygiene check (tracked files)` step inside the
+     always-run `changes` job (independent of `needs.changes.outputs.code == 'true'`,
+     completing the CI half of `013.005-T`) that inspects all git-tracked files
+     via `git ls-files -z` and fails the job if:
+     * any tracked `.env` file (`*.env`, `.env`, `.env.*` other than
+       `.env.example`) exists in the Git index, or
+     * any tracked file (including `docs/**` plans/decisions or `.backlogit/**`
+       stash/queue items) contains a live Teams passcode query token
+       (`[?&]p=[A-Za-z0-9_-]{8,}` outside synthetic test placeholders), raw
+       `SKYPE-TOKEN`, or `Bearer eyJ` JWT token.
+  4. Preserve all SHA-pinned action references (`actions/checkout@11bd7190...`,
      `dorny/paths-filter@d1c1ffe0...`), `persist-credentials: false`, and
      least-privilege `permissions` per `ci-security.instructions.md`.
 * **Files (1 file):** `.github/workflows/ci.yml`.
-* **Verify:** Validate YAML syntax and confirm `changes` and `test` jobs pass on
-  the shipment PR.
+* **Verify:** Validate YAML syntax, confirm `changes` (including the
+  `Secret hygiene check (tracked files)` step) and `test` jobs pass on the
+  shipment PR, and verify the secret-hygiene step executes on a docs/backlog-only
+  change even when `test` is skipped.
 * **Depends on:** none.
 
 ## Dependency Graph
@@ -169,13 +185,14 @@ Hardening is included because U2 modifies `.github/workflows/ci.yml`.
 
 | ProposedAction | ActionRisk | Approval and containment | Expected ActionResult |
 |---|---|---|---|
-| Remove `paths-ignore` from `pull_request` trigger in `.github/workflows/ci.yml` and add `'!.autoharness/**'` to `dorny/paths-filter` | low | Preserves SHA pinning, `persist-credentials: false`, and `if: needs.changes.outputs.code == 'true'` on the `test` job | `Detect code changes` runs and reports on all PRs while `Build, vet, lint & test` still skips docs/backlog-only PRs |
+| Remove `paths-ignore` from `.github/workflows/ci.yml`, add `'!.autoharness/**'` to `dorny/paths-filter`, and add an always-run tracked-file secret-hygiene step in the `changes` job | low | Preserves SHA pinning, `persist-credentials: false`, and `if: needs.changes.outputs.code == 'true'` on the `test` job while scanning `git ls-files -z` unconditionally in `changes` | `Detect code changes` runs and scans all tracked files for committed secrets on every PR and push (including docs/backlog-only PRs) while `Build, vet, lint & test` still skips docs/backlog-only PRs |
 
 ## Runtime Verification and Closure
 
 * **Verification:** `go test -race ./internal/audio/...`, `go vet ./...`,
-  CI-pinned `golangci-lint run`, `gofmt -l cmd internal`, and PR CI `changes` +
-  `test` job verification.
+  CI-pinned `golangci-lint run`, `gofmt -l cmd internal`, PR CI `changes` +
+  `test` job verification, and verification that the `changes` job's
+  tracked-file secret-hygiene check executes on a docs/backlog-only change.
 * **Rollback:** Revert the `014-S` merge commit on `main`.
 
 ## Plan Review

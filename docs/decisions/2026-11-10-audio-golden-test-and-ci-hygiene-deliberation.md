@@ -31,11 +31,12 @@ determinism and CI status-check reporting:
 2. **`D3EFD224`** (`low`, `task`): `.github/workflows/ci.yml` currently
    configures `paths-ignore` on both `push` and `pull_request` triggers for
    `.backlogit/**`, `docs/**`, `.autoharness/**`, and `**/*.md`. Because the
-   workflow is skipped entirely on documentation- or backlog-only pull requests,
-   the lightweight `Detect code changes` (`changes`) job never runs or reports a
-   status check on those PRs, even though the `Build, vet, lint & test` (`test`)
-   job is already self-gated via `if: needs.changes.outputs.code == 'true'` and
-   the `dorny/paths-filter` denylist.
+   workflow is skipped entirely on documentation- or backlog-only pull requests
+   and pushes, the lightweight `Detect code changes` (`changes`) job never runs
+   or reports a status check on those PRs, and a secret scanner run only through
+   `go test` in the `Build, vet, lint & test` (`test`) job (which is skipped
+   when `needs.changes.outputs.code != 'true'`) would never scan a live passcode
+   or token accidentally committed in a docs- or backlog-only PR.
 
 ## P-021 C5 and C6 triage and reconciliation record
 
@@ -76,22 +77,25 @@ triggered Step 1 obligations were executed:
      leading/trailing MP3 frame bytes, catching any future `shine-mp3` or
      `Encoder` change that alters output bytes while remaining 100% safe under
      `go test -race ./...`.
-* **R2 (CI `pull_request` trigger hygiene — `D3EFD224`)**:
-  Remove `paths-ignore` from the `pull_request:` trigger in
-  `.github/workflows/ci.yml` (retaining `paths-ignore` on `push:` to `main` if
-  desired, or relying on the `changes` job) so `Detect code changes` (`changes`)
-  always runs and reports on every pull request while `Build, vet, lint & test`
-  remains skipped on docs/backlog-only PRs via
-  `if: needs.changes.outputs.code == 'true'`. Also include `!.autoharness/**` in
-  the `dorny/paths-filter` `code` denylist so `.autoharness/**` matches the
-  previous `paths-ignore` exclusion list.
+* **R2 (CI `pull_request` / `push` trigger hygiene and unconditional tracked-file secret scan — `D3EFD224` + `013.005-T` CI companion)**:
+  Remove `paths-ignore` from the `pull_request:` and `push:` triggers in
+  `.github/workflows/ci.yml` so `Detect code changes` (`changes`) always runs
+  and reports on every pull request and push while `Build, vet, lint & test`
+  remains skipped on docs/backlog-only changes via
+  `if: needs.changes.outputs.code == 'true'`. Include `!.autoharness/**` in the
+  `dorny/paths-filter` `code` denylist, AND add an unconditional
+  `Secret hygiene check (tracked files)` step inside the always-run `changes`
+  job that scans all git-tracked files (`git ls-files -z`) for tracked `.env`
+  files (other than `.env.example`) and forbidden secret patterns
+  (`[?&]p=[A-Za-z0-9_-]{8,}`, `SKYPE-TOKEN`, `Bearer eyJ`) on every PR and
+  push, including docs/backlog-only PRs.
 
 ## Options
 
 | Option | Benefit | Limitation |
 |---|---|---|
 | Option A: Commit a binary `.mp3` golden file in `internal/audio/testdata/` or invoke `shine-mp3` directly with a zero-slack (`cap == len`) buffer | Direct file or live buffer comparison | Binary blob pollutes git history; calling `shine-mp3` with a zero-slack (`cap == len`) buffer triggers a fatal `checkptr` crash under `go test -race ./...` (`009-S`) |
-| Option B (chosen): Assert deterministic byte-for-byte reproducibility across independent `NewEncoder` runs AND against a fixed golden reference (pinned byte length, SHA-256 hex digest, and leading/trailing frame bytes) in `internal/audio/mp3_test.go` without constructing a zero-slack buffer, plus remove `pull_request.paths-ignore` in `.github/workflows/ci.yml` | Locks in deterministic byte-for-byte MP3 output under `go test -race ./...` without violating `checkptr` or committing binary blobs; keeps CI `changes` check reporting on all PRs | None |
+| Option B (chosen): Assert deterministic byte-for-byte reproducibility across independent `NewEncoder` runs AND against a fixed golden reference (pinned byte length, SHA-256 hex digest, and leading/trailing frame bytes) in `internal/audio/mp3_test.go` without constructing a zero-slack buffer, plus remove `paths-ignore` and add an always-run tracked-file secret-hygiene step in `.github/workflows/ci.yml` | Locks in deterministic byte-for-byte MP3 output under `go test -race ./...` without violating `checkptr` or committing binary blobs; keeps CI `changes` check and secret scanning active on all PRs including docs/backlog-only PRs | None |
 
 ## Chosen direction
 
@@ -103,9 +107,11 @@ packaged in shipment **`014-S`** (chained after `013-S` via
 1. **`014.001-T` (U1, code/test domain)**: Add
    `TestEncoderDeterministicGoldenReference` in
    `internal/audio/mp3_test.go` (`XS` / `low`).
-2. **`014.002-T` (U2, CI config domain)**: Remove `paths-ignore` from the
-   `pull_request` trigger in `.github/workflows/ci.yml` and align the
-   `dorny/paths-filter` denylist (`XS` / `trivial`).
+2. **`014.002-T` (U2, CI config domain)**: Remove `paths-ignore` in
+   `.github/workflows/ci.yml`, align the `dorny/paths-filter` denylist, and add
+   an unconditional tracked-file secret-hygiene scan step in the always-run
+   `changes` job so docs/backlog-only PRs are scanned for committed secrets
+   (`XS` / `low`).
 
 ## Open questions
 

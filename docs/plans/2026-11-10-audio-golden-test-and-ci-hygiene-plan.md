@@ -1,0 +1,223 @@
+---
+title: Deterministic MP3 golden regression test and CI path-filter trigger hygiene plan
+description: Implementation plan for 014-F / 014-S covering a deterministic fixed-reference MP3 byte-equality test in internal/audio/mp3_test.go and pull_request trigger path-filter hygiene in .github/workflows/ci.yml
+source: docs/decisions/2026-11-10-audio-golden-test-and-ci-hygiene-deliberation.md
+deliberation_id: 003-DL
+feature: 014-F
+shipment: 014-S
+date: 2026-11-10
+status: approved
+tags:
+  - audio
+  - testing
+  - ci
+  - workflows
+---
+
+## Problem Frame
+
+Following the deliberation in
+[2026-11-10-audio-golden-test-and-ci-hygiene-deliberation.md](../decisions/2026-11-10-audio-golden-test-and-ci-hygiene-deliberation.md)
+(`003-DL`), two maintenance items (`FE245033` and `D3EFD224`) are planned under
+feature **`014-F`** and shipment **`014-S`**:
+
+1. **`FE245033`**: `internal/audio/mp3.go` (`encodeFrames`) allocates
+   `stereo := make([]int16, len(mono)*2, len(mono)*2+encoderTailSlack)`
+   (`encoderTailSlack = 4`) so `shine-mp3` v0.1.0's end-of-buffer pointer stays
+   within the allocation under `go test -race`. Adding a deterministic
+   byte-for-byte and fixed SHA-256 reference test in
+   `internal/audio/mp3_test.go` turns the source-level byte-identity argument
+   recorded in `docs/closure/009-S-009-F-post-merge-closure.md` into an
+   automated test guarantee.
+2. **`D3EFD224`**: `.github/workflows/ci.yml` currently specifies `paths-ignore`
+   on the `pull_request` (and `push`) triggers, preventing the `Detect code
+   changes` (`changes`) job from running and reporting a status check on
+   documentation- or backlog-only PRs, and leaving docs/backlog-only PRs with no
+   CI secret-hygiene scan when `Build, vet, lint & test` (`test`) is skipped.
+   Removing `paths-ignore` and adding an unconditional tracked-file
+   secret-hygiene check step inside the always-run `changes` job allows
+   `changes` to run, scan all git-tracked files (`git ls-files`) for committed
+   secrets, and report on every PR and push while `Build, vet, lint & test`
+   remains gated by `if: needs.changes.outputs.code == 'true'`.
+
+## Requirements Trace
+
+| Requirement | Stash ID | Implementation unit | Verification |
+|---|---|---|---|
+| R1: Deterministic byte-for-byte reproducibility and fixed golden reference regression test for `internal/audio` MP3 output (without constructing a zero-slack buffer that would violate `checkptr` under `-race`) | `FE245033` | U1 (`014.001-T`) | `go test -race ./internal/audio/...` (`TestEncoderDeterministicGoldenReference`) |
+| R2: Remove `paths-ignore` in `.github/workflows/ci.yml` and add an always-run tracked-file secret-hygiene scan step in the `changes` job (independent of `needs.changes.outputs.code == 'true'`) while keeping `test` job self-gated for code changes | `D3EFD224` (`+ 3084A83E` CI companion) | U2 (`014.002-T`) | YAML structural verification, CI secret-scan step on docs-only change, and GitHub Actions `Detect code changes` check on PR |
+
+## Implementation Units
+
+### U1 (`014.001-T`) — Add deterministic fixed-reference MP3 byte-equality regression test in `internal/audio/mp3_test.go`
+
+* **Domain:** tests (Go). **Posture:** test-first. **Size:** `XS` | **Complexity:** `low`.
+* **What:** Add `TestEncoderDeterministicGoldenReference` in
+  `internal/audio/mp3_test.go` that tests deterministic, byte-for-byte
+  reproducibility against a **fixed golden reference** WITHOUT constructing a
+  zero-slack (`cap == len`) stereo buffer (which would trigger a `shine-mp3`
+  `checkptr` fault under `go test -race ./...`, as documented in `009-S`
+  closure `docs/closure/009-S-009-F-post-merge-closure.md` and
+  `docs/compound/build-errors/shine-mp3-race-checkptr.md`):
+  1. Generates a deterministic synthesized mono PCM input via
+     `sineMono(4 * monoSamplesPerFrame)` and encodes it across two independent
+     `NewEncoder(&buf, SampleRate)` runs (including multi-chunk writes flushed
+     via `Flush()`), asserting byte-for-byte identical output (`bytes.Equal`)
+     across runs.
+  2. Asserts the encoded MP3 output against a **fixed golden reference**:
+     pinned expected total byte length, pinned SHA-256 digest
+     (`sha256.Sum256`), and pinned leading/trailing frame bytes for the
+     deterministic synthesized PCM input so any future `shine-mp3` or `Encoder`
+     change that alters output bytes is caught deterministically under
+     `go test -race ./...`.
+* **Files (1 file):** `internal/audio/mp3_test.go`.
+* **Verify:** `go test -race ./internal/audio/...` passes.
+* **Depends on:** none.
+
+### U2 (`014.002-T`) — Remove `paths-ignore` and add always-run tracked-file secret-hygiene check in `.github/workflows/ci.yml`
+
+* **Domain:** config (CI workflow). **Posture:** migration-first / config hygiene. **Size:** `XS` | **Complexity:** `low`.
+* **What:**
+  1. In `.github/workflows/ci.yml`, remove the `paths-ignore` blocks from the
+     `pull_request:` and `push:` triggers so the lightweight `Detect code
+     changes` (`changes`) job runs and reports on every PR and push (including
+     docs/backlog-only changes).
+  2. Add `'!.autoharness/**'` to the `dorny/paths-filter` `code` filter block in
+     the `changes` job so `.autoharness/**`-only diffs are excluded from
+     triggering `Build, vet, lint & test`.
+  3. Add an unconditional `Secret hygiene check (tracked files)` step inside the
+     always-run `changes` job (independent of `needs.changes.outputs.code == 'true'`,
+     completing the CI half of `013.005-T`) that inspects all git-tracked files
+     via `git ls-files -z` and fails the job if:
+     * any tracked `.env` file (`*.env`, `.env`, `.env.*` other than
+       `.env.example`) exists in the Git index, or
+     * any tracked file (including `docs/**` plans/decisions or `.backlogit/**`
+       stash/queue items) contains a live Teams passcode query token
+       (`[?&]p=[A-Za-z0-9_-]{8,}` on a Teams meeting URL outside allowlisted
+       synthetic test/doc placeholders), an **actual credential value associated
+       with `SKYPE-TOKEN`** (`SKYPE-TOKEN["'\s:=]+eyJ[A-Za-z0-9_-]{10,}` —
+       explicitly allowing bare `"SKYPE-TOKEN"` storage-key identifier
+       references in `internal/browser/recap.go`,
+       `internal/browser/meeting_chrome.go`, and markdown documentation), or a
+       `Bearer\s+eyJ[A-Za-z0-9_-]{10,}` JWT token.
+  4. Preserve all SHA-pinned action references (`actions/checkout@11bd7190...`,
+     `dorny/paths-filter@d1c1ffe0...`), `persist-credentials: false`, and
+     least-privilege `permissions` per `ci-security.instructions.md`.
+* **Files (1 file):** `.github/workflows/ci.yml`.
+* **Verify:** Validate YAML syntax, confirm `changes` (including the
+  `Secret hygiene check (tracked files)` step) and `test` jobs pass on the
+  shipment PR, and verify the secret-hygiene step executes on a docs/backlog-only
+  change even when `test` is skipped.
+* **Depends on:** none.
+
+## Dependency Graph
+
+```text
+U1 (014.001-T) (independent — tests domain)
+U2 (014.002-T) (independent — CI config domain)
+```
+
+* `014.001-T` and `014.002-T` touch disjoint domains and files.
+* Shipment `014-S` is sequenced after `013-S` via
+  `backlogit dep add 014-S 013-S --type blocks`.
+
+## Decisions and Rationale
+
+* **Width isolation between U1 and U2:** Keeping the Go audio test (`014.001-T`)
+  and the GitHub Actions workflow update (`014.002-T`) in separate tasks
+  preserves single-domain width isolation (`tests` vs `config`).
+* **Fixed golden reference + two-run byte-identity without zero-slack (`cap == len`) allocation:**
+  As documented in `docs/compound/build-errors/shine-mp3-race-checkptr.md` and
+  `docs/closure/009-S-009-F-post-merge-closure.md`, calling `shine-mp3` with a
+  zero-slack (`cap == len`) stereo slice triggers a `checkptr` runtime fault
+  under `go test -race ./...`. Testing byte-for-byte identity across two
+  independent `NewEncoder` runs and asserting against a fixed golden reference
+  (pinned total byte length, SHA-256 digest, and leading/trailing frame bytes)
+  locks in deterministic MP3 output while keeping `go test -race ./...`
+  completely `checkptr`-safe.
+
+## Risks and Caveats
+
+* **Cross-platform floating-point determinism in `sineMono`:** `sineMono` uses
+  `math.Sin` in Go's standard library (pure Go implementation on `amd64`) and
+  truncates to `int16`; the resulting `[]int16` slice and `shine-mp3` integer
+  subband filterbank are deterministic across Windows and Linux `amd64`.
+
+## Constitution Check
+
+| Principle | Disposition |
+|---|---|
+| I: Safety-first Go | Standard library `crypto/sha256` and `bytes` only; zero `golangci-lint` and `go vet` findings |
+| II: Test first | `014.001-T` adds deterministic byte-equality and golden-digest assertions in `internal/audio/mp3_test.go` |
+| III, IV: Secrets & containment | No secrets or external paths; CI workflow preserves `persist-credentials: false` and `contents: read` |
+| VI: Single responsibility | Two `XS` single-file tasks isolated by domain (`tests` vs `config`) |
+| VII, VIII: Strict safety | CI workflow trigger change classified in `Plan Hardening` below |
+| IX, X, XI: Persistence & merge history | Deliberation `003-DL`, plan, feature `014-F`, tasks `014.001-T`–`014.002-T`, and shipment `014-S` (`blocks 013-S`) recorded |
+
+## Plan Hardening Signals (REQUIRED)
+
+* Public API, schema, or contract change — **absent**.
+* Security, auth, permission, or compliance-sensitive behavior — **present
+  (minor CI workflow surface)**: U2 edits `.github/workflows/ci.yml` governed by
+  `ci-security.instructions.md`.
+* Migration, backfill, destructive data/config action, or irreversible step —
+  **absent**.
+* External integration, operator checkpoint, or external dependency — **absent**.
+* High runtime, rollout, or rollback risk — **absent**.
+
+Requires plan hardening: yes
+
+## Plan Hardening
+
+Hardening is included because U2 modifies `.github/workflows/ci.yml`.
+
+* **Instructions and learnings consulted:**
+  `.github/instructions/ci-security.instructions.md`,
+  `.github/instructions/workflows.instructions.md`,
+  `docs/compound/build-errors/shine-mp3-race-checkptr.md`,
+  `docs/compound/build-errors/shine-mp3-frame-alignment.md`, and
+  `docs/closure/009-S-009-F-post-merge-closure.md`.
+
+### Protected Invariants
+
+1. All GitHub Actions in `.github/workflows/ci.yml` remain pinned to full commit
+   SHAs with `persist-credentials: false` and `permissions: contents: read`.
+2. `encoderTailSlack = 4` and `monoSamplesPerFrame = 1152` in
+   `internal/audio/mp3.go` remain unchanged, and `go test -race ./internal/audio/...`
+   must pass without `checkptr` faults.
+
+### Risky Actions (`strict-safety`)
+
+| ProposedAction | ActionRisk | Approval and containment | Expected ActionResult |
+|---|---|---|---|
+| Remove `paths-ignore` from `.github/workflows/ci.yml`, add `'!.autoharness/**'` to `dorny/paths-filter`, and add an always-run tracked-file secret-hygiene step in the `changes` job | low | Preserves SHA pinning, `persist-credentials: false`, and `if: needs.changes.outputs.code == 'true'` on the `test` job while scanning `git ls-files -z` unconditionally in `changes` | `Detect code changes` runs and scans all tracked files for committed secrets on every PR and push (including docs/backlog-only PRs) while `Build, vet, lint & test` still skips docs/backlog-only PRs |
+
+## Runtime Verification and Closure
+
+* **Verification:** `go test -race ./internal/audio/...`, `go vet ./...`,
+  CI-pinned `golangci-lint run`, `gofmt -l cmd internal`, PR CI `changes` +
+  `test` job verification, and verification that the `changes` job's
+  tracked-file secret-hygiene check executes on a docs/backlog-only change.
+* **Rollback:** Revert the `014-S` merge commit on `main`.
+
+## Plan Review
+
+dispatch_mode: single-agent-declared-degradation
+decision: PASS
+
+* **Capability declaration (P-012):** `TOOL_DEGRADED: reviewer-subagent-dispatch — declared fallback: single-agent persona pass`
+  (inline rubric evaluation across all six selected personas).
+* **Constitution Reviewer (always-on):** **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`).
+* **Go Reviewer (always-on):** **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`).
+* **Scope Boundary Auditor (always-on):** **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`).
+  Both units are single-file `XS` tasks strictly bounded to `FE245033` and
+  `D3EFD224`.
+* **Learnings Researcher (always-on):** **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`).
+  Grounded in `shine-mp3-race-checkptr.md` and `009-S-009-F-post-merge-closure.md`.
+* **Architecture Strategist (cross-model rubric):** **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`).
+* **Security Lens Reviewer (CI workflow surface):** **PASS** (`0 P0, 0 P1, 0 P2, 0 P3`).
+  Complies with `ci-security.instructions.md` (full-SHA action pinning,
+  `persist-credentials: false`, least-privilege `permissions`).
+
+**Gate verdict:** `PASS` (`0 P0, 0 P1, 0 P2, 0 P3`). Ready for harvest into
+`014-F` and shipment `014-S`.

@@ -62,8 +62,12 @@ hygiene*), chained after **`018-S`** via `backlogit dep add 019-S 018-S --type b
   `feature: 015-F`, `task: 015.001-T`, `PR: 38`,
   `review-thread: PRRT_kwDOTStvas62RRVH`). All five were concrete at capture.
   Outcome: **idempotent no-op**.
-* **Follow-up entry `9A9D8106`**: Verified `006-DL` had zero live references in
-  `.backlogit/queue/` and its covering feature `017-F` and shipment `017-S` were
+* **Follow-up entry `9A9D8106`**: Verified `006-DL` had zero live
+  governing/dependency references in `.backlogit/queue/` (and zero occurrences
+  of `006-DL` of any kind in `.backlogit/queue/` when `backlogit archive 006-DL`
+  was executed in Step 1; subsequent mentions in `008-DL`, `019-F`, `019-S`,
+  and `019.002-T` are historical audit citations rather than live governing
+  references) and its covering feature `017-F` and shipment `017-S` were
   archived in `.backlogit/archive/`. Confirmed Constitution Principle IV (CLI
   Workspace Containment) forbids modifying the external Python `autoharness`
   package (`VERIFIED_CASCADE_ENGINE_MINOR_LINES`) outside `C:\Source\GitHub\go-teams`.
@@ -85,20 +89,29 @@ hygiene*), chained after **`018-S`** via `backlogit dep add 019-S 018-S --type b
     `.github/agents/subagents/adversarial-review.agent.md`): *Reconcile
     `_ship.agent.md` and `adversarial-review.agent.md` single-agent degraded
     fallback with `INSUFFICIENT_REVIEWERS` halt* (updated for PR #44 Copilot
-    review threads `PRRT_kwDOTStvas62Ve-8` and `PRRT_kwDOTStvas62V-38` to branch
-    Phases 2–7, Output, and Quality Criteria for `single-agent-declared-degradation`
-    with `consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`, Phase 4
-    severity-only scoring with `confidence_tier: DEGRADED_SINGLE_AGENT` and
-    `confidence_weight = 1.0`, Phase 5 severity-only action routing, Phase 6
-    `### Degraded Single-Agent Findings (Non-Consensus)` output section, and
-    Phase 7 in-session severity-gated post-remediation re-review over
-    `safe_auto`-modified files retaining the 2-cycle cap under
-    `DEGRADED_SINGLE_AGENT` without pool redispatch)
+    review threads `PRRT_kwDOTStvas62Ve-8` and `PRRT_kwDOTStvas62V-38` and
+    local `rubber-duck` pre-push review Findings 5 and 6 to deterministically
+    map `CRITICAL -> P0`, `MAJOR -> P1`, `MINOR -> P2`, use a bounded
+    per-reviewer settlement wait with `active_reviewers >= 2` as the consensus
+    denominator in `multi-agent` mode, log `REVIEWER_POOL_DEGRADED` when
+    `2 <= active_reviewers < reviewers` and compute Phase 3 consensus thresholds
+    against `active_reviewers` while blocking Ship Step 4.4 on every unresolved
+    P0/P1 finding in `HIGH` or `MEDIUM` under `REVIEWER_POOL_DEGRADED` plus
+    every P0 finding regardless of confidence, strictly enforce
+    `mode: report-only` as read-only in Phases 6–7 with
+    `post_remediation.status: "skipped"` and require `authorized_contract_scope`
+    when `mode != report-only` failing closed to `mode: report-only` when
+    absent/ambiguous, and branch Phases 2–7, Output, and Quality Criteria for
+    `single-agent-declared-degradation`)
   * **Task `019.002-T`** (`size: XS`, `complexity: low`, domain: `docs`,
     depends on `019.001-T`, files: `.github/skills/shipment-reconcile/SKILL.md`,
     `docs/compound/workflow-issues/retained-engine-unverified-deliberation-cleanup.md`):
     *Document post-closure archival rule for zero-reference
-    `retained_engine_unverified` deliberations*
+    `retained_engine_unverified` deliberations* (updated for Finding 8 to
+    precisely define live governing/dependency references across unarchived
+    `.backlogit/queue/` items regardless of status and active stash entries via
+    `deliberation_id` excluding the cleanup stash entry itself, vs. historical
+    audit citations)
   * **Shipment `019-S`**: `items: [019-F, 019.001-T, 019.002-T]`, `status: queued`,
     chained after `018-S` via `backlogit dep add 019-S 018-S --type blocks`
 * **Stash & Orphaned Deliberation Archival**:

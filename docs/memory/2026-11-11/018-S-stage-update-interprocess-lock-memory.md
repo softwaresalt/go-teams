@@ -78,17 +78,41 @@ Executed Dark Factory Mode (`DARK_MODE_ACTIVE`, P-017) Stage session for Cycle 1
     *Add inter-process `.lock` coordination and stale-lock recovery around
     `Updater.swap`* (updated for PR #44 Copilot review threads
     `PRRT_kwDOTStvas62Ve9W`, `PRRT_kwDOTStvas62Ve95`, `PRRT_kwDOTStvas62Ve-c`,
-    `PRRT_kwDOTStvas62V-4v`, and `PRRT_kwDOTStvas62V-5N` to require
-    `isProcessAlive` dead-holder proof before stale eviction, crash-safe and
-    wait-bounded `<exe>.lock.ctl` exclusive control lock with owner metadata and
-    dead-owner recovery serializing stale replacement and authoritative
-    token-verified release, and paused-live-holder, two-evictor,
-    release-interleaved-with-replacement, and
-    `TestUpdateRecoverFromCrashedControlLockAndStalePrimaryLock` regression
-    tests)
+    `PRRT_kwDOTStvas62V-4v`, `PRRT_kwDOTStvas62V-5N`, comments `4543360510`,
+    `4543360569`, `4543360630`, and local `rubber-duck` pre-push review
+    Findings 1, 2, 3, 4, and 7 to eliminate automatic eviction of `<exe>.lock`
+    and `<exe>.lock.ctl` so both locks fail closed to manual cleanup, classify
+    timeout errors diagnostically in `ErrUpdateLocked` via `lockStaleAfter` and
+    `isProcessAlive(pid)` for dead-PID orphaned vs. live-PID/OS-PID-reused vs.
+    active/corrupt locks, strip `.old` / ` (deleted)` suffixes in
+    `executablePath()`, resolve symlink targets (`<target>.lock` /
+    `<target>.old`) with one immediate `os.Stat` re-probe and wait-poll in
+    pre-swap `os.Stat(exe)` / `filepath.EvalSymlinks(exe)` without holding
+    `<exe>.lock` across the network download, revalidate the pre-download `exe`
+    fingerprint under `<exe>.lock` when `!force` (`ErrConcurrentUpdateModified`
+    / wrapped `ErrUpdateLocked`), return `(release func() error, err error)`
+    from `acquireSwapLock` using
+    `context.WithTimeout(context.WithoutCancel(ctx), u.ctlLockWaitTimeout)` and
+    `errors.Join(swapErr, relErr)` while setting `res.Updated = true` if
+    `rename(tmp, exe)` succeeded and only `release()` errored, abort cleanly at
+    `remove stale backup <exe>.old` when `<exe>.old` is locked by a running
+    Windows process, and verify with
+    `TestUpdatePausedOrStaleHolderNeverEvictedAndClassifiedInError`,
+    `TestUpdateTwoConcurrentContendersSerializeWithoutEvictionRace`,
+    `TestUpdateTwoConcurrentControlLockContendersNeverStealLiveControlLock`,
+    `TestSwapLockReleaseInterleavedWithReplacementDoesNotDeleteNewOwnerLock`,
+    `TestUpdateReleaseSucceedsWhenCallerContextCanceled`,
+    `TestUpdateReleaseSucceedsWhenCallerContextCanceledDuringSwap`,
+    `TestUpdateReleaseFailureSurfacedWhenControlLockHeld`, and
+    `TestUpdatePreSwapStatWaitsWhileConcurrentSwapMovesExecutableAside`)
   * **Task `018.002-T`** (`size: XS`, `complexity: low`, domain: `tests`,
     depends on `018.001-T`, file: `internal/cli/update_test.go`): *Add CLI unit
-    and end-to-end lock contention tests for `teams-cli update`*
+    and end-to-end lock contention tests for `teams-cli update`* (covering
+    `updater.ErrUpdateLocked` propagation, concurrent update serialization on a
+    non-mapped fixture binary including pausing Updater A after
+    `rename(exe, old)` while Updater B runs pre-swap `executablePath` /
+    `os.Stat(exe)`, and clean abort when `<exe>.old` is locked by a running
+    Windows process)
   * **Shipment `018-S`**: `items: [018-F, 018.001-T, 018.002-T]`, `status: queued`
     (no upstream shipment blocker; immediately eligible for `_Ship` claim)
 * **Stash Archival**:

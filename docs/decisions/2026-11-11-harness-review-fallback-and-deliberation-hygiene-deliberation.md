@@ -63,9 +63,18 @@ This deliberation covers the remaining two active stash entries in Option 3
        dispatch is active) still halts with `INSUFFICIENT_REVIEWERS`.
    * We must reconcile both files so that:
      * When multi-reviewer subagent dispatch is active (`dispatch_mode: multi-agent`),
-       fewer than two independent reviewer instances returning results
-       unconditionally triggers an `INSUFFICIENT_REVIEWERS` halt (`BLOCKED`) and
-       never silently falls back to `single-agent-declared-degradation` mid-run.
+       define `active_reviewers` as the count of independent reviewer instances
+       that successfully returned valid JSON findings. If `active_reviewers < 2`,
+       halt immediately with `INSUFFICIENT_REVIEWERS` (`BLOCKED`) and never
+       silently fall back to `single-agent-declared-degradation` mid-run. If
+       `2 <= active_reviewers < reviewers` (partial pool degradation, Finding 5),
+       log `REVIEWER_POOL_DEGRADED: {active_reviewers}/{reviewers} reviewers returned`,
+       compute Phase 3 consensus thresholds against `active_reviewers` (so
+       unanimous agreement across all `active_reviewers` is classified
+       `HIGH / Consensus section`), and in `_ship.agent.md` Step 4.4 block the
+       review gate (`BLOCKED`) on any unresolved P0/P1 (`CRITICAL`/`MAJOR`)
+       finding in `HIGH` (or `MEDIUM / Majority` when `REVIEWER_POOL_DEGRADED`
+       is active).
      * When subagent dispatch is unavailable at the P-012 pre-dispatch capability
        gate or restricted by runtime privacy / no-third-party-transmission policy
        (`TOOL_DEGRADED: subagent-dispatch`), `dispatch_mode: single-agent-declared-degradation`
@@ -86,6 +95,18 @@ This deliberation covers the remaining two active stash entries in Option 3
        consensus findings, and recording any remaining findings after 2 cycles as
        `post_remediation_residual: true` under `DEGRADED_SINGLE_AGENT`), gating
        Ship readiness on `P0=0, P1=0`.
+     * In both `multi-agent` and `single-agent-declared-degradation` modes,
+       `adversarial-review.agent.md` Phase 6, Phase 7, and Quality Criteria
+       explicitly honor `mode: report-only` (Finding 6): when
+       `mode: report-only` is set, the agent is **strictly read-only** over
+       repository source/config files — Phase 6 writes only the review report
+       and remediation plan (without applying `safe_auto` edits directly), and
+       Phase 7 records `post_remediation.status: "skipped"` with reason
+       `"mode: report-only (caller owns P-021 C1 scope classification, fix application, and re-review)"`.
+       Automatic `safe_auto` fix application in Phase 6 and the Phase 7
+       post-remediation re-review loop run ONLY when `mode` is NOT
+       `report-only` AND `post_remediation_review: true` AND each `safe_auto`
+       candidate passes the P-021 C1 same-contract-surface check.
 2. **Stash entry `9A9D8106`** (`kind: task`, `priority: low`, follow-up from
    `017-S` closure in
    [2026-11-10-017-S-review-and-closure.md](../closure/2026-11-10-017-S-review-and-closure.md)):
@@ -99,10 +120,14 @@ This deliberation covers the remaining two active stash entries in Option 3
      closed to retain).
    * After `017-S` and `017-F` were archived (`017-S` `archived_status: shipped`,
      `017-F` `archived_status: done`), `006-DL` remained queued in
-     `.backlogit/queue/006-DL.md` with zero live references.
+     `.backlogit/queue/006-DL.md` with zero live governing/dependency references
+     (and at the moment `backlogit archive 006-DL` was executed in Step 1,
+     `.backlogit/queue/` had zero occurrences of `006-DL` of any kind).
    * We must decide:
      * Whether to archive `006-DL` (`backlogit archive 006-DL`) now that `017-S`
-       is shipped and zero live references remain in `.backlogit/queue/`.
+       is shipped and zero live governing/dependency references remain in
+       `.backlogit/queue/` (precisely defining a *live governing/dependency
+       reference* vs. an *audit citation* per Finding 8).
      * How to handle the `VERIFIED_CASCADE_ENGINE_MINOR_LINES` question while
        strictly honoring **Constitution Principle IV (CLI Workspace Containment,
        NON-NEGOTIABLE)**, which forbids modifying any file outside
@@ -155,12 +180,17 @@ deliberation:
     include all three confidence tiers (never drop LOW findings)` and `If fewer
     than 2 reviewer instances return results, halt and report the failure`) do
     not distinguish between:
-    1. **`dispatch_mode: multi-agent`** (where `< 2` returning independent
-       reviewer subagents is a hard `INSUFFICIENT_REVIEWERS` failure that halts
-       Phase 3 consensus aggregation, and Phases 3–7 and Quality Criteria enforce
-       `HIGH`/`MEDIUM`/`LOW` confidence tiers, mandatory
-       `Consensus / Majority / Plurality / Unique` sections, and reviewer-pool
-       redispatch during Phase 7 post-remediation re-review), and
+    1. **`dispatch_mode: multi-agent`** (Finding 5: define `active_reviewers` as
+       the count of independent reviewer instances that successfully returned
+       valid JSON findings; if `active_reviewers < 2`, halt immediately with
+       `INSUFFICIENT_REVIEWERS` (`BLOCKED`); if `2 <= active_reviewers < reviewers`,
+       log `REVIEWER_POOL_DEGRADED: {active_reviewers}/{reviewers} reviewers returned`,
+       compute Phase 3 consensus thresholds against `active_reviewers` so
+       unanimous agreement across all `active_reviewers` is classified
+       `HIGH / Consensus section`, and in `_ship.agent.md` Step 4.4 block the
+       review gate (`BLOCKED`) on any unresolved P0/P1 (`CRITICAL`/`MAJOR`)
+       finding in `HIGH` or `MEDIUM / Majority` when `REVIEWER_POOL_DEGRADED` is
+       active), and
     2. **`dispatch_mode: single-agent-declared-degradation`** (entered at Phase 1
        step 3 only when subagent dispatch is unavailable or blocked by runtime
        privacy / no-third-party-transmission policy under P-012 item 5, where
@@ -177,7 +207,18 @@ deliberation:
        redispatch, retaining the hard 2-cycle recursion cap, evaluating residual
        `P0`/`P1` severity findings under `confidence_tier: DEGRADED_SINGLE_AGENT`,
        and recording any remaining findings after 2 cycles as
-       `post_remediation_residual: true` under `DEGRADED_SINGLE_AGENT`).
+       `post_remediation_residual: true` under `DEGRADED_SINGLE_AGENT`), and
+    3. **`mode: report-only` enforcement across Phases 6–7 and Quality Criteria**
+       (Finding 6: when `mode: report-only` is set — whether in `multi-agent` or
+       `single-agent-declared-degradation` mode — the agent is strictly
+       read-only over repository source/config files: Phase 6 writes only the
+       review report and remediation plan without applying `safe_auto` edits
+       directly, and Phase 7 records `post_remediation.status: "skipped"` with
+       reason `"mode: report-only (caller owns P-021 C1 scope classification, fix application, and re-review)"`;
+       automatic `safe_auto` fix application in Phase 6 and the Phase 7
+       post-remediation re-review loop run ONLY when `mode` is NOT `report-only`
+       AND `post_remediation_review: true` AND each `safe_auto` candidate passes
+       the P-021 C1 same-contract-surface check).
 * **Retained deliberation lifecycle surface (`006-DL`,
   `.github/skills/shipment-reconcile/SKILL.md`, and Constitution Principle IV)**:
   * Verified `.backlogit/queue/` and `.backlogit/archive/`:
@@ -185,8 +226,21 @@ deliberation:
       `archived_status: done`) and `017-S` (`.backlogit/archive/017-S.md`,
       `status: archived`, `archived_status: shipped`) are both in
       `.backlogit/archive/`.
-    * No file in `.backlogit/queue/` other than `.backlogit/queue/006-DL.md`
-      itself references `006-DL`.
+    * At the moment `backlogit archive 006-DL` was executed in Step 1, no file
+      in `.backlogit/queue/` other than `.backlogit/queue/006-DL.md` itself had
+      any occurrence of `006-DL` of any kind.
+    * Furthermore, per Finding 8 and Round-2 Pass, we precisely define a **live
+      governing/dependency reference** as any unarchived artifact in
+      `.backlogit/queue/` (regardless of `queued`, `active`, `blocked`, or
+      `done` status) whose `custom_fields.source_deliberation_id`, frontmatter
+      `dependencies` / `references`, or unshipped covering-feature/shipment
+      scope is governed by the deliberation, or any active stash entry whose
+      `deliberation_id` links to it (excluding the cleanup stash entry that
+      itself directs archiving the orphaned deliberation). Historical
+      audit/disposition prose in a subsequent cleanup deliberation/feature/task
+      (such as `008-DL`, `019-F`, `019-S`, and `019.002-T` recording that
+      `006-DL` was archived per `9A9D8106`) is an **audit citation, not a live
+      governing reference**.
     * In `.backlogit/stash.jsonl`, only `9A9D8106` (the follow-up stash entry
       being consumed in this session) mentions `006-DL`.
   * Why `006-DL` was retained at `017-S` closure: `autoharness.gates.shipment_closure`
@@ -206,9 +260,9 @@ deliberation:
        during shipment closure, Ship never auto-archives
        `retained_engine_unverified`; once the covering shipment and feature are
        archived in `.backlogit/archive/` and the deliberation has `status: queued`
-       with zero remaining live references in `.backlogit/queue/` (and no active
-       stash referrer), Stage or the operator archives `<id>-DL` via
-       `backlogit archive <id>-DL`.
+       with zero remaining live governing/dependency references in
+       `.backlogit/queue/` (and no active stash referrer), Stage or the operator
+       archives `<id>-DL` via `backlogit archive <id>-DL`.
 
 ## Options Evaluated
 
@@ -231,17 +285,33 @@ Update `.github/agents/_ship.agent.md` (Step 4.4) and
 step 3, Phases 2–7, and Quality Criteria) so the two modes are mutually
 exclusive and unambiguous across every downstream phase:
 
-1. **Multi-agent consensus mode (`dispatch_mode: multi-agent`)**: Entered when
-   subagent reviewer dispatch is available at Phase 1 capability check. Requires
-   at least 2 independent reviewer instances returning structured results. If
-   fewer than 2 reviewer instances return results, `adversarial-review` and Ship
-   MUST halt immediately with `INSUFFICIENT_REVIEWERS` (`BLOCKED`) — never
-   downgrading a failed or partial multi-reviewer dispatch into
-   `single-agent-declared-degradation` mid-run, and never counting 1 reviewer as
-   consensus. Enforces `HIGH`/`MEDIUM`/`LOW` confidence tiers, confidence ×
-   severity scoring and routing, mandatory
-   `Consensus / Majority / Plurality / Unique` sections, and reviewer-pool
-   redispatch in Phase 7.
+1. **Multi-agent consensus mode (`dispatch_mode: multi-agent`, Finding 5 &
+   Round-2 Pass)**: Entered when subagent reviewer dispatch is available at
+   Phase 1 capability check. Replace the conflicting "wait indefinitely /
+   partial consensus is not valid" wording with a bounded per-reviewer
+   settlement wait, map reviewer JSON severities deterministically
+   (`CRITICAL -> P0`, `MAJOR -> P1`, `MINOR -> P2`, with no ambiguous split of
+   `MAJOR`), and define `active_reviewers` as the count of independent reviewer
+   instances that successfully returned valid JSON findings:
+   * If `active_reviewers < 2`, `adversarial-review` and Ship MUST halt
+     immediately with `INSUFFICIENT_REVIEWERS` (`BLOCKED`) — never downgrading a
+     failed or partial multi-reviewer dispatch into
+     `single-agent-declared-degradation` mid-run, and never counting 1 reviewer
+     as consensus.
+   * If `2 <= active_reviewers < reviewers` (partial pool degradation), log
+     `REVIEWER_POOL_DEGRADED: {active_reviewers}/{reviewers} reviewers returned`
+     and compute Phase 3 consensus thresholds against `active_reviewers` as the
+     consensus denominator (so unanimous agreement across all
+     `active_reviewers` is classified `HIGH / Consensus section`), AND in
+     `_ship.agent.md` Step 4.4 every unresolved P0/P1 (`CRITICAL`/`MAJOR`)
+     finding in `HIGH` (or `MEDIUM` when `REVIEWER_POOL_DEGRADED` is active,
+     plus every P0 finding regardless of confidence) blocks the review gate
+     (`BLOCKED`).
+   * Enforces `HIGH`/`MEDIUM`/`LOW` confidence tiers against `active_reviewers`,
+     confidence × severity scoring and routing, mandatory
+     `Consensus / Majority / Plurality / Unique` sections, and reviewer-pool
+     redispatch in Phase 7 (when `mode != report-only` and
+     `authorized_contract_scope` is present).
 2. **Declared single-agent degraded mode (`dispatch_mode: single-agent-declared-degradation`)**:
    Entered ONLY at Phase 1 step 3 when subagent reviewer dispatch is unavailable
    at the P-012 capability probe or restricted by runtime privacy /
@@ -251,36 +321,58 @@ exclusive and unambiguous across every downstream phase:
    * **Phases 2–3**: Branches single-agent degraded mode from multi-reviewer
      consensus mode, running the full multi-persona rubric in-session without
      claiming `HIGH`/`MEDIUM`/`LOW` consensus tiers.
-   * **Phase 4 (Confidence-Weighted Scoring)**: Branches to use **severity-only
-     scoring** (`confidence_tier: DEGRADED_SINGLE_AGENT`,
-     `confidence_weight = 1.0`, ordered by `severity_score` alone without
-     claiming `HIGH`/`MEDIUM`/`LOW` multi-reviewer consensus confidence).
+   * **Phase 4 (Confidence-Weighted Scoring)**: Maps reviewer severities
+     deterministically (`CRITICAL -> P0`, `MAJOR -> P1`, `MINOR -> P2`) and
+     branches to use **severity-only scoring**
+     (`confidence_tier: DEGRADED_SINGLE_AGENT`, `confidence_weight = 1.0`,
+     ordered by `severity_score` alone without claiming `HIGH`/`MEDIUM`/`LOW`
+     multi-reviewer consensus confidence).
    * **Phase 5 (Action Classification & Remediation Routing)**: Branches to
-     route actions by **severity only** (`P0/P1 -> safe_auto` when
-     mechanical/in-scope or `gated_auto`/`manual` when architectural;
-     `P2 -> gated_auto`; `P3 -> advisory`) instead of
+     route actions by **severity only** (`P0/P1 [CRITICAL/MAJOR] -> safe_auto`
+     when mechanical/in-scope or `gated_auto`/`manual` when architectural;
+     `P2 [MINOR] -> gated_auto/advisory`) instead of
      `confidence_tier × severity`.
    * **Phase 6 & Output Format**: Branches so the report uses a single
      `### Degraded Single-Agent Findings (Non-Consensus)` section instead of
      mandatory `Consensus / Majority / Plurality / Unique` multi-reviewer
      sections, and records `consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`
      (and `confidence: "DEGRADED_SINGLE_AGENT"` in work item entries).
-   * **Phase 7 (Post-Remediation Re-Review, lines 254–274)**: Branches so that
-     after `safe_auto` fixes are applied in Phase 6, Phase 7 executes an
-     **in-session, severity-gated post-remediation re-review** over only the
-     files modified by `safe_auto` fixes (without attempting subagent reviewer
-     pool redispatch), retains the hard 2-cycle recursion cap, evaluates
-     residual `P0`/`P1` severity findings under
-     `confidence_tier: DEGRADED_SINGLE_AGENT` instead of `HIGH`-confidence
-     multi-reviewer consensus findings, and records any remaining findings after
-     2 cycles as `post_remediation_residual: true` under
-     `DEGRADED_SINGLE_AGENT`.
-   * **Quality Criteria**: Qualifies both the minimum-2-reviewers rule AND the
-     confidence-tier / consensus-section requirements so multi-reviewer mode
-     enforces `HIGH`/`MEDIUM`/`LOW` confidence tiers and `>= 2` reviewers, while
-     `single-agent-declared-degradation` enforces `DEGRADED_SINGLE_AGENT`
-     severity-only scoring, routing, output, and in-session Phase 7
-     post-remediation re-review.
+   * **Phase 6, Phase 7 (Post-Remediation Re-Review, lines 254–274),
+     `mode: report-only` enforcement, and `authorized_contract_scope`
+     fail-closed (Finding 6 & Round-2 Pass)**: Explicitly honors
+     `mode: report-only` and requires `authorized_contract_scope` in both
+     `multi-agent` and `single-agent-declared-degradation` modes:
+     - When `mode: report-only` is set, the agent is **strictly read-only** over
+       repository source/config files: Phase 6 writes only the review report and
+       remediation plan (without applying `safe_auto` edits directly), and Phase
+       7 records `post_remediation.status: "skipped"` with reason
+       `"mode: report-only (caller owns P-021 C1 scope classification, fix application, and re-review)"`.
+     - When `mode` is NOT `report-only`, require an explicit
+       `authorized_contract_scope` input to evaluate P-021 C1 before applying
+       `safe_auto` fixes; when `authorized_contract_scope` is absent or
+       ambiguous, fail closed to `mode: report-only` (read-only report +
+       remediation plan, skipping automatic file edits and Phase 7).
+     - Automatic `safe_auto` fix application in Phase 6 and the Phase 7
+       post-remediation re-review loop (multi-agent redispatch in `multi-agent`
+       mode, or in-session severity-gated re-review in
+       `single-agent-declared-degradation` mode over only the files modified by
+       `safe_auto` fixes without subagent pool redispatch, retaining the hard
+       2-cycle recursion cap, evaluating residual `P0`/`P1` severity findings
+       under `confidence_tier: DEGRADED_SINGLE_AGENT`, and recording any
+       remaining findings after 2 cycles as `post_remediation_residual: true`
+       under `DEGRADED_SINGLE_AGENT`) run ONLY when `mode` is NOT `report-only`
+       AND `post_remediation_review: true` AND `authorized_contract_scope` is
+       explicitly provided and each `safe_auto` candidate passes the P-021 C1
+       same-contract-surface check.
+   * **Quality Criteria**: Qualifies the minimum-2-reviewers rule,
+     `active_reviewers` partial-pool consensus thresholds, `mode: report-only`
+     read-only enforcement, and the confidence-tier / consensus-section
+     requirements so multi-reviewer mode enforces `HIGH`/`MEDIUM`/`LOW`
+     confidence tiers against `active_reviewers` and `active_reviewers >= 2`,
+     while `single-agent-declared-degradation` enforces `DEGRADED_SINGLE_AGENT`
+     severity-only scoring, routing, output, and (when `mode != report-only` and
+     `post_remediation_review: true`) in-session Phase 7 post-remediation
+     re-review.
    * Gates Ship Step 4.4 readiness on `P0=0, P1=0` (any `P0`/`P1` blocks with
      `BLOCKED`; `P2`/`P3` require follow-up or acknowledgment) and removes the
      stale `(approved for 012-S–017-S)` range cap in `_ship.agent.md`.
@@ -304,28 +396,46 @@ exclusive and unambiguous across every downstream phase:
   clean up `006-DL`, which is already retained in `.backlogit/queue/`.
 * **Effort**: low | **Fit**: disqualified (Principle IV violation).
 
-#### Option 2B (Chosen): Archive `006-DL` in Stage via `backlogit archive 006-DL` and document the workspace-local post-closure Stage/operator archival rule for zero-reference `retained_engine_unverified` deliberations
+#### Option 2B (Chosen): Archive `006-DL` in Stage via `backlogit archive 006-DL` and document the workspace-local post-closure Stage/operator archival rule for `retained_engine_unverified` deliberations with zero live governing/dependency references
 
-1. **Immediate Stage hygiene action**: Archive `.backlogit/queue/006-DL.md` via
-   `backlogit archive 006-DL` in Step 5.6 of this Stage session, after verifying
-   that `017-F` and `017-S` are archived and `006-DL` has zero live references in
-   `.backlogit/queue/`.
-2. **Workspace-local skill and compound documentation (`019.002-T`)**:
-   * In `.github/skills/shipment-reconcile/SKILL.md` (Cascade Close Sub-Procedure
+1. **Immediate Stage hygiene action (Finding 8)**: Archive
+   `.backlogit/queue/006-DL.md` via `backlogit archive 006-DL` in this Stage
+   session after verifying that `017-F` and `017-S` are archived and `006-DL`
+   has zero live governing/dependency references in `.backlogit/queue/` (at the
+   moment `backlogit archive 006-DL` was executed in Step 1, `.backlogit/queue/`
+   had zero occurrences of `006-DL` of any kind).
+2. **Workspace-local skill and compound documentation (`019.002-T`, Finding 8 &
+   Round-2 Pass)**:
+   * Precisely define **"live governing/dependency references"**:
+     - A *live governing/dependency reference* is any unarchived artifact in
+       `.backlogit/queue/` (regardless of `queued`, `active`, `blocked`, or
+       `done` status) whose `custom_fields.source_deliberation_id`, frontmatter
+       `dependencies` / `references`, or unshipped covering-feature/shipment
+       scope is governed by the deliberation, or any active stash entry whose
+       `deliberation_id` links to it (excluding the cleanup stash entry that
+       itself directs archiving the orphaned deliberation).
+     - Historical audit/disposition prose in a subsequent cleanup
+       deliberation/feature/task (such as `008-DL`, `019-F`, `019-S`, and
+       `019.002-T` recording that `006-DL` was archived per `9A9D8106`) is an
+       **audit citation, not a live governing reference**, and at the moment
+       `backlogit archive 006-DL` was executed in Step 1, `.backlogit/queue/`
+       had zero occurrences of `006-DL` of any kind.
+   * **In `.github/skills/shipment-reconcile/SKILL.md`** (Cascade Close Sub-Procedure
      step 7 and Quality Criteria), clarify that while Ship never archives
      `retained_engine_unverified` during closure (failing closed to retain and
-     stashing a follow-up when zero live references remain), once the covering
-     shipment and feature are archived in `.backlogit/archive/` and the
-     deliberation has `status: queued` with zero remaining live references in
-     `.backlogit/queue/` and `.backlogit/stash.jsonl`, Stage (at triage/Step 5.6)
-     or the operator archives the orphaned deliberation via
-     `backlogit archive <dl_id>`.
+     stashing a follow-up when zero live governing/dependency references remain),
+     once the covering shipment and feature are archived in `.backlogit/archive/`
+     and the deliberation has `status: queued` with zero remaining live
+     governing/dependency references in `.backlogit/queue/` and
+     `.backlogit/stash.jsonl`, Stage (at triage/Step 5.6) or the operator
+     archives the orphaned deliberation via `backlogit archive <dl_id>`.
    * In `docs/compound/workflow-issues/retained-engine-unverified-deliberation-cleanup.md`,
-     record the institutional learning from `017-S` / `006-DL`, including why
-     `VERIFIED_CASCADE_ENGINE_MINOR_LINES` in the external `autoharness` Python
-     installation is outside the `go-teams` workspace boundary under Constitution
-     Principle IV and how Stage/operators cleanly retire zero-reference
-     `retained_engine_unverified` deliberations.
+     record the institutional learning from `017-S` / `006-DL`, including the
+     exact definition of live governing/dependency references vs. historical
+     audit citations, why `VERIFIED_CASCADE_ENGINE_MINOR_LINES` in the external
+     `autoharness` Python installation is outside the `go-teams` workspace
+     boundary under Constitution Principle IV, and how Stage/operators cleanly
+     retire zero-governing-reference `retained_engine_unverified` deliberations.
 
 * **Pros**: Strictly complies with Constitution Principle IV; immediately retires
   orphaned `006-DL` from `.backlogit/queue/`; makes the Ship -> Stage follow-up
@@ -348,8 +458,10 @@ exclusive and unambiguous across every downstream phase:
 We adopt **Option 1B + Option 2B**:
 
 1. Archive orphaned deliberation **`006-DL`** during Step 5.6 of this Stage
-   session via `backlogit archive 006-DL` (verified zero live references in
-   `.backlogit/queue/`, covering feature `017-F` and shipment `017-S` already
+   session via `backlogit archive 006-DL` (verified zero live
+   governing/dependency references in `.backlogit/queue/`, zero occurrences of
+   `006-DL` of any kind in `.backlogit/queue/` at the moment `backlogit archive 006-DL`
+   ran in Step 1, and covering feature `017-F` and shipment `017-S` already
    archived).
 2. Synthesize covering feature **`019-F`** (*Reconcile harness review-gate
    single-agent fallback and post-closure retained deliberation hygiene*) and
@@ -358,24 +470,31 @@ We adopt **Option 1B + Option 2B**:
    * **`019.001-T` (U1, `config` domain — harness agent definitions, 2 files)**:
      Reconcile `.github/agents/_ship.agent.md` and
      `.github/agents/subagents/adversarial-review.agent.md` (Phases 1–7, Output,
-     and Quality Criteria) so `single-agent-declared-degradation` is an
-     explicitly authorized non-consensus degraded outcome
+     and Quality Criteria) so (1) `dispatch_mode: multi-agent` defines
+     `active_reviewers`, halts with `INSUFFICIENT_REVIEWERS` (`BLOCKED`) when
+     `active_reviewers < 2`, logs `REVIEWER_POOL_DEGRADED` when
+     `2 <= active_reviewers < reviewers` and computes Phase 3 consensus
+     thresholds against `active_reviewers`, and blocks Ship Step 4.4 on any
+     unresolved P0/P1 in `HIGH` or `MEDIUM / Majority` when
+     `REVIEWER_POOL_DEGRADED` is active; (2) `single-agent-declared-degradation`
+     is an explicitly authorized non-consensus degraded outcome
      (`consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`) with
      severity-only scoring (`confidence_tier: DEGRADED_SINGLE_AGENT`,
      `confidence_weight = 1.0`), severity-only action routing, a single
      `### Degraded Single-Agent Findings (Non-Consensus)` output section, and an
      in-session, severity-gated Phase 7 post-remediation re-review over
-     `safe_auto`-modified files (retaining the 2-cycle recursion cap, evaluating
-     residual `P0`/`P1` findings under `confidence_tier: DEGRADED_SINGLE_AGENT`
-     without pool redispatch, and recording post-cap residuals as
-     `post_remediation_residual: true` under `DEGRADED_SINGLE_AGENT`) when
-     `subagent-dispatch` is unavailable at the P-012 capability check, while
-     active `multi-agent` dispatch preserves `HIGH`/`MEDIUM`/`LOW` confidence
-     tiers and the `< 2` independent reviewers `INSUFFICIENT_REVIEWERS` halt
+     `safe_auto`-modified files; and (3) `mode: report-only` is strictly
+     read-only in Phases 6–7 (`post_remediation.status: "skipped"` with reason
+     `"mode: report-only (caller owns P-021 C1 scope classification, fix application, and re-review)"`),
+     running automatic `safe_auto` edits and Phase 7 re-review ONLY when
+     `mode != report-only` AND `post_remediation_review: true` AND each
+     `safe_auto` candidate passes the P-021 C1 same-contract-surface check
      (`S` / `low`).
    * **`019.002-T` (U2, `docs` domain — skill & compound documentation, 2 files)**:
-     Document the post-closure Stage/operator archival rule for zero-reference
-     `retained_engine_unverified` deliberations and the Principle IV external
+     Document the post-closure Stage/operator archival rule for
+     `retained_engine_unverified` deliberations with zero live
+     governing/dependency references (distinguishing live governing references
+     from historical audit citations) and the Principle IV external
      `autoharness` package boundary in
      `.github/skills/shipment-reconcile/SKILL.md` and
      `docs/compound/workflow-issues/retained-engine-unverified-deliberation-cleanup.md`
@@ -403,12 +522,17 @@ None blocking planning, harvest, or shipment assembly.
 * **Risk of conflating `multi-agent` partial failure with `single-agent-declared-degradation`**:
   Mitigated in `019.001-T` by requiring the mode selection at Phase 1 pre-dispatch
   capability check (`TOOL_OK: subagent-dispatch` -> `dispatch_mode: multi-agent`
-  vs. `TOOL_DEGRADED: subagent-dispatch` -> `dispatch_mode: single-agent-declared-degradation`)
-  and forbidding any transition from `multi-agent` to
-  `single-agent-declared-degradation` after Phase 2 dispatch begins.
+  vs. `TOOL_DEGRADED: subagent-dispatch` -> `dispatch_mode: single-agent-declared-degradation`),
+  forbidding any transition from `multi-agent` to
+  `single-agent-declared-degradation` after Phase 2 dispatch begins, and
+  computing Phase 3 consensus thresholds against `active_reviewers` with
+  `REVIEWER_POOL_DEGRADED` blocking rules when `2 <= active_reviewers < reviewers`.
 * **Risk of archiving a `retained_engine_unverified` deliberation that still has
-  live references**: Mitigated in `019.002-T` by requiring the same zero-live-reference
-  verification across `.backlogit/queue/` and `.backlogit/stash.jsonl` (plus
-  confirming the covering shipment and feature are archived in
-  `.backlogit/archive/`) before Stage or the operator runs
+  live governing/dependency references**: Mitigated in `019.002-T` by requiring
+  verification of zero live governing/dependency references
+  (`custom_fields.source_deliberation_id`, frontmatter `dependencies` /
+  `references`, or unshipped covering-feature/shipment scope, as distinct from
+  historical audit citations) across `.backlogit/queue/` and
+  `.backlogit/stash.jsonl` (plus confirming the covering shipment and feature
+  are archived in `.backlogit/archive/`) before Stage or the operator runs
   `backlogit archive <dl_id>`.

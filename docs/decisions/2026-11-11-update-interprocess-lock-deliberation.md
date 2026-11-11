@@ -72,9 +72,10 @@ two concurrent `teams-cli update` processes can interleave inside `swap`:
 An in-memory `sync.Mutex` on `Updater` does not protect separate OS processes
 invoking `teams-cli update` concurrently. We need a cross-platform,
 standard-library-only inter-process lock keyed by the target executable path that
-serializes the entire swap, rollback, and `.old` cleanup lifecycle, handles stale
-locks left behind by crashed processes, and leaves zero stray lock or temporary
-files after completion.
+serializes the entire swap, rollback, and `.old` cleanup lifecycle, fails closed
+without lock-stealing races while diagnosing orphaned or contended locks in
+`ErrUpdateLocked`, and leaves zero stray lock or temporary files after normal
+completion.
 
 ## P-021 C5 and C6 Triage and Reconciliation Record
 
@@ -121,73 +122,95 @@ separately triggered obligations were executed before deliberation:
     is an atomic kernel-enforced create-if-not-exists primitive: if `lockPath`
     already exists, `OpenFile` fails with an error matching `errors.Is(err, fs.ErrExist)`.
   * On Windows, keeping an open file handle to `lockPath` prevents another
-    process from unlinking or renaming `lockPath` during stale-lock recovery.
-    Writing a compact JSON payload (`pid`, unique per-acquisition `token`, and
-    UTC `created_at` timestamp) and closing the file handle immediately allows
-    atomic `O_CREATE|O_EXCL` exclusion, provided three additional concurrency
-    hazards are closed:
-    1. **Paused live holder past `lockStaleAfter` (Thread 1)**: Age
-       (`now - created_at > lockStaleAfter`) alone never proves that the lock
-       holder crashed; a live updater suspended inside `swap` beyond two minutes
-       can resume after an age-only eviction and corrupt `<exe>` or `<exe>.old`.
-       Before any stale eviction, the contender must prove the recorded `PID` is
-       no longer a live process via an injectable `isProcessAlive func(pid int) bool`
-       probe (using OS process-existence checks and failing closed to
-       `alive = true` whenever `pid <= 0`, metadata is unreadable/corrupt, or
-       liveness cannot be disproved). If `isProcessAlive(meta.PID) == true`, the
-       contender must never evict `<exe>.lock` regardless of age and instead
-       continue polling until `lockWaitTimeout` expires and fail closed with
-       `ErrUpdateLocked`.
-    2. **Two contenders racing to evict the same expired lock (Thread 2)**: An
-       atomic rename alone does not make the check-and-replace sequence atomic.
-       If two contenders inspect the same expired dead-PID lock, Contender B's
-       delayed eviction could overwrite Contender A's newly acquired lock.
-       Serializing stale-lock eviction/replacement with a short-lived exclusive
-       control lock `<exe>.lock.ctl` (`os.OpenFile(lockPath+".ctl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`),
-       re-reading `<exe>.lock` and re-verifying `age > lockStaleAfter` AND
-       `!isProcessAlive(meta.PID)` inside `<exe>.lock.ctl`, and writing/flushing
-       the new owner's fresh `<exe>.lock` before releasing `<exe>.lock.ctl`
-       ensures the second contender observes the first contender's fresh,
-       live-PID lock and aborts eviction.
-    3. **Release racing with ownership replacement between token read and unlink
-       (Thread 3)**: If a holder reads its matching token without synchronization
-       and pauses while stale recovery replaces `<exe>.lock`, the resuming
-       holder's `os.Remove(lockPath)` would delete the new owner's lock.
-       Acquiring `<exe>.lock.ctl` during release and performing the authoritative
-       token read + comparison + `os.Remove(lockPath)` atomically inside the
-       `<exe>.lock.ctl` critical section prevents a releasing holder from ever
-       unlinking a replacement lock.
-    4. **Crash while holding `<exe>.lock.ctl` and unbounded control-lock wait
-       (Round-2 Thread 2, `PRRT_kwDOTStvas62V-4v`)**: If a process is killed while
-       holding `<exe>.lock.ctl`, a bare `O_CREATE|O_EXCL` control file without
-       owner metadata, wait bounds, or stale recovery would block subsequent
-       stale-lock recovery even when the primary holder is provably dead, and
-       primary-lock release also requires `<exe>.lock.ctl`. To make
-       `<exe>.lock.ctl` crash-safe and wait-bounded:
-       * `<exe>.lock.ctl` writes and flushes the same JSON owner metadata
-         (`pid`, 128-bit hex `token`, RFC3339Nano `created_at`) on creation
-         (`0o600`).
-       * Both stale-recovery and lock-release acquire `<exe>.lock.ctl` using a
-         bounded wait budget (`ctlLockWaitTimeout` default `2s`,
-         `ctlLockPollInterval` default `10ms`, injectable on `Updater` for
-         deterministic tests) while respecting `ctx.Done()`.
-       * If `<exe>.lock.ctl` exists with
-         `now - ctlMeta.CreatedAt > ctlLockStaleAfter` (default `5s`, injectable
-         on `Updater`) AND `ctlMeta.PID > 0` AND `!isProcessAlive(ctlMeta.PID)`
-         (provably dead control-lock owner), a contender atomically renames
-         `<exe>.lock.ctl` to `<exe>.lock.ctl.stale.<token>` (where `<token>` is
-         the contender's freshly generated 128-bit hex token), removes the
-         `.stale` file, and retries `os.O_CREATE|os.O_EXCL` acquisition within
-         `ctlLockWaitTimeout`.
-       * If `<exe>.lock.ctl` metadata is unreadable/corrupt or
-         `isProcessAlive(ctlMeta.PID)` is `true`, automatic control-lock
-         eviction is refused. When `ctlLockWaitTimeout` expires, stale recovery
-         fails closed with `ErrUpdateLocked` (naming `<exe>.lock` and
-         `<exe>.lock.ctl` for manual operator cleanup after confirming all
-         `teams-cli update` processes have exited), and primary-lock release
-         aborts without unlinking `<exe>.lock` outside `<exe>.lock.ctl`
-         (preserving mutual exclusion). Releasing `<exe>.lock.ctl` verifies its
-         own `ctlToken` before `os.Remove`.
+    process from unlinking or renaming `lockPath`. Writing a compact JSON
+    payload (`pid`, unique per-acquisition `token`, and UTC `created_at`
+    timestamp) and closing the file handle immediately allows atomic
+    `O_CREATE|O_EXCL` exclusion, provided five concurrency and platform hazards
+    are closed without automatic lock-stealing races:
+    1. **Control-lock and primary-lock eviction races & OS PID reuse (Findings 1
+       & 7, Comment `4543360510`)**: Any automatic lock eviction or stealing of
+       `<exe>.lock` or `<exe>.lock.ctl` based on age + PID liveness is
+       fundamentally racy without OS-kernel handle locks: two contenders
+       inspecting an expired `.lock.ctl` (or `.lock`) can race where Contender A
+       replaces `.lock.ctl` and Contender B's delayed rename moves Contender A's
+       *new live* `.lock.ctl`. Furthermore, OS PID reuse means an unrelated
+       process assigned the same PID prevents age+PID eviction indefinitely.
+       Therefore, automatic lock eviction/stealing MUST be eliminated entirely
+       (**fail-closed lock acquisition — no automatic eviction of `<exe>.lock`
+       or `<exe>.lock.ctl` by contenders**, and `<exe>.lock.ctl` fails closed to
+       manual control-lock cleanup so two competing control-lock contenders
+       never steal a live `.lock.ctl`). Contenders ONLY acquire `<exe>.lock` via
+       `os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`, poll
+       every `lockPollInterval` (default `50ms`) up to `lockWaitTimeout`
+       (default `15s`) respecting `ctx.Done()`, and never unlink, rename, or
+       replace an existing `<exe>.lock` or `<exe>.lock.ctl`. When
+       `lockWaitTimeout` expires, the contender inspects `<exe>.lock` metadata
+       (`pid`, `token`, `created_at`), `lockStaleAfter` (default `2m`), and
+       injectable `isProcessAlive(pid)` **for diagnostic classification only** in
+       the returned `ErrUpdateLocked` error:
+       * *Dead-PID / stale lock* (`now - created_at > lockStaleAfter` and
+         `!isProcessAlive(pid)`): `ErrUpdateLocked` reports that `<exe>.lock`
+         appears orphaned by dead PID `<pid>` (age `<age>`) and states the
+         manual recovery steps.
+       * *Live-PID past stale threshold (paused holder OR PID reuse)*
+         (`now - created_at > lockStaleAfter` and `isProcessAlive(pid)`):
+         `ErrUpdateLocked` reports that `<exe>.lock` is held by live PID `<pid>`
+         past `lockStaleAfter` (explicitly noting that if no `teams-cli update`
+         process is running, the OS may have reused PID `<pid>`) and states the
+         manual recovery steps.
+       * *Active / corrupt / unreadable lock*: `ErrUpdateLocked` reports active
+         contention or unreadable metadata and states the manual recovery steps.
+    2. **Release synchronized with ownership replacement via fail-closed
+       `<exe>.lock.ctl` and non-cancelable error-returning `release()` (Findings
+       1 & 2, Comment `4543360569`)**: During lock release (`release()`), keep
+       the fail-closed `<exe>.lock.ctl`
+       (`os.OpenFile(lockPath+".ctl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`,
+       **never auto-evicted**) around the authoritative token read +
+       `os.Remove(lockPath)` so external/test replacement between an initial
+       unlocked read and `<exe>.lock.ctl` acquisition is detected and never
+       deletes another owner's `<exe>.lock`. Furthermore, if `release()`
+       respected the caller's possibly canceled `ctx` or returned `func()` with
+       no error, cancellation during `swap` or a `<exe>.lock.ctl` timeout would
+       silently strand `<exe>.lock` while `Update` reported `Updated: true`.
+       Therefore, `acquireSwapLock(ctx context.Context, exe string)` returns
+       `(release func() error, err error)`, `release()` uses an **independent
+       non-cancelable bounded cleanup context**
+       `context.WithTimeout(context.WithoutCancel(ctx), u.ctlLockWaitTimeout)`
+       (default `2s`, using wall-clock deadline +
+       `time.Sleep(ctlLockPollInterval)` — **never** the caller's `ctx`), and
+       `swap(ctx, exe, tmp)` executes `relErr := release()` and returns
+       `errors.Join(swapErr, relErr)` so any release failure surfaces as a
+       non-nil error (`Updated: false`).
+    3. **Pre-swap `os.Stat(exe)` / `filepath.EvalSymlinks(exe)` racing with
+       in-flight `rename(exe, old)` (Finding 3, Comment `4543360630`)**:
+       `Update` calls `u.executablePath()` (`filepath.EvalSymlinks(exe)`) and
+       `u.downloadVerified` (`os.Stat(exe)`) *before* `swap` acquires
+       `<exe>.lock` (so `<exe>.lock` is not held across the network download).
+       If another process is currently inside `swap` between `rename(exe, old)`
+       and `rename(tmp, exe)`, `exe` is momentarily absent on disk and
+       `os.Stat(exe)` / `EvalSymlinks(exe)` would fail with `fs.ErrNotExist`. A
+       helper in `internal/updater/updater.go` used by `executablePath` and
+       `downloadVerified` must detect `fs.ErrNotExist` while `<exe>.lock` (or
+       `exe + ".old"`) exists on disk and poll every `lockPollInterval` up to
+       `lockWaitTimeout` (respecting `ctx.Done()`) waiting for the in-flight
+       `swap` to restore `exe` (returning `ErrUpdateLocked` if `lockWaitTimeout`
+       expires while `<exe>.lock` remains).
+    4. **Windows running-process image lock on `<exe>.old` vs. non-mapped
+       concurrent serialization (Finding 4)**: On Windows, `os.Remove(old)` at
+       the start of `swap` cannot unlink `<exe>.old` while any Windows process is
+       still executing that `.old` binary image. Therefore, both behaviors must
+       be specified and verified explicitly:
+       * When two concurrent `Updater.Update` / CLI `runUpdate` calls target a
+         fixture binary `ExecutablePath` that is not mapped as a running Windows
+         process image (or on Unix), `<exe>.lock` serializes them and **both**
+         updates succeed in sequence without corrupting `.old`.
+       * When `os.Remove(old)` at the start of `swap` fails because `<exe>.old`
+         is still locked/mapped by a running Windows process (simulated
+         deterministically in unit tests via an open exclusive file handle or
+         injectable `removeOld` / file lock on `<exe>.old`), `swap` aborts
+         cleanly at `remove stale backup <exe>.old` **before** moving the newly
+         installed `exe` aside, leaving the first updater's installed binary
+         intact on disk.
 
 ## Options Evaluated
 
@@ -203,119 +226,142 @@ Unix.
   suffice.
 * **Effort**: medium | **Fit**: low.
 
-### Option B: Bare `O_CREATE|O_EXCL` lockfile (`<exe>.lock`) with immediate fail-fast and no stale-lock eviction
+### Option B: Automatic stale-lock eviction/stealing of `<exe>.lock` and `<exe>.lock.ctl` based on age and `isProcessAlive(pid)`
 
-Create `<exe>.lock` via `os.OpenFile(..., os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`
-at the start of `swap`, failing immediately if `<exe>.lock` exists, and remove it
-on exit.
+Allow contenders to automatically rename/unlink an expired `<exe>.lock` or
+`<exe>.lock.ctl` when `now - created_at > staleThreshold` and
+`!isProcessAlive(pid)`.
 
-* **Pros**: Minimal code using only the Go standard library.
-* **Cons**: Two flaws: (1) if a `teams-cli update` process is killed (`SIGKILL`,
-  power loss, or crash) during the swap, `<exe>.lock` remains on disk forever and
-  permanently blocks all future updates until an operator manually deletes the
-  hidden lockfile; (2) failing immediately on contention rather than waiting
-  briefly with context-aware polling causes concurrent `teams-cli update` calls
-  to fail even though `swap` is a sub-millisecond local rename sequence that can
-  be serialized cleanly.
-* **Effort**: low | **Fit**: low.
+* **Pros**: Attempts self-healing after a hard crash without manual lockfile
+  removal.
+* **Cons**: Two flaws identified in review (Findings 1 & 7, Comment
+  `4543360510`): (1) two contenders inspecting an expired `.lock.ctl` (or
+  `.lock`) can race where Contender A replaces `.lock.ctl` and Contender B's
+  delayed `os.Rename` moves Contender A's *new live* `.lock.ctl`, breaking
+  mutual exclusion; and (2) OS PID reuse means an unrelated process assigned the
+  same PID causes `isProcessAlive(pid)` to return `true` indefinitely without
+  explaining the PID-reuse possibility to the operator.
+* **Effort**: medium | **Fit**: low.
 
-### Option C: Standard-library atomic `<exe>.lock` (`O_CREATE|O_EXCL`) with owner PID/token metadata, dead-holder liveness proof (`isProcessAlive`), `<exe>.lock.ctl`-synchronized stale recovery and release, and context-aware polling (chosen)
+### Option C: Fail-closed standard-library atomic `<exe>.lock` (`O_CREATE|O_EXCL`) with zero automatic eviction, diagnostic `ErrUpdateLocked` classification, pre-swap stat wait polling, and non-cancelable error-returning `<exe>.lock.ctl` release (chosen)
 
 In `internal/updater`, wrap the entire `swap` critical section (stale `<exe>.old`
 removal, `<exe> -> <exe>.old` rename, `<tmp> -> <exe>` rename, `<exe>.old -> <exe>`
-rollback on failure, and post-swap `<exe>.old` cleanup) in an executable-keyed
-inter-process lock `<exe>.lock` coordinated by a short-lived exclusive control
-lock `<exe>.lock.ctl`:
+rollback on failure, and post-swap `<exe>.old` cleanup) in a fail-closed,
+executable-keyed inter-process lock `<exe>.lock` with release coordinated by
+fail-closed `<exe>.lock.ctl`:
 
-1. **Keying**: Canonicalize `exe` in `executablePath()` (`filepath.Clean` +
-   best-effort `filepath.Abs` / `filepath.EvalSymlinks`) and derive
-   `lockPath := exe + ".lock"` (`lockSuffix = ".lock"`) and control lock
-   `ctlPath := lockPath + ".ctl"` (`lockCtlSuffix = ".ctl"`).
-2. **Atomic acquisition with owner metadata**: Acquire `lockPath` using
-   `os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`, write and
-   flush JSON metadata `{"pid": <pid>, "token": "<128-bit-hex>", "created_at": "<RFC3339Nano>"}`
-   into the file, and close the descriptor before returning the release closure.
-3. **Serialization via bounded context-aware polling**: When `OpenFile` returns
-   `fs.ErrExist` and the existing lock is not eligible for eviction, poll at
-   `lockPollInterval` (default `10ms`, overridable on `Updater` for tests) up to
-   `lockWaitTimeout` (default `30s`, overridable on `Updater` for tests) while
-   honoring `ctx.Done()`. Because `swap` performs only local filesystem renames,
-   concurrent `teams-cli update` processes serialize cleanly; if the lock remains
-   held past `lockWaitTimeout`, `swap` fails closed with sentinel error
-   `ErrUpdateLocked` (`"updater: another update is in progress"`) without
-   touching `<exe>` or `<exe>.old`.
-4. **Dead-holder proof before stale eviction and crash-safe, wait-bounded
-   `<exe>.lock.ctl`-serialized recovery**: Age (`now - created_at > lockStaleAfter`,
-   default `2m`, overridable on `Updater` for tests) is necessary but NEVER
-   sufficient on its own to evict `<exe>.lock`. Before any stale eviction, the
-   contender MUST verify that the recorded holder `PID` is no longer a live
-   process via an injectable `isProcessAlive func(pid int) bool` probe on
-   `Updater` (using OS process-existence checks and failing closed to
-   `alive = true` whenever `pid <= 0`, metadata is unreadable/corrupt, or
-   liveness cannot be disproved). If `isProcessAlive(meta.PID) == true`, the
-   contender MUST NOT evict `<exe>.lock` regardless of age and instead continues
-   waiting until `lockWaitTimeout` expires and fails closed with
-   `ErrUpdateLocked`. When a lockfile satisfies both `age > lockStaleAfter` AND
-   `!isProcessAlive(meta.PID)`, the contender acquires the short-lived exclusive
-   control lock `<exe>.lock.ctl` (`os.OpenFile(lockPath+".ctl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`),
-   which writes and flushes its own JSON owner metadata (`pid`, 128-bit hex
-   `token`, RFC3339Nano `created_at`) on creation and uses a bounded wait budget
-   (`ctlLockWaitTimeout` default `2s`, `ctlLockPollInterval` default `10ms`,
-   injectable on `Updater` while respecting `ctx.Done()`). If `<exe>.lock.ctl`
-   already exists with `now - ctlMeta.CreatedAt > ctlLockStaleAfter` (default
-   `5s`, injectable on `Updater`) AND `ctlMeta.PID > 0` AND
-   `!isProcessAlive(ctlMeta.PID)` (provably dead control-lock owner), the
-   contender atomically renames `<exe>.lock.ctl` to
-   `<exe>.lock.ctl.stale.<token>` (where `<token>` is the contender's freshly
-   generated 128-bit hex token), removes the `.stale` file, and retries
-   `os.O_CREATE|os.O_EXCL` acquisition within `ctlLockWaitTimeout`. If
-   `<exe>.lock.ctl` metadata is unreadable/corrupt or
-   `isProcessAlive(ctlMeta.PID)` is `true`, automatic control-lock eviction is
-   refused and, when `ctlLockWaitTimeout` expires, stale recovery fails closed
-   with `ErrUpdateLocked` (naming `<exe>.lock` and `<exe>.lock.ctl` for manual
-   operator cleanup after confirming all `teams-cli update` processes have
-   exited). Once `<exe>.lock.ctl` is acquired, the contender re-reads
-   `<exe>.lock` inside the `<exe>.lock.ctl` critical section, re-verifies
-   `age > lockStaleAfter` AND `!isProcessAlive(meta.PID)`, removes/replaces
-   `<exe>.lock`, and creates its own fresh `<exe>.lock` (with its new token,
-   PID, and fresh `created_at` flushed to disk) **before** verifying its own
-   `ctlToken` and releasing `<exe>.lock.ctl`. Thus, if two contenders race to
-   evict the same expired dead-PID lock, the second contender to acquire
-   `<exe>.lock.ctl` observes the first contender's fresh, live-PID lock inside
-   `<exe>.lock.ctl` and aborts eviction.
-5. **Release synchronized with ownership replacement via `<exe>.lock.ctl`**:
-   When the lock holder releases `<exe>.lock`, it acquires `<exe>.lock.ctl`
-   under the bounded `ctlLockWaitTimeout` (`2s`) budget (if `ctlLockWaitTimeout`
-   expires without acquiring `<exe>.lock.ctl`, primary-lock release aborts
-   without unlinking `<exe>.lock` outside `<exe>.lock.ctl`, preserving mutual
-   exclusion) and performs the authoritative token read + comparison +
-   `os.Remove(lockPath)` atomically inside the `<exe>.lock.ctl` critical section
-   before verifying its `ctlToken` and removing `<exe>.lock.ctl`. Supporting an
-   injectable test hook between an initial unlocked token inspection and
-   `<exe>.lock.ctl` acquisition (or inside release) allows deterministic testing
-   where `<exe>.lock` is replaced with a new owner's token after the holder
-   begins release (between initial token read and unlink), proving the
-   authoritative check under `<exe>.lock.ctl` detects the replacement and never
-   unlinks the new owner's `<exe>.lock`.
+1. **Keying, `.old` / ` (deleted)` suffix stripping, symlink target resolution,
+   immediate `os.Stat` re-probe, and pre-download `!force` fingerprint
+   revalidation (Finding 3, Comment `4543360630`, Round-2 Pass)**:
+   * In `executablePath()`, when `u.cfg.ExecutablePath == ""` and
+     `os.Executable()` / `filepath.EvalSymlinks` returns a path ending in `.old`
+     (or ` (deleted)` on Linux `/proc/self/exe` after another process renamed
+     the running binary to `<exe>.old`), strip the `.old` (and any ` (deleted)`)
+     suffix so all processes derive the same canonical installation path `exe`
+     and `<exe>.lock`.
+   * Add a helper used by `executablePath()` and `downloadVerified()` that, when
+     resolving a symlink or statting `exe` during the transient rename gap,
+     resolves the symlink's target path (or parent dir + link target when
+     dangling) so marker checks inspect `<target>.lock` / `<target>.old`, and if
+     `os.Stat` fails with `fs.ErrNotExist` and neither marker is seen, performs
+     one immediate re-probe of `os.Stat(exe)` before returning `fs.ErrNotExist`
+     (in case the holder finished `swap` and removed both markers between the
+     initial failed `Stat` and the marker check). When `<target>.lock` or
+     `<target>.old` exists on disk, poll every `lockPollInterval` up to
+     `lockWaitTimeout` (respecting `ctx.Done()`) waiting for the in-flight
+     `swap` to restore `exe` (returning `ErrUpdateLocked` if `lockWaitTimeout`
+     expires while `<target>.lock` is still present), without holding
+     `<exe>.lock` across the network download.
+   * Record the initial target executable's SHA-256 digest (or
+     size+modtime+digest fingerprint) during the pre-download stat when
+     `!force`; once `swap` acquires `<exe>.lock`, if `!force` and the on-disk
+     `exe` fingerprint changed while downloading/waiting for the lock (meaning
+     another concurrent updater already replaced `exe`), abort `swap` before
+     renaming `exe -> exe.old` and return an actionable error
+     (`ErrConcurrentUpdateModified` / wrapped `ErrUpdateLocked`) so a slower
+     concurrent update can never silently downgrade a newer version installed
+     while it waited.
+2. **Fail-closed atomic acquisition with zero automatic eviction (Findings 1 &
+   7, Comment `4543360510`)**: Contenders ONLY acquire `lockPath` via
+   `os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`, writing
+   and flushing JSON metadata
+   `{"pid": <pid>, "token": "<128-bit-hex>", "created_at": "<RFC3339Nano>"}` and
+   closing the descriptor. While `<exe>.lock` exists (`os.ErrExist`), contenders
+   poll every `lockPollInterval` (default `50ms`, overridable on `Updater`) up
+   to `lockWaitTimeout` (default `15s`, overridable on `Updater`) respecting
+   caller `ctx.Done()`, and **never unlink, rename, or replace an existing
+   `<exe>.lock` or `<exe>.lock.ctl`** (`<exe>.lock.ctl` fails closed to manual
+   control-lock cleanup and never auto-evicts a `.ctl` file).
+3. **Diagnostic classification in `ErrUpdateLocked` on timeout (Findings 1 &
+   7)**: When `lockWaitTimeout` expires, the contender inspects `<exe>.lock`
+   metadata (`pid`, `token`, `created_at`), `lockStaleAfter` (default `2m`), and
+   injectable `isProcessAlive(pid)` **for diagnostic classification only** in
+   the returned `ErrUpdateLocked` error:
+   * *Dead-PID / stale lock* (`now - created_at > lockStaleAfter` and
+     `!isProcessAlive(pid)`): `ErrUpdateLocked` reports that `<exe>.lock`
+     appears orphaned by dead PID `<pid>` (age `<age>`) and states the manual
+     recovery steps (including restoring `<exe>.old -> <exe>` if `<exe>` is
+     missing after a crash between `rename(exe, old)` and `rename(tmp, exe)`).
+   * *Live-PID past stale threshold (paused holder OR PID reuse)*
+     (`now - created_at > lockStaleAfter` and `isProcessAlive(pid)`):
+     `ErrUpdateLocked` reports that `<exe>.lock` is held by live PID `<pid>`
+     past `lockStaleAfter` (explicitly noting that if no `teams-cli update`
+     process is running, the OS may have reused PID `<pid>`) and states the
+     manual recovery steps.
+   * *Active / corrupt / unreadable lock*: `ErrUpdateLocked` reports active
+     contention or unreadable metadata and states the manual recovery steps.
+4. **Error-returning `release()` with independent non-cancelable bounded cleanup
+   context and fail-closed `<exe>.lock.ctl` (Findings 1 & 2, Comment
+   `4543360569`)**: `acquireSwapLock(ctx context.Context, exe string)` returns
+   `(release func() error, err error)`. While acquisition/wait honors the
+   caller's `ctx`, `release()` derives an **independent non-cancelable bounded
+   cleanup context** via
+   `context.WithTimeout(context.WithoutCancel(ctx), u.ctlLockWaitTimeout)`
+   (default `2s`, using wall-clock deadline + `time.Sleep(ctlLockPollInterval)`
+   default `10ms` — **never** canceled by the caller's `ctx`). `release()`
+   acquires fail-closed `<exe>.lock.ctl`
+   (`os.OpenFile(lockPath+".ctl", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`,
+   **never auto-evicted**) around the authoritative token read + comparison +
+   `os.Remove(lockPath)` before verifying `ctlToken` and removing
+   `<exe>.lock.ctl`, so external/test replacement between an initial unlocked
+   read and `<exe>.lock.ctl` acquisition is detected and never deletes another
+   owner's `<exe>.lock`. `swap(ctx, exe, tmp)` executes `relErr := release()`
+   and returns `errors.Join(swapErr, relErr)`; if `swap` succeeded in replacing
+   `exe` (`rename(tmp, exe)` succeeded) and only `release()` returns a cleanup
+   error, `Update` sets `res.Updated = true` while still returning the non-nil
+   `release()` error surfacing the stranded lock (whereas if `swap` failed
+   before replacing `exe`, `res.Updated` remains `false`).
+5. **Explicit Windows locked-`<exe>.old` vs. non-mapped concurrent serialization
+   contract (Finding 4)**:
+   * When two concurrent `Updater.Update` / CLI `runUpdate` calls target a
+     fixture binary `ExecutablePath` that is not mapped as a running Windows
+     process image (or on Unix), `<exe>.lock` serializes them and **both**
+     updates succeed in sequence without corrupting `.old`.
+   * When `os.Remove(old)` at the start of `swap` fails because `<exe>.old` is
+     still locked/mapped by a running Windows process (simulated
+     deterministically in unit tests via an open exclusive file handle or
+     injectable `removeOld` / file lock on `<exe>.old`), `swap` aborts cleanly
+     at `remove stale backup <exe>.old` **before** moving the newly installed
+     `exe` aside, leaving the first updater's installed binary intact on disk.
 
-* **Pros**: Zero external dependencies; serializes concurrent `teams-cli update`
-  processes around the entire `.old` swap, rollback, and cleanup lifecycle;
-  never evicts a paused live holder; serializes competing stale-lock evictors
-  and releasing holders via `<exe>.lock.ctl`; 100% deterministic unit testing via
-  injectable timing, liveness (`isProcessAlive`), and release/eviction hooks on
-  `Updater`.
-* **Cons**: Slightly more implementation detail in `internal/updater/updater.go`
-  (~160 lines), well within a single `code` task.
+* **Pros**: Zero external dependencies; completely eliminates stale-eviction and
+  control-lock-stealing races; explains both dead-PID orphans and OS PID reuse
+  in `ErrUpdateLocked`; waits across transient pre-swap `exe` absence; never
+  strands `<exe>.lock` silently on caller context cancellation or control-lock
+  contention; accurately models Windows running-image `.old` locking.
+* **Cons**: Requires manual operator removal of an orphaned `<exe>.lock` or
+  `<exe>.lock.ctl` after a hard process kill (`SIGKILL` / power loss), guided by
+  explicit diagnostic instructions in `ErrUpdateLocked`.
 * **Effort**: low-medium | **Fit**: high.
 
 ## Trade-off Comparison
 
-| Criterion | Option A (`gofrs/flock`) | Option B (Bare `O_CREATE\|O_EXCL`) | Option C (Atomic `<exe>.lock` + `isProcessAlive` + `<exe>.lock.ctl` recovery/release) |
+| Criterion | Option A (`gofrs/flock`) | Option B (Automatic age+PID eviction) | Option C (Fail-closed `O_CREATE\|O_EXCL` + diagnostic `ErrUpdateLocked` + non-cancelable error-returning release) |
 |---|---|---|---|
 | Dependency footprint | Adds third-party dependencies to `go.mod` | Zero external dependencies | Zero external dependencies (stdlib only) |
-| Concurrent update serialization | Supported | Fails immediately without waiting | Serializes concurrent swaps via bounded context-aware polling; returns `ErrUpdateLocked` on timeout |
-| Crash recovery & paused-live-holder safety | OS handle release | None (manual deletion required) | Evicts after `lockStaleAfter` ONLY when `!isProcessAlive(meta.PID)` verified inside `<exe>.lock.ctl`; fails closed if holder PID is still alive or unreadable |
-| Multi-evictor & release-vs-replacement safety | OS handle release | Vulnerable to deleting a newer lock | `<exe>.lock.ctl` serializes stale replacement and authoritative token-verified `os.Remove(lockPath)` |
+| Eviction / lock-stealing race safety | OS handle release | Vulnerable to two-contender `.lock.ctl` / `.lock` rename races and OS PID reuse | Eliminates automatic eviction entirely; contenders never unlink or rename existing locks |
+| Pre-swap `os.Stat` / `EvalSymlinks` safety & release error reporting | Requires separate handling | Fails on transient `exe` absence; silent `func()` release can strand locks | Pre-swap wait helper bridges transient `exe -> .old` gap; `release() error` uses `context.WithoutCancel(ctx)` and `errors.Join(swapErr, relErr)` |
 
 ## Decision
 
@@ -324,35 +370,38 @@ We select **Option C** and synthesize covering feature **`018-F`**
 `.old` cleanup*) and shipment **`018-S`** with two width-isolated tasks:
 
 1. **`018.001-T` (U1, `code` domain — `internal/updater`)**: Implement
-   `<exe>.lock` and crash-safe, wait-bounded `<exe>.lock.ctl` inter-process
-   locking (`ErrUpdateLocked`, `lockSwap`, bounded context-aware wait polling,
-   `isProcessAlive` dead-holder proof before stale eviction on both `<exe>.lock`
-   and `<exe>.lock.ctl`, `<exe>.lock.ctl`-serialized stale replacement and
-   token-verified release) around `Updater.swap` in
-   `internal/updater/updater.go` and add deterministic concurrency,
-   contention-timeout, dead-PID stale eviction, **paused-live-holder**,
-   **two-evictor**, **release-interleaved-with-replacement**, and
-   **crashed-control-lock (`TestUpdateRecoverFromCrashedControlLockAndStalePrimaryLock`)**
-   regression unit tests in `internal/updater/updater_test.go` (`S` / `medium`).
+   fail-closed `<exe>.lock` and `<exe>.lock.ctl` inter-process locking
+   (`ErrUpdateLocked`, `acquireSwapLock(ctx, exe) (func() error, error)` with
+   zero automatic eviction of `<exe>.lock` or `<exe>.lock.ctl`, diagnostic
+   `ErrUpdateLocked` classification for dead-PID vs. live-PID/PID-reuse vs.
+   active/corrupt locks, pre-swap `os.Stat`/`EvalSymlinks` wait polling across
+   transient `exe` absence without holding `<exe>.lock` across the network
+   download, non-cancelable bounded `release()` via
+   `context.WithTimeout(context.WithoutCancel(ctx), u.ctlLockWaitTimeout)` with
+   `errors.Join(swapErr, relErr)`, and Windows locked-`<exe>.old` clean abort)
+   around `Updater.swap` in `internal/updater/updater.go` and add deterministic
+   unit and regression tests in `internal/updater/updater_test.go` (`S` /
+   `medium`).
 2. **`018.002-T` (U2, `tests` domain — `internal/cli`, depends on `018.001-T`)**:
    Extend `internal/cli/update_test.go` to verify CLI propagation of
-   `updater.ErrUpdateLocked` and end-to-end lock contention behavior (`XS` /
-   `low`).
+   `updater.ErrUpdateLocked`, end-to-end concurrent update serialization on a
+   non-mapped fixture binary (pausing Updater A inside `swap` after
+   `rename(exe, old)` while Updater B runs pre-swap `executablePath` /
+   `os.Stat(exe)`), and clean abort when `<exe>.old` is locked (`XS` / `low`).
 
 ## Rejected Alternatives
 
 * **Option A (`gofrs/flock` or external syscall locking package)**: Rejected to
   preserve the zero-external-dependency contract of `internal/updater`.
-* **Option B (Bare `O_CREATE|O_EXCL` without polling or stale-lock eviction)**:
-  Rejected because an interrupted update would permanently wedge future updates
-  and concurrent updates would fail instead of serializing across the brief swap
-  window.
+* **Option B (Automatic stale-lock eviction/stealing of `<exe>.lock` or
+  `<exe>.lock.ctl`)**: Rejected because two contenders racing to evict an
+  expired lock or control lock can overwrite/move a newly created live lock, and
+  OS PID reuse prevents age+PID eviction from being deterministic.
 * **Holding `<exe>.lock` across the network download**: Rejected because holding
-  a filesystem lock during a multi-minute HTTP download increases contention and
-  causes slow downloads to collide with stale-lock eviction thresholds, whereas
-  each download already streams to a private `os.CreateTemp` file and only the
-  local filesystem `swap` (stale `.old` removal, rename to `.old`, rename of temp
-  to `exe`, rollback, and `.old` cleanup) touches shared paths.
+  a filesystem lock during a multi-minute HTTP download increases contention,
+  whereas each download already streams to a private `os.CreateTemp` file and a
+  lightweight pre-swap `os.Stat`/`EvalSymlinks` wait-poll bridges the sub-millisecond
+  window when `exe` is moved to `<exe>.old` under `<exe>.lock`.
 
 ## Unresolved Questions
 
@@ -360,50 +409,51 @@ None blocking planning or harvest.
 
 ## Risks and Mitigations
 
-* **Suspended live holder exceeding `lockStaleAfter` (Thread 1)**: Mitigated by
-  requiring dead-holder proof via `isProcessAlive(meta.PID) == false` before any
-  stale eviction, failing closed to `alive = true` whenever `pid <= 0`, metadata
-  is unreadable/corrupt, or process liveness cannot be disproved, and verified by
-  a paused-live-holder regression test.
-* **Competing contenders racing to evict the same expired lock (Thread 2)**:
-  Mitigated by acquiring `<exe>.lock.ctl` (`O_CREATE|O_EXCL`), re-reading
-  `<exe>.lock`, re-verifying `age > lockStaleAfter` AND `!isProcessAlive(meta.PID)`,
-  and creating/flushing the new owner's fresh `<exe>.lock` inside the
-  `<exe>.lock.ctl` critical section before releasing `<exe>.lock.ctl`, verified
-  by a deterministic two-evictor regression test.
+* **Contender race to steal `<exe>.lock` or `<exe>.lock.ctl` & OS PID reuse
+  (Findings 1 & 7, Comment `4543360510`)**: Mitigated by eliminating automatic
+  eviction of `<exe>.lock` and `<exe>.lock.ctl` entirely (`<exe>.lock.ctl` fails
+  closed to manual control-lock cleanup), classifying expired locks
+  diagnostically in `ErrUpdateLocked` (dead-PID orphaned vs. live-PID paused or
+  OS PID reuse vs. active/corrupt metadata with manual recovery steps), and
+  verifying with `TestUpdatePausedOrStaleHolderNeverEvictedAndClassifiedInError`,
+  `TestUpdateTwoConcurrentContendersSerializeWithoutEvictionRace`, and
+  `TestUpdateTwoConcurrentControlLockContendersNeverStealLiveControlLock`.
+* **Caller context cancellation or control-lock contention stranding
+  `<exe>.lock` silently on release (Finding 2, Comment `4543360569`)**:
+  Mitigated by returning `(release func() error, err error)` from
+  `acquireSwapLock`, using
+  `context.WithTimeout(context.WithoutCancel(ctx), u.ctlLockWaitTimeout)` inside
+  `release()`, joining `errors.Join(swapErr, relErr)` in `swap`, and verifying
+  with `TestUpdateReleaseSucceedsWhenCallerContextCanceled`,
+  `TestUpdateReleaseSucceedsWhenCallerContextCanceledDuringSwap`, and
+  `TestUpdateReleaseFailureSurfacedWhenControlLockHeld`.
 * **Releasing holder unlinking a replacement lock between token read and
-  `os.Remove` (Thread 3)**: Mitigated by acquiring `<exe>.lock.ctl` in
-  `release()` (bounded by `ctlLockWaitTimeout`, aborting without unlinking
-  `<exe>.lock` outside `<exe>.lock.ctl` if `ctlLockWaitTimeout` expires) and
-  performing the authoritative token read + comparison + `os.Remove(lockPath)`
-  atomically inside the `<exe>.lock.ctl` critical section before verifying
-  `ctlToken` and removing `<exe>.lock.ctl`, verified by a deterministic
-  release-interleaved-with-replacement regression test using an injectable hook
-  between initial unlocked token inspection and `<exe>.lock.ctl` acquisition.
-* **Crashed control-lock holder leaving `<exe>.lock.ctl` behind (Round-2 Thread
-  2, `PRRT_kwDOTStvas62V-4v`)**: Mitigated by writing/flushing `{pid, token, created_at}`
-  metadata into `<exe>.lock.ctl`, bounding `<exe>.lock.ctl` acquisition/release
-  by `ctlLockWaitTimeout` (`2s`) and `ctlLockPollInterval` (`10ms`), recovering
-  an expired `<exe>.lock.ctl` (`now - ctlMeta.CreatedAt > ctlLockStaleAfter`,
-  default `5s`) when `ctlMeta.PID > 0` AND `!isProcessAlive(ctlMeta.PID)` via
-  atomic rename to `<exe>.lock.ctl.stale.<token>` + remove + retry, failing
-  closed with `ErrUpdateLocked` (naming `<exe>.lock` and `<exe>.lock.ctl` for
-  manual operator cleanup after confirming all `teams-cli update` processes have
-  exited) when `<exe>.lock.ctl` is live or unreadable/corrupt, and verifying
-  both paths in `TestUpdateRecoverFromCrashedControlLockAndStalePrimaryLock`.
-* **Limits of automatic eviction and safe manual operator cleanup (Round-2
-  Thread 3, `PRRT_kwDOTStvas62V-5N`)**: Waiting `lockStaleAfter` (2 minutes)
-  only auto-recovers a lock when metadata is valid and the recorded holder `PID`
-  (plus any expired `<exe>.lock.ctl` holder `PID`) is provably dead
-  (`!isProcessAlive(pid)`). Automatic eviction cannot recover a paused/hung live
-  holder, unreadable/corrupt lock metadata, or a live/corrupt `<exe>.lock.ctl`.
-  Before manually removing `<exe>.lock` or `<exe>.lock.ctl`, an operator MUST:
-  (1) prevent new `teams-cli update` invocations (e.g., disable/pause scheduled
-  runs), and (2) confirm that all existing `teams-cli update` processes have
-  completely terminated — never deleting `<exe>.lock` or `<exe>.lock.ctl` while
-  a live or suspended updater process exists, because a resumed holder would
-  race in `swap` and corrupt the `.old` rollback copy.
+  `os.Remove` (Finding 1 / Thread 3)**: Mitigated by acquiring fail-closed
+  `<exe>.lock.ctl` in `release()` around the authoritative token read +
+  comparison + `os.Remove(lockPath)`, verified by
+  `TestSwapLockReleaseInterleavedWithReplacementDoesNotDeleteNewOwnerLock`.
+* **Pre-swap `os.Stat(exe)` / `EvalSymlinks(exe)` failing with `fs.ErrNotExist`
+  during concurrent `swap` (Finding 3, Comment `4543360630`)**: Mitigated by
+  polling every `lockPollInterval` up to `lockWaitTimeout` when `os.Stat(exe)`
+  or `EvalSymlinks(exe)` returns `fs.ErrNotExist` while `<exe>.lock` or
+  `<exe>.old` exists on disk, verified by
+  `TestUpdatePreSwapStatWaitsWhileConcurrentSwapMovesExecutableAside`.
+* **Windows running process holding `<exe>.old` mapped during a second update
+  (Finding 4)**: Mitigated by aborting cleanly at `remove stale backup <exe>.old`
+  at the start of `swap` before moving the newly installed `exe` aside, leaving
+  the first updater's installed binary intact on disk, and testing both
+  non-mapped concurrent serialization and locked-`<exe>.old` clean abort in
+  `internal/updater` and `internal/cli`.
+* **Safe manual operator cleanup**: Before manually removing `<exe>.lock` or
+  `<exe>.lock.ctl`, an operator MUST: (1) prevent new `teams-cli update`
+  invocations (e.g., disable/pause scheduled runs), and (2) confirm that all
+  existing `teams-cli update` processes have completely terminated — never
+  deleting `<exe>.lock` or `<exe>.lock.ctl` while a live or suspended updater
+  process exists. If a crash between `rename(exe, old)` and `rename(tmp, exe)`
+  left `<exe>` missing and `<exe>.old` present, the operator restores
+  `<exe>.old -> <exe>` after confirming all `teams-cli update` processes have
+  exited and before removing `<exe>.lock`.
 * **Directory cleanliness after contention or failure**: Mitigated by unlinking
-  both `<exe>.lock` and `<exe>.lock.ctl` on completion, while `Updater.Update`'s
-  existing `defer os.Remove(tmp)` cleans up the downloaded temporary binary if
-  `swap` returns `ErrUpdateLocked`.
+  both `<exe>.lock` and `<exe>.lock.ctl` on normal completion, while
+  `Updater.Update`'s existing `defer os.Remove(tmp)` cleans up the downloaded
+  temporary binary if `swap` returns `ErrUpdateLocked`.

@@ -72,6 +72,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		OutputDir:        filepath.Join(dir, "out"),
 		FilenameTemplate: DefaultFilenameTemplate,
 		ProfileDir:       filepath.Join(dir, "prof"),
+		BrowserPath:      filepath.Join(dir, "browser", "chrome"),
 		BotName:          "Bot",
 		Headless:         false,
 		Meetings: []MeetingSchedule{

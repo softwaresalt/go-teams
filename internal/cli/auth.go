@@ -3,7 +3,8 @@ package cli
 import "github.com/spf13/cobra"
 
 func newAuthCommand(d *deps, configPath *string) *cobra.Command {
-	return &cobra.Command{
+	var flags browserFlags
+	cmd := &cobra.Command{
 		Use:   "auth",
 		Short: "Launch a visible browser to sign in to Teams and cache the session",
 		Long: "auth opens a visible (headed) browser at teams.microsoft.com so you " +
@@ -16,7 +17,10 @@ func newAuthCommand(d *deps, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			applyBrowserFlags(&cfg, flags)
 			return d.newRunner(cfg).Authenticate(cmd.Context())
 		},
 	}
+	bindBrowserFlags(cmd, &flags)
+	return cmd
 }

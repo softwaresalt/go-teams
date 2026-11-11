@@ -78,10 +78,12 @@ jobs:
           )
           skype = re.compile(rb"SKYPE-TOKEN[\"'\s:=]+eyJ[A-Za-z0-9_-]{10,}")
           bearer = re.compile(rb"Bearer\s+eyJ[A-Za-z0-9_-]{10,}")
+          # Must stay identical to syntheticPasscodeMarkers in
+          # internal/config/gitignore_test.go.
           synthetic = (
               b"synthetic", b"secret", b"example", b"fake", b"dummy",
-              b"placeholder", b"redacted", b"sample", b"test", b"tok",
-              b"passcode", b"notreal", b"changeme", b"xxxx", b"12345678",
+              b"placeholder", b"redacted", b"sample", b"test", b"token",
+              b"passcode", b"notreal", b"changeme", b"xxxx",
           )
 
           def is_local_env(path):

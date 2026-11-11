@@ -56,6 +56,7 @@ workflow change.
 | Security | The scan reports rule and path only (path passed through `repr`), so neither the matched secret nor a crafted path can reach the log or inject workflow commands | No action |
 | Correctness | The step ran locally against 13 cases: tracked `.env` and `*.env` files, live passcode, `SKYPE-TOKEN` value, and bearer JWT fail; `.env.example`, synthetic or short passcodes, bare `SKYPE-TOKEN` key names, the word "Bearer", binary files, non-ASCII paths pass; an empty file list fails closed. The real repository (320 tracked files) exits 0 | No action |
 | Maintainability | The credential rules now exist in the Go guardrail test and in the CI step, so a future rule change must touch both | Advisory P3 residual risk; see Follow-ups |
+| Security | Copilot round 1 (thread `PRRT_kwDOTStvas62BtFt`): the CI passcode allowlist used `tok` and `12345678`, weaker than the Go guardrail markers, so docs-only PRs could miss credential-shaped URLs | Fixed in-scope (P-021 C1: completes the authorized rule mirroring); markers now identical to `syntheticPasscodeMarkers`, and both example passcodes are rejected locally |
 | Scope | Both tasks stay inside their declared single file; no source, schema, or dependency change | No action |
 
 Blocking findings: `P0=0, P1=0, P2=0, P3=1`. Outcome: `READY_WITH_FOLLOWUPS`.

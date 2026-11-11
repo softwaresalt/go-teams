@@ -77,12 +77,23 @@ transmitting repository content to an external reviewer model.
 | Concurrency | No goroutines or shared mutable state; the `rename` and size-cap fields are test seams set before use | No action |
 | Maintainability | `deps.runUpdate` keeps CLI tests hermetic, and the updater has one exported constructor with defaults applied in `New` | No action |
 | Scope | Changes stay inside the declared files plus two README layout lines (same file as `016.005-T`); no `.github/` or `.autoharness/` file and no `go.mod` change | No action |
+| Security | Copilot round 1 (thread `PRRT_kwDOTStvas62Sjmk`): a failed download could return a `*url.Error` whose URL carries signed-URL query tokens | Fixed in-scope (P-021 C1: completes the authorized URL redaction); `open` redacts the query on the returned `*url.Error` while keeping the error chain inspectable. `TestDownloadErrorsRedactSignedURLQuery` covers it |
+| Scope | Copilot round 1 (thread `PRRT_kwDOTStvas62SjnB`): two concurrent `teams-cli update` processes can delete each other's `.old` rollback copy and need an inter-process lock | Out of scope (P-021 C1: cross-process locking is a different contract surface from the authorized single-process rename-with-rollback swap, and the plan defines none); captured as deferred entry `2D0BAA19`, no code change made |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62Sjnt`): the `--check` install hint dropped an explicit `--version`, so following it installed a different release | Fixed in-scope (P-021 C1: completes the authorized command output); the hint now includes `--version <tag>` when a target was requested. Covered by `TestUpdateCommandCheckHintKeepsRequestedVersion` |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62SjoE`): `Check` reported an update even when the release lacked the platform binary or `SHA256SUMS` | Fixed in-scope (P-021 C1: the approved plan says `Check` locates both assets); `Check` now returns `ErrAssetNotFound` when an update is available but not installable, without downloading either asset. A current install still needs no assets |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62Sjop`): `Normalize` dropped build metadata, so `--version v1.2.3+build.2` looked up `v1.2.3` | Fixed in-scope (P-021 C1: completes the authorized tag lookup); the exact requested tag is URL-escaped for the lookup, precedence still ignores build metadata, and build metadata is validated against the identifier alphabet |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62Sjpb`): all-digit pre-release identifiers beyond `uint64` were treated as non-numeric and misordered, which could bypass the downgrade guard | Fixed in-scope (P-021 C1: completes the authorized SemVer comparison); numeric identifiers are compared by width then digits without integer conversion |
 
 Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY_WITH_FOLLOWUPS` (one
 accepted residual-risk note, recorded below).
 
 ## Follow-ups
 
+* Deferred scope expansion `2D0BAA19` (P-021 C2, provisional priority low,
+  requires deliberation): add an inter-process lock around the update swap,
+  rollback, and `.old` cleanup so concurrent `teams-cli update` processes cannot
+  remove each other's rollback copy. Captured from PR #40 Copilot thread
+  `PRRT_kwDOTStvas62SjnB`. Stage owns triage.
 * Accepted residual risk: `SHA256SUMS` is not signed (no signature or provenance
   attestation is published by `release.yml`). A compromised release would carry a
   matching checksum file. Adding signature verification is a separate contract

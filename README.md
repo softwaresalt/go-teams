@@ -31,6 +31,8 @@ teams-cli captions [meeting-url] [output-markdown-path] Capture live captions or
 teams-cli join <meeting-url> [output-markdown-path]     Join and capture (also accepts --url)
 teams-cli auth                   Sign in interactively and cache the session
 teams-cli schedule               Run as a daemon, joining meetings on a cron schedule
+teams-cli update                 Update teams-cli to the latest GitHub Release
+teams-cli --version              Print the installed version
 ```
 
 ### Quick Start (Interactive Live Captions MVP)
@@ -131,6 +133,42 @@ A `--config` flag overrides the config file path, which defaults to the
 per-user configuration directory (for example `~/.config/teams-cli/config.yaml`).
 When no config file exists on disk, `teams-cli` uses built-in defaults and opens
 a visible browser window automatically.
+
+### Self-update
+
+`teams-cli update` replaces the running executable with a published GitHub
+Release build from `softwaresalt/go-teams`:
+
+```powershell
+.\bin\teams-cli.exe --version                  # print the installed version
+.\bin\teams-cli.exe update --check             # report whether a newer release exists
+.\bin\teams-cli.exe update                     # install the latest release
+.\bin\teams-cli.exe update --version v1.2.0    # install a specific release tag
+.\bin\teams-cli.exe update --version v1.1.0 --force   # reinstall or downgrade
+```
+
+* `--check` only reports availability and never modifies the executable
+* `--version <tag>` installs that release instead of the latest
+* `--force` reinstalls the target version even when it is already current, and
+  is required to downgrade to an older release
+
+Every update downloads the release's `SHA256SUMS` asset and verifies the
+platform binary's SHA-256 digest before touching the installed executable. A
+missing `SHA256SUMS`, a missing entry for your platform, or a digest mismatch
+aborts the update and leaves the current binary untouched. Downloads must use
+`https`, and release metadata and assets are size-capped.
+
+The replacement uses a rename sequence that also works for a running Windows
+`.exe`: the current binary is renamed to `teams-cli.exe.old`, the verified
+download is moved into place, and the `.old` file is restored automatically if
+the final move fails. The `.old` file is removed after a successful update, or
+on the next update if Windows still holds it open. The executable's directory
+must be writable by the current user; a build installed under a privileged
+folder such as `C:\Program Files` needs an elevated shell.
+
+Local builds report the version `dev` and treat any release as an upgrade.
+Release builds embed their version through the `.github/workflows/release.yml`
+link flags.
 
 ## Configuration
 

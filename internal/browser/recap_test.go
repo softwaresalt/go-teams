@@ -52,6 +52,7 @@ func TestParseRecapItemsJSON(t *testing.T) {
 }
 
 func TestCleanHeadedBrowserFlags(t *testing.T) {
+	t.Setenv("TEAMS_DISABLE_SANDBOX", "")
 	args := cleanHeadedBrowserArgs(9222, `/tmp/profile`, "https://teams.cloud.microsoft")
 	for _, a := range args {
 		assert.NotContains(t, a, "AutomationControlled",
@@ -67,6 +68,7 @@ func TestCleanHeadedBrowserFlags(t *testing.T) {
 }
 
 func TestCleanHeadlessBrowserFlags(t *testing.T) {
+	t.Setenv("TEAMS_DISABLE_SANDBOX", "")
 	args := cleanBrowserArgs(9222, `/tmp/profile`, true, "https://teams.cloud.microsoft")
 	for _, a := range args {
 		assert.NotContains(t, a, "AutomationControlled",
@@ -76,6 +78,82 @@ func TestCleanHeadlessBrowserFlags(t *testing.T) {
 	}
 	assert.Contains(t, args, "--remote-debugging-port=9222")
 	assert.Contains(t, args, "--headless=new")
+}
+
+func TestCleanBrowserArgsHonorsDisableSandboxOptIn(t *testing.T) {
+	const (
+		profile = `/tmp/profile`
+		target  = "https://teams.cloud.microsoft"
+	)
+	sandboxFlags := []string{"--no-sandbox", "--disable-setuid-sandbox"}
+
+	tests := []struct {
+		name         string
+		env          string
+		opts         Options
+		wantNoSbx    bool
+		wantHeadless bool
+	}{
+		{name: "default keeps sandbox", env: "", opts: Options{}, wantNoSbx: false},
+		{name: "env 0 keeps sandbox", env: "0", opts: Options{}, wantNoSbx: false},
+		{name: "option opts out of sandbox", env: "", opts: Options{DisableSandbox: true}, wantNoSbx: true},
+		{name: "env 1 opts out of sandbox", env: "1", opts: Options{}, wantNoSbx: true},
+		{name: "env true opts out of sandbox", env: "true", opts: Options{}, wantNoSbx: true},
+		{name: "env TRUE opts out of sandbox", env: "TRUE", opts: Options{}, wantNoSbx: true},
+		{name: "headless option and env", env: "1", opts: Options{Headless: true}, wantNoSbx: true, wantHeadless: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEAMS_DISABLE_SANDBOX", tc.env)
+			args := cleanBrowserArgsForOptions(9222, profile, tc.opts, target)
+
+			require.NotEmpty(t, args)
+			assert.Equal(t, target, args[len(args)-1], "initialURL must remain the trailing argument")
+			assert.Contains(t, args, "--remote-debugging-port=9222")
+			assert.Equal(t, tc.wantHeadless, containsArg(args, "--headless=new"))
+			for _, a := range args {
+				assert.NotContains(t, a, "AutomationControlled")
+			}
+			for _, flag := range sandboxFlags {
+				if !tc.wantNoSbx {
+					assert.NotContains(t, args, flag, "sandbox must stay enabled by default")
+					continue
+				}
+				idx := indexOfArg(args, flag)
+				require.GreaterOrEqual(t, idx, 0, "%s must be emitted on opt-in", flag)
+				assert.Less(t, idx, len(args)-1, "%s must precede initialURL", flag)
+			}
+		})
+	}
+}
+
+func TestCleanBrowserArgsWrappersHonorSandboxEnvOptIn(t *testing.T) {
+	t.Setenv("TEAMS_DISABLE_SANDBOX", "1")
+	headed := cleanHeadedBrowserArgs(9222, `/tmp/profile`, "https://teams.cloud.microsoft")
+	assert.Contains(t, headed, "--no-sandbox")
+	assert.Contains(t, headed, "--disable-setuid-sandbox")
+	assert.False(t, containsArg(headed, "--headless=new"))
+	assert.Equal(t, "https://teams.cloud.microsoft", headed[len(headed)-1])
+
+	headless := cleanBrowserArgs(9222, `/tmp/profile`, true, "https://teams.cloud.microsoft")
+	assert.Contains(t, headless, "--no-sandbox")
+	assert.Contains(t, headless, "--disable-setuid-sandbox")
+	assert.True(t, containsArg(headless, "--headless=new"))
+
+	t.Setenv("TEAMS_DISABLE_SANDBOX", "")
+	assert.NotContains(t, cleanHeadedBrowserArgs(9222, `/tmp/profile`, "about:blank"), "--no-sandbox")
+	assert.NotContains(t, cleanBrowserArgs(9222, `/tmp/profile`, true, "about:blank"), "--no-sandbox")
+}
+
+func containsArg(args []string, want string) bool { return indexOfArg(args, want) >= 0 }
+
+func indexOfArg(args []string, want string) int {
+	for i, a := range args {
+		if a == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox(t *testing.T) {

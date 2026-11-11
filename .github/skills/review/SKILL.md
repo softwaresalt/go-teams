@@ -166,7 +166,7 @@ Use a different model from the caller when available to force genuine diversity 
 
 ### Step 3: Spawn Persona Subagents
 
-Spawn all selected personas. Each receives:
+Spawn all selected personas (or, when subagent dispatch or cross-model routing is unavailable or restricted by runtime privacy / no-external-transmission rules per P-012 item 5, log `TOOL_DEGRADED: subagent-dispatch — declared fallback: single-agent-declared-degradation` and evaluate all selected persona rubrics directly in-session). Each receives:
 
 - The list of changed files with line ranges
 - The diff content relevant to their domain

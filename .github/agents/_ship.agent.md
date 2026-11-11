@@ -462,7 +462,7 @@ Perform the local adversarial review before PR creation/presentation and carry
 its reviewed HEAD into the PR readiness block; do not rely on hosted review as a
 substitute while the operator is AFK.
 
-When the `adversarial-review` capability pack is installed, Ship invokes the **adversarial-review** agent in place of the standard review skill, with `mode: report-only` and `reviewers: 3`. HIGH-confidence consensus findings block the gate identically to standard review P0/P1 findings. MEDIUM-confidence findings are advisory but must be acknowledged in the task completion note.
+When the `adversarial-review` capability pack is installed, Ship invokes the **adversarial-review** agent in place of the standard review skill, with `mode: report-only` and `reviewers: 3`. HIGH-confidence consensus findings block the gate identically to standard review P0/P1 findings. MEDIUM-confidence findings are advisory but must be acknowledged in the task completion note. **P-012 Item 5 Privacy / Single-Agent Fallback (approved for `012-S`–`017-S`)**: When cross-model / external reviewer subagent dispatch is unavailable or restricted by the runtime environment's privacy / no-third-party-transmission policy, log `TOOL_DEGRADED: subagent-dispatch — declared fallback: single-agent-declared-degradation` and run the full multi-persona review rubric (Constitution, Go, Correctness, Maintainability, Security, Concurrency, Scope Boundary, Learnings) **in-session** against the diff without spawning external reviewer models; record `dispatch_mode: single-agent-declared-degradation` in the review and closure output and proceed when `P0=0, P1=0`.
 
 #### Step 4.4a: P-021 Scope Classification and Defer-Capture Procedure
 

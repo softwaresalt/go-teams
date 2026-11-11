@@ -13,6 +13,8 @@ import (
 	"github.com/softwaresalt/go-teams/internal/capture"
 	"github.com/softwaresalt/go-teams/internal/config"
 	"github.com/softwaresalt/go-teams/internal/teams"
+	"github.com/softwaresalt/go-teams/internal/updater"
+	"github.com/softwaresalt/go-teams/internal/version"
 )
 
 // deps holds injectable dependencies so commands can be unit-tested with fakes
@@ -26,11 +28,14 @@ type deps struct {
 	newMeeting func(ctx context.Context, cfg config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error)
 	// newSession builds the capture session that records a joined meeting.
 	newSession func(cfg config.Config, meetingURL string) meetingSession
+	// runUpdate checks for or installs a teams-cli release.
+	runUpdate func(ctx context.Context, opts updateOptions) (updater.Result, error)
 }
 
 func defaultDeps() *deps {
 	return &deps{
 		loadConfig: config.Load,
+		runUpdate:  defaultRunUpdate,
 		newRunner: func(c config.Config) browser.Runner {
 			return browser.NewChromeRunner(browserOptions(c))
 		},
@@ -47,6 +52,15 @@ func defaultDeps() *deps {
 			})
 		},
 	}
+}
+
+// defaultRunUpdate runs the production updater against GitHub Releases.
+func defaultRunUpdate(ctx context.Context, opts updateOptions) (updater.Result, error) {
+	u := updater.New(updater.Config{CurrentVersion: version.Version})
+	if opts.CheckOnly {
+		return u.Check(ctx, opts.TargetVersion)
+	}
+	return u.Update(ctx, opts.TargetVersion, opts.Force)
 }
 
 // browserOptions maps the effective config to the browser allocator options,
@@ -110,6 +124,7 @@ func newRootCommand(d *deps) *cobra.Command {
 			"  teams-cli.exe --queue transcript-queue.txt\n" +
 			"  teams-cli.exe captions \"https://teams.cloud.microsoft/l/meetingrecap?...\" -o \"C:\\out\\transcript.md\" --headless",
 		SilenceUsage: true,
+		Version:      version.Version,
 		Args:         cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {
@@ -151,6 +166,7 @@ func newRootCommand(d *deps) *cobra.Command {
 		newJoinCommand(d, &configPath),
 		newCaptionsCommand(d, &configPath),
 		newScheduleCommand(d, &configPath),
+		newUpdateCommand(d),
 	)
 	return root
 }

@@ -1,11 +1,16 @@
 package browser
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -259,3 +264,606 @@ func TestNavigateCDPTargetSendsPageNavigate(t *testing.T) {
 	require.Equal(t, "Page.navigate", gotMethod)
 	require.Equal(t, wantURL, gotURL)
 }
+
+const harnessRecapURL = "https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a"
+
+func TestMain(m *testing.M) {
+	if os.Getenv("GO_TEAMS_RECAP_HEADED_FIXTURE") == "1" {
+		runHeadedRecapFixture()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+func runHeadedRecapFixture() {
+	var port string
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--remote-debugging-port=") {
+			port = strings.TrimPrefix(arg, "--remote-debugging-port=")
+		}
+	}
+	if port == "" {
+		os.Exit(2)
+	}
+	base := "127.0.0.1:" + port
+	server := &http.Server{Addr: base, ReadHeaderTimeout: time.Second}
+	mux := http.NewServeMux()
+	server.Handler = mux
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]string{"webSocketDebuggerUrl": "ws://" + base + "/browser"}); err != nil {
+			os.Exit(2)
+		}
+	})
+	mux.HandleFunc("/json/list", func(w http.ResponseWriter, _ *http.Request) {
+		targets := []cdpTargetInfo{{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: "ws://" + base + "/owner"}}
+		if err := json.NewEncoder(w).Encode(targets); err != nil {
+			os.Exit(2)
+		}
+	})
+	mux.HandleFunc("/owner", func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		raw, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			return
+		}
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(raw, &req) != nil {
+			return
+		}
+		var result interface{}
+		if req.Method == "Page.getFrameTree" {
+			result = map[string]interface{}{"frameTree": map[string]interface{}{"frame": map[string]string{"id": "owner", "url": harnessRecapURL}}}
+		} else {
+			payload := `{"pageUrl":"` + harnessRecapURL + `","entries":[{"speaker":"Presenter","timestamp":"PT1S","text":"` + port + `"}]}`
+			result = map[string]interface{}{"result": map[string]string{"value": payload}}
+		}
+		response, err := json.Marshal(map[string]interface{}{"id": req.ID, "result": result})
+		if err == nil {
+			_ = wsutil.WriteServerText(conn, response)
+		}
+	})
+	if err := server.ListenAndServe(); err != nil {
+		os.Exit(2)
+	}
+}
+
+func TestJoinHeadedPersistsLaunchedCDPPortForRecap(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("find fixture executable: %v", err)
+	}
+	t.Setenv("GO_TEAMS_RECAP_HEADED_FIXTURE", "1")
+	m := &chromeMeeting{
+		opts:       MeetingOptions{MeetingURL: harnessRecapURL},
+		headedOpts: &Options{ExecPath: self},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	defer m.stopHeadedBrowser()
+	if err := m.joinHeaded(ctx); err != nil {
+		t.Fatalf("join synthetic recap: %v", err)
+	}
+	if len(m.recapEntries) == 0 {
+		t.Fatal("joined recap has no transcript entries")
+	}
+	port, err := strconv.Atoi(m.recapEntries[0].Text)
+	if err != nil {
+		t.Fatalf("fixture returned invalid port: %v", err)
+	}
+	if m.cdpPort != port {
+		t.Errorf("headed join stored CDP port %d, want launched port %d", m.cdpPort, port)
+	}
+}
+
+// recapAudioFixture is a loopback CDP target listing and frame-tree fixture.
+// Audio evaluation responses use a proposed JSON payload contract for the
+// downstream implementation; no real media or authenticated service is used.
+type recapAudioFixture struct {
+	port      int
+	lists     atomic.Int32
+	unowned   atomic.Int32
+	evaluated atomic.Int32
+	frameEval atomic.Int32
+}
+
+func newRecapAudioFixture(t *testing.T, frameURL, payload string) *recapAudioFixture {
+	t.Helper()
+	f := &recapAudioFixture{}
+	var serverURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/json/list" {
+			f.lists.Add(1)
+			wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+			targets := []cdpTargetInfo{
+				{ID: "other", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/other"},
+				{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+				{ID: "frame", ParentID: "owner", Type: "iframe", URL: frameURL, WebSocketDebuggerURL: wsBase + "/frame"},
+			}
+			if err := json.NewEncoder(w).Encode(targets); err != nil {
+				t.Errorf("encode targets: %v", err)
+			}
+			return
+		}
+		if r.URL.Path == "/other" {
+			f.unowned.Add(1)
+		}
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			t.Errorf("upgrade CDP: %v", err)
+			return
+		}
+		defer func() {
+			if closeErr := conn.Close(); closeErr != nil {
+				t.Errorf("close CDP: %v", closeErr)
+			}
+		}()
+		raw, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			t.Errorf("read CDP: %v", err)
+			return
+		}
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			t.Errorf("decode CDP request: %v", err)
+			return
+		}
+		var result map[string]interface{}
+		if req.Method == "Page.getFrameTree" {
+			result = map[string]interface{}{"frameTree": map[string]interface{}{
+				"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+				"childFrames": []map[string]interface{}{{"frame": map[string]string{"id": "frame", "url": frameURL}}},
+			}}
+		} else {
+			f.evaluated.Add(1)
+			value := ""
+			if r.URL.Path == "/frame" {
+				f.frameEval.Add(1)
+				value = payload
+			}
+			result = map[string]interface{}{"result": map[string]string{"value": value}}
+		}
+		response, err := json.Marshal(map[string]interface{}{"id": req.ID, "result": result})
+		if err != nil {
+			t.Errorf("encode CDP response: %v", err)
+			return
+		}
+		if err := wsutil.WriteServerText(conn, response); err != nil {
+			t.Errorf("write CDP response: %v", err)
+		}
+	}))
+	serverURL = srv.URL
+	t.Cleanup(srv.Close)
+	_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("fixture address: %v", err)
+	}
+	f.port, err = strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("fixture port: %v", err)
+	}
+	return f
+}
+
+func (f *recapAudioFixture) capture(t *testing.T) ([]byte, error) {
+	t.Helper()
+	m := &chromeMeeting{
+		opts:    MeetingOptions{MeetingURL: harnessRecapURL},
+		cdpPort: f.port, capturePageID: "owner",
+		recapEntries: []RecapTranscriptEntry{{Text: "Synthetic transcript"}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	err := m.CaptureAudio(ctx, &out)
+	if f.lists.Load() == 0 {
+		t.Errorf("recap capture did not inspect the CDP target list")
+	}
+	if f.unowned.Load() != 0 {
+		t.Errorf("recap capture accessed an unrelated tab")
+	}
+	return out.Bytes(), err
+}
+
+func TestCaptureRecapAudioScopedToOwningMeetingPageAndEncodesMP3(t *testing.T) {
+	pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+	payload := `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-a","pcmChunks":["` + pcm + `"]}`
+	f := newRecapAudioFixture(t, harnessRecapURL, payload)
+	got, err := f.capture(t)
+	if err != nil {
+		t.Fatalf("capture matching recap audio: %v", err)
+	}
+	if f.evaluated.Load() == 0 {
+		t.Error("matching target was not evaluated")
+	}
+	if len(got) < 2 || got[0] != 0xff || got[1]&0xe0 != 0xe0 {
+		t.Errorf("expected MPEG frame sync, got %d bytes", len(got))
+	}
+}
+
+func TestCaptureRecapAudioRejectsOwnedFrameWithMismatchedRecordingIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, frameURL, payload string
+	}{
+		{"frame URL", "https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-b", `{"itemId":"recording-b","pcmChunks":["AAAA"]}`},
+		{"media metadata", harnessRecapURL, `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-b","mediaUrl":"https://example.invalid/?driveItemId=recording-b","pcmChunks":["AAAA"]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRecapAudioFixture(t, tc.frameURL, tc.payload)
+			got, err := f.capture(t)
+			if err == nil || len(got) != 0 {
+				t.Errorf("mismatched recording must be rejected, err=%v bytes=%d", err, len(got))
+			}
+			if tc.name == "frame URL" && f.frameEval.Load() != 0 {
+				t.Error("mismatched frame URL must not be evaluated")
+			}
+			if tc.name == "media metadata" && f.frameEval.Load() == 0 {
+				t.Error("matching frame must be evaluated to detect mismatched media metadata")
+			}
+		})
+	}
+}
+
+func TestCaptureRecapAudioRejectsOversizedRecordingExceedingResourceCap(t *testing.T) {
+	for _, capName := range []string{"source bytes", "duration", "PCM bytes"} {
+		t.Run(capName, func(t *testing.T) {
+			payload := `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-a","error":"recap audio exceeds maximum supported size/duration","limit":"` + capName + `"}`
+			f := newRecapAudioFixture(t, harnessRecapURL, payload)
+			got, err := f.capture(t)
+			if err == nil || !strings.Contains(err.Error(), "recap audio exceeds maximum supported size/duration") {
+				t.Errorf("expected resource-limit error, got %v", err)
+			}
+			if f.frameEval.Load() == 0 {
+				t.Error("resource-limit response was not read from the matching frame")
+			}
+			if len(got) != 0 {
+				t.Errorf("oversized recording wrote %d bytes", len(got))
+			}
+		})
+	}
+
+	t.Run("Go pre-allocation checks", func(t *testing.T) {
+		oldSource, oldDuration, oldPCM := maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes
+		t.Cleanup(func() {
+			maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes = oldSource, oldDuration, oldPCM
+		})
+		maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes = 8, 2, 4
+		for _, tc := range []struct {
+			name        string
+			sourceBytes int
+			duration    int
+			pcm         string
+			oversized   bool
+		}{
+			{"source above", 9, 1, "!!!!", true},
+			{"duration above", 1, 3, "!!!!", true},
+			{"PCM above", 1, 1, "!!!!!!!!", true},
+			{"all at limit", 8, 2, base64.StdEncoding.EncodeToString([]byte{0, 0, 0, 0}), false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				payload, err := json.Marshal(map[string]interface{}{
+					"pageUrl": harnessRecapURL, "itemId": "recording-a",
+					"sourceBytes": tc.sourceBytes, "durationSec": tc.duration,
+					"pcmChunks": []string{tc.pcm},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				f := newRecapAudioFixture(t, harnessRecapURL, string(payload))
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				var out bytes.Buffer
+				err = captureRecapAudioFromTargets(ctx, f.port, "owner", harnessRecapURL, &out)
+				if f.frameEval.Load() == 0 {
+					t.Error("matching frame was not evaluated")
+				}
+				if tc.oversized {
+					if err == nil || !strings.Contains(err.Error(), "recap audio exceeds maximum supported size/duration") {
+						t.Errorf("expected resource-limit error, got %v", err)
+					}
+					if out.Len() != 0 {
+						t.Errorf("oversized recording wrote %d bytes", out.Len())
+					}
+				} else if err != nil {
+					t.Errorf("recording exactly at the limits was rejected: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("JavaScript pre-allocation checks", func(t *testing.T) {
+		for _, scenario := range []string{"content-length", "streamed bytes", "duration", "PCM bytes", "at limits"} {
+			t.Run(scenario, func(t *testing.T) {
+				if strings.TrimSpace(extractRecapAudioJS) == "" {
+					t.Fatal("recap audio extraction JavaScript is not implemented")
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "node", "-e", recapAudioLimitProbeJS, scenario)
+				cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("JavaScript %s limit probe: %v: %s", scenario, err, output)
+				}
+			})
+		}
+	})
+}
+
+// The probe supplies a synthetic media element and instruments the actual
+// extraction expression; decoding and PCM allocation fail if reached too early.
+const recapAudioLimitProbeJS = `
+const fs = require('fs');
+const scenario = process.argv[1];
+const maxRecapAudioSourceBytes = 8, maxRecapAudioDurationSec = 2, maxRecapAudioPCMBytes = 176400;
+const media = { src: 'https://example.invalid/recording-a', currentSrc: 'https://example.invalid/recording-a',
+  getAttribute: () => 'https://example.invalid/recording-a', querySelectorAll: () => [] };
+globalThis.location = { href: 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a' };
+globalThis.document = { location, URL: location.href, title: 'recording-a',
+  querySelector: () => media, querySelectorAll: () => [media] };
+let reads = 0, decodes = 0, allocations = 0;
+const NativeInt16Array = Int16Array;
+globalThis.Int16Array = new Proxy(NativeInt16Array, { construct(target, args) {
+  allocations++;
+  if (scenario !== 'at limits') throw new Error('PCM allocation reached before rejection');
+  return Reflect.construct(target, args);
+}});
+globalThis.fetch = async () => ({ ok: true, status: 200,
+  headers: { get: () => scenario === 'content-length' ? '9' : null },
+  body: { getReader: () => ({ read: async () => {
+    reads++;
+    if (reads > 1) return { done: true };
+    return { done: false, value: new Uint8Array(scenario === 'streamed bytes' ? 9 : 8) };
+  }, cancel: async () => {} }) },
+  arrayBuffer: async () => new ArrayBuffer(1) });
+globalThis.AudioContext = class {
+  async decodeAudioData() {
+    decodes++;
+    if (scenario === 'content-length' || scenario === 'streamed bytes') throw new Error('decode reached before source rejection');
+    return { duration: scenario === 'duration' ? 3 : 2,
+      length: scenario === 'PCM bytes' ? 88201 : 88200, sampleRate: 44100, numberOfChannels: 1,
+      getChannelData: () => new Float32Array(88200) };
+  }
+  async close() {}
+};
+globalThis.window = globalThis;
+globalThis.btoa = s => Buffer.from(s, 'binary').toString('base64');
+(async () => {
+  let result, failure;
+  try { result = await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  const text = failure ? String(failure.message || failure) : JSON.stringify(result);
+  if (scenario === 'at limits') {
+    if (failure || !result || (typeof result === 'object' && result.error)) throw new Error('at-limit input rejected: ' + text);
+    if (!reads || !decodes) throw new Error('at-limit input did not reach reading and decoding');
+  } else {
+    if (!text || !text.includes('recap audio exceeds maximum supported size/duration')) throw new Error('missing limit error: ' + text);
+    if (scenario === 'content-length' && (reads || decodes)) throw new Error('content-length checked after reading or decoding');
+    if (scenario === 'streamed bytes' && (!reads || decodes)) throw new Error('stream bytes not checked before decoding');
+    if ((scenario === 'duration' || scenario === 'PCM bytes') && (!decodes || allocations)) throw new Error('decoded limit not checked before PCM allocation');
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`
+
+func TestRecapAudioJSRequiresIdentityBeforeFetchAndDecode(t *testing.T) {
+	for _, scenario := range []string{"unverified", "mismatched media", "matching"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "node", "-e", recapAudioIdentityProbeJS, scenario)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("JavaScript identity probe: %v: %s", err, output)
+			}
+		})
+	}
+}
+
+// Evaluate the production expression with synthetic media and observable I/O.
+const recapAudioIdentityProbeJS = `
+const fs = require('fs');
+const scenario = process.argv[1];
+const maxRecapAudioSourceBytes = 8, maxRecapAudioDurationSec = 2, maxRecapAudioPCMBytes = 8;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+const pageUrl = scenario === 'unverified'
+  ? 'https://teams.cloud.microsoft/l/meetingrecap'
+  : 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a';
+const mediaUrl = scenario === 'mismatched media'
+  ? 'https://example.invalid/audio?driveItemId=recording-b'
+  : 'https://example.invalid/audio';
+const media = { currentSrc: mediaUrl, src: mediaUrl, getAttribute: () => null };
+globalThis.location = { href: pageUrl };
+globalThis.window = globalThis;
+globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+globalThis.btoa = s => Buffer.from(s, 'binary').toString('base64');
+let fetches = 0, decodes = 0;
+globalThis.fetch = async () => {
+  fetches++;
+  let read = false;
+  return { ok: true, headers: { get: () => null }, body: { getReader: () => ({
+    read: async () => read ? { done: true } : (read = true, { done: false, value: new Uint8Array(1) }),
+    cancel: async () => {}
+  }) } };
+};
+globalThis.AudioContext = class {
+  async decodeAudioData() {
+    decodes++;
+    return { duration: 1, length: 1, sampleRate: 44100, numberOfChannels: 1,
+      getChannelData: () => new Float32Array(1) };
+  }
+  async close() {}
+};
+(async () => {
+  let result, failure;
+  try { result = await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (scenario === 'matching') {
+    if (failure || !result || fetches !== 1 || decodes !== 1)
+      throw new Error('matching identity did not fetch and decode: ' + String(failure || result));
+  } else {
+    if (fetches || decodes)
+      throw new Error('unverified or mismatched identity fetched or decoded: fetches=' + fetches + ', decodes=' + decodes);
+    if ((failure && !String(failure.message || failure).includes('identity')) || (!failure && result !== ''))
+      throw new Error('identity rejection missing: ' + String(failure || result));
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`
+
+func TestCaptureRecapAudioReturnsErrorWhenNoAudioAvailable(t *testing.T) {
+	f := newRecapAudioFixture(t, harnessRecapURL, "")
+	got, err := f.capture(t)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "recap") || !strings.Contains(strings.ToLower(err.Error()), "audio") {
+		t.Errorf("expected descriptive recap audio error, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("no audio source wrote %d bytes", len(got))
+	}
+}
+
+func TestRecapAudioCDPRejectsOversizedFrameHeaderBeforeBody(t *testing.T) {
+	oldPCM := maxRecapAudioPCMBytes
+	maxRecapAudioPCMBytes = 8
+	t.Cleanup(func() { maxRecapAudioPCMBytes = oldPCM })
+
+	headerSent := make(chan error, 1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			headerSent <- err
+			return
+		}
+		defer conn.Close()
+		if _, _, err = wsutil.ReadClientData(conn); err != nil {
+			headerSent <- err
+			return
+		}
+		// Advertise 32 MiB, but never transmit a payload.
+		header := make([]byte, 10)
+		header[0], header[1] = 0x81, 127
+		binary.BigEndian.PutUint64(header[2:], 32*1024*1024)
+		_, err = conn.Write(header)
+		headerSent <- err
+		if err == nil {
+			<-release
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() { <-done })
+	go func() {
+		defer close(done)
+		_, err := evalInCDPTarget(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), "1")
+		result <- err
+	}()
+	select {
+	case err := <-headerSent:
+		if err != nil {
+			t.Fatalf("send oversized frame header: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fixture did not send the frame header")
+	}
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "size") {
+			t.Fatalf("expected frame size rejection before reading body, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("oversized frame header was not rejected promptly; client waited for a body")
+	}
+}
+
+func TestRecapAudioCDPRejectsOversizedFragmentedMessage(t *testing.T) {
+	oldPCM := maxRecapAudioPCMBytes
+	maxRecapAudioPCMBytes = 8
+	t.Cleanup(func() { maxRecapAudioPCMBytes = oldPCM })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err = wsutil.ReadClientData(conn); err != nil {
+			return
+		}
+		if err = conn.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return
+		}
+		part := bytes.Repeat([]byte("a"), 1024*1024)
+		for i := 0; i < 16; i++ {
+			op := ws.OpContinuation
+			if i == 0 {
+				op = ws.OpText
+			}
+			if err = ws.WriteFrame(conn, ws.Frame{Header: ws.Header{Fin: i == 15, OpCode: op, Length: int64(len(part))}, Payload: part}); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := evalInCDPTarget(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), "1")
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "size") {
+		t.Fatalf("expected accumulated CDP message size rejection, got %v", err)
+	}
+}
+
+func TestRecapAudioJSRejectsKnownOversizedDurationBeforeFetch(t *testing.T) {
+	for _, scenario := range []string{"media", "duration string", "durationSeconds string"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "node", "-e", recapAudioDurationBeforeFetchProbeJS, scenario)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("pre-fetch duration probe: %v: %s", err, output)
+			}
+		})
+	}
+}
+
+// A compressed-byte cap cannot bound decodeAudioData's decoded allocation.
+// This probe covers known media duration only; unknown or dishonest duration
+// metadata needs a separately bounded decoder to prove a pre-decode PCM cap.
+const recapAudioDurationBeforeFetchProbeJS = `
+	const fs = require('fs');
+	const maxRecapAudioSourceBytes = 8, maxRecapAudioDurationSec = 2, maxRecapAudioPCMBytes = 8;
+	const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+	const media = { duration: 3, currentSrc: 'https://example.invalid/audio',
+	  src: 'https://example.invalid/audio', getAttribute: () => null };
+	globalThis.location = { href: 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a' };
+	globalThis.window = globalThis;
+	if (process.argv[1] !== 'media') {
+	  media.duration = NaN;
+	  globalThis.g_fileInfo = process.argv[1] === 'duration string' ? { duration: '3' } : { durationSeconds: '3' };
+	}
+	globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+	let fetches = 0, decodes = 0, result, failure;
+	globalThis.fetch = async () => { fetches++; throw new Error('fetch reached before duration rejection'); };
+	globalThis.AudioContext = class { async decodeAudioData() { decodes++; throw new Error('decode reached'); } };
+	(async () => {
+	  try { result = await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+	  const text = failure ? String(failure.message || failure) : JSON.stringify(result);
+	  if (!text || !text.includes('recap audio exceeds maximum supported size/duration'))
+	    throw new Error('missing duration-limit rejection: ' + text);
+	  if (fetches || decodes) throw new Error('duration checked too late: fetches=' + fetches + ', decodes=' + decodes);
+	})().catch(e => { console.error(e.message); process.exitCode = 1; });
+	`

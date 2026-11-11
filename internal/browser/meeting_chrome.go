@@ -282,6 +282,7 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	m.cdpPort = port
 	m.capturePageID = targetID
 	m.allowSingleTabRebind = true
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, wsURL)
@@ -1063,6 +1064,9 @@ func waitAnyPresent(ctx context.Context, selectors ...string) error {
 func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err error) {
 	if w == nil {
 		return fmt.Errorf("browser: audio writer must not be nil")
+	}
+	if m.IsRecap() {
+		return captureRecapAudioFromTargets(ctx, m.cdpPort, m.capturePageID, m.opts.MeetingURL, w)
 	}
 	targetCtx, cancelTarget := m.targetContext(ctx)
 	defer cancelTarget()

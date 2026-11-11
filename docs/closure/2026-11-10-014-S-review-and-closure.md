@@ -6,9 +6,9 @@ shipment: 014-S
 branch: feat/014-s-deterministic-mp3-golden-regression-test-and-ci-path-filter-trigger-hygiene
 status: ready
 closure_status: READY
-compaction_status: pending
-merge_commit: pending
-pr: pending
+compaction_status: done
+merge_commit: d245d870b2bfd16beb4da0c581755dad779bfcb5
+pr: 35
 ---
 
 ## Release scope
@@ -69,6 +69,11 @@ Blocking findings: `P0=0, P1=0, P2=0, P3=1`. Outcome: `READY_WITH_FOLLOWUPS`.
   `internal/config/gitignore_test.go`. Keep the two in sync when a rule changes.
   No stash entry is created because the duplication is the planned shape of
   `014.002-T`, which is constrained to a single workflow file.
+* Deferred scope expansion `1B03802C` (P-021 C2, provisional priority medium,
+  requires deliberation): reconcile the `shipment-reconcile` skill's
+  linked-deliberation `allowed_ids` / `required_ids` rule with backlogit 1.12
+  engine behavior and `compute_linked_deliberation_disposition`. Captured from
+  PR #36 Copilot thread `PRRT_kwDOTStvas62B91t`. Stage owns triage.
 
 ## Verification evidence
 
@@ -119,6 +124,73 @@ Trigger rollback on secret-scan false positives that block unrelated work, or
 on a golden-test mismatch that is not caused by an encoder change. Revert the
 `014-S` merge commit on `main`. No runtime artifact or data migration is
 involved.
+
+## Post-merge closure
+
+PR #35 merged to `main` at `d245d870b2bfd16beb4da0c581755dad779bfcb5`
+(`2026-11-11T04:39:57Z`) with a merge commit (P-009; the repository allows merge
+commits only). Dark Factory Mode (P-017) post-merge closure ran on
+`post-merge/014-deterministic-mp3-golden-regression-test-and-ci-path-filter-trigger-hygiene`:
+
+* Copilot shadow review ran three rounds on PR #35, one thread each, all in the
+  new CI step and all fixed under P-021 C1 and resolved: marker alignment
+  (`dc6eaec`), linear-time passcode matching (`cdfc26f`), and case-insensitive
+  `p=` plus an `lstat` regular-file guard (`af949ad`). `autoharness gate
+  copilot-review` returned `SATISFIED` and CI passed for the merged HEAD
+  `af949ad`. No out-of-scope finding arose on PR #35, so no deferred stash entry
+  was captured there; the closure PR #36 review raised one (see Follow-ups).
+* Verified `MERGE_CONFIRMED` via `gh pr view 35` (`state: MERGED`) and
+  `git merge-base --is-ancestor d245d870b2bfd16beb4da0c581755dad779bfcb5
+  origin/main`.
+* `autoharness gate pipeline-topology --phase lifecycle --shipment 014-S`
+  passed (`BRANCH_POST_MERGE_CLOSURE_ELIGIBLE`, `WORKTREE_TOPOLOGY_OK`).
+* Pre-close reconciliation (single-writer lock held on the shipment record): the
+  manifest tasks `014.001-T` and `014.002-T` were pre-archived by location with
+  declared `status: done` (backlogit relocates a task on `move --status done`),
+  `014-F` was `active` in the queue, no orphans declared `shipment_id: 014-S`,
+  and the shipment record was `active`. The covering feature being `active`
+  rather than `done` is the expected pre-ship state, because the cascade
+  transitions it.
+* P-015 fully-covered-root verification: the classifier
+  (`classify_shipment_close_path`) returned `CASCADE` because `014-F` is a root
+  feature whose only descendants, `014.001-T` and `014.002-T`, are both `014-S`
+  manifest members. Engine semantics were `VERIFIED` for backlogit 1.12.0.
+* `backlogit shipment ship 014-S --sha d245d870b2bfd16beb4da0c581755dad779bfcb5`
+  returned `archived_ids: [014.001-T, 014.002-T, 014-F, 014-S]` and
+  `returned_ids: []`. Both tasks kept `parent_id: 014-F`, and `014-S` carries
+  `archived_status: shipped`. No archive file showed as a working-tree deletion
+  (P-007). The `returned_ids` and `parent_id` checks pass without qualification.
+* Two-set gate, with an unresolved contract mismatch. `archived_ids` contains no
+  unexpected artifact, and every task, the feature, and the shipment are
+  present. The mismatch concerns `003-DL`, which is named only in the `014-F`
+  description and was `queued` before the cascade. The written rule in
+  `.github/skills/shipment-reconcile/SKILL.md` (Step 0(c) linked-deliberation
+  extension and cascade step 3) would place it in both `allowed_ids` and
+  `required_ids`, and under that reading its absence from `archived_ids` fails
+  the missing-required-artifact check. The engine-aware helper
+  `compute_linked_deliberation_disposition`, which reported the engine for
+  backlogit 1.12.0 as `VERIFIED`, classified `003-DL` as
+  `retained_description_mention`, and the engine did retain it. Ship treated the
+  helper's version-verified disposition as the live authority, did not claim the
+  written-rule check as passed, and archived `003-DL` explicitly (see Source
+  artifact cleanup) so the final backlog state matches the intended end state.
+  The skill prose and the verified engine behavior disagree, and reconciling them
+  is out of scope for `014-S`; it is captured as deferred stash entry
+  `1B03802C` (see Follow-ups).
+* Source artifact cleanup: the engine did not archive deliberation `003-DL`
+  (named only in the `014-F` description), so Ship archived it explicitly with
+  `backlogit archive 003-DL` (`archived_status: queued`). No stash entry carries
+  `source_stash_id` for this scope; the consumed entries `FE245033`, `D3EFD224`,
+  and `3084A83E` were already archived by Stage.
+* Shipment `010-S` and its eleven queue files were byte-identical before and
+  after closure, and active stash entries `DF1F461F` and `FC763C17` and
+  `git stash@{0}` were left untouched.
+* Mandatory P-020 `compact-context` (`target: all`) ran: the session memory was
+  compacted to
+  `docs/memory/compacted/2026-11-10-014-S-audio-golden-and-ci-hygiene-compacted.md`
+  and the verbose original archived under `docs/archive/memory/2026-11-10/`.
+  Recorded as `compaction_status: done` above (initialized `pending` in the
+  feature PR and finalized here).
 
 ## Handoff
 

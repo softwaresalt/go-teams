@@ -743,9 +743,18 @@ type cdpTargetInfo struct {
 }
 
 // cleanBrowserArgs returns the minimal, untampered command-line flags used to
-// launch a browser instance (headed or --headless=new) without stealth/sandbox
-// flags such as --disable-blink-features=AutomationControlled or --no-sandbox.
+// launch a browser instance (headed or --headless=new) without stealth flags
+// such as --disable-blink-features=AutomationControlled. The Chromium sandbox
+// stays enabled unless the TEAMS_DISABLE_SANDBOX opt-in is set.
 func cleanBrowserArgs(port int, profileDir string, headless bool, initialURL string) []string {
+	return cleanBrowserArgsForOptions(port, profileDir, Options{Headless: headless}, initialURL)
+}
+
+// cleanBrowserArgsForOptions builds the clean direct-exec browser arguments
+// for opts. The Chromium sandbox stays enabled by default; --no-sandbox and
+// --disable-setuid-sandbox are appended, before the trailing initialURL, only
+// when shouldDisableSandbox(opts) opts in.
+func cleanBrowserArgsForOptions(port int, profileDir string, opts Options, initialURL string) []string {
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--no-first-run",
@@ -753,11 +762,14 @@ func cleanBrowserArgs(port int, profileDir string, headless bool, initialURL str
 		"--use-fake-ui-for-media-stream",
 		"--auto-select-desktop-capture-source=Microsoft Teams",
 	}
-	if headless {
+	if opts.Headless {
 		args = append(args, "--headless=new")
 	}
 	if profileDir != "" {
 		args = append(args, fmt.Sprintf("--user-data-dir=%s", profileDir))
+	}
+	if shouldDisableSandbox(opts) {
+		args = append(args, "--no-sandbox", "--disable-setuid-sandbox")
 	}
 	if initialURL != "" {
 		args = append(args, initialURL)
@@ -1199,7 +1211,7 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 	if targetURL == "" {
 		targetURL = "about:blank"
 	}
-	args := cleanBrowserArgs(port, absProfile, opts.Headless, targetURL)
+	args := cleanBrowserArgsForOptions(port, absProfile, opts, targetURL)
 	cmd := exec.Command(execPath, args...)
 	if err := cmd.Start(); err != nil {
 		return 0, "", "", nil, nil, fmt.Errorf("browser: start browser: %w", err)

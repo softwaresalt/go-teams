@@ -48,18 +48,25 @@ Two contract surfaces are addressed:
      `single-agent-declared-degradation` fallback must be explicitly separated
      from `dispatch_mode: multi-agent` consensus review so that:
      * When `subagent-dispatch` is active (`dispatch_mode: multi-agent`, Finding
-       5), define `active_reviewers` as the count of independent reviewer
-       instances that successfully returned valid JSON findings. If
-       `active_reviewers < 2`, halt immediately with `INSUFFICIENT_REVIEWERS`
-       (`BLOCKED`) and never silently degrade to single-agent review mid-run. If
-       `2 <= active_reviewers < reviewers` (partial pool degradation), log
+       5 & Comment `4543766839`), define `active_reviewers` as the count of
+       independent reviewer instances that successfully returned valid JSON
+       findings. If `active_reviewers < 2`, halt immediately with
+       `INSUFFICIENT_REVIEWERS` (`BLOCKED`) and never silently degrade to
+       single-agent review mid-run. In normal full-pool mode
+       (`active_reviewers == reviewers`), every `HIGH` consensus P0/P1 finding
+       AND every `P0` (`CRITICAL`) finding regardless of confidence (`HIGH`,
+       `MEDIUM` Majority/Plurality, or `LOW`) blocks the gate (`BLOCKED`), while
+       `MEDIUM` (both `Majority` and `Plurality`) P1 findings require explicit
+       disposition/acknowledgment. If `2 <= active_reviewers < reviewers`
+       (partial pool degradation), log
        `REVIEWER_POOL_DEGRADED: {active_reviewers}/{reviewers} reviewers returned`,
        compute Phase 3 consensus thresholds against `active_reviewers` (so
        unanimous agreement across all `active_reviewers` is classified
        `HIGH / Consensus section`), and in `_ship.agent.md` Step 4.4 block the
-       review gate (`BLOCKED`) on any unresolved P0/P1 (`CRITICAL`/`MAJOR`)
-       finding in `HIGH` (or `MEDIUM / Majority` when `REVIEWER_POOL_DEGRADED`
-       is active).
+       review gate (`BLOCKED`) on **ALL unresolved P0 and P1 (`CRITICAL` and
+       `MAJOR`) findings regardless of confidence (`HIGH`, `MEDIUM`
+       Majority/Plurality, or `LOW`)** until resolved or dispositioned under
+       P-021.
      * When `subagent-dispatch` is unavailable at the Phase 1 P-012 pre-dispatch
        capability probe or restricted by runtime privacy /
        no-third-party-transmission policy (`TOOL_DEGRADED: subagent-dispatch —
@@ -128,7 +135,7 @@ Two contract surfaces are addressed:
 
 | Requirement | Stash ID / Provenance | Implementation unit | Verification |
 |---|---|---|---|
-| R1: Reconcile `.github/agents/_ship.agent.md` Step 4.4 and `.github/agents/subagents/adversarial-review.agent.md` so `dispatch_mode: multi-agent` defines `active_reviewers`, halts with `INSUFFICIENT_REVIEWERS` (`BLOCKED`) when `active_reviewers < 2`, logs `REVIEWER_POOL_DEGRADED` when `2 <= active_reviewers < reviewers` and computes Phase 3 consensus thresholds against `active_reviewers`, and blocks Ship Step 4.4 on any unresolved P0/P1 in `HIGH` or `MEDIUM / Majority` when `REVIEWER_POOL_DEGRADED` is active | `680A62E6` (`015-S`, `015-F`, `015.001-T`, PR `#38`, `PRRT_kwDOTStvas62RRVH`, `008-DL`, Finding 5) | U1 (`019.001-T`) | Template Integrity & Schema-CLI-Docs verification + `go test -race ./...` |
+| R1: Reconcile `.github/agents/_ship.agent.md` Step 4.4 and `.github/agents/subagents/adversarial-review.agent.md` so `dispatch_mode: multi-agent` defines `active_reviewers`, halts with `INSUFFICIENT_REVIEWERS` (`BLOCKED`) when `active_reviewers < 2`, in full-pool mode (`active_reviewers == reviewers`) blocks Ship Step 4.4 on every `HIGH` consensus P0/P1 finding and every `P0` finding regardless of confidence (while `MEDIUM` Majority/Plurality P1 findings require explicit disposition/acknowledgment), and when `2 <= active_reviewers < reviewers` logs `REVIEWER_POOL_DEGRADED`, computes Phase 3 consensus thresholds against `active_reviewers`, and blocks Ship Step 4.4 on ALL unresolved P0 and P1 (`CRITICAL` and `MAJOR`) findings regardless of confidence (`HIGH`, `MEDIUM` Majority/Plurality, or `LOW`) | `680A62E6` (`015-S`, `015-F`, `015.001-T`, PR `#38`, `PRRT_kwDOTStvas62RRVH`, `008-DL`, Finding 5, Comment `4543766839`) | U1 (`019.001-T`) | Template Integrity & Schema-CLI-Docs verification + `go test -race ./...` |
 | R2: Define `dispatch_mode: single-agent-declared-degradation` in `_ship.agent.md` and `adversarial-review.agent.md` (Phases 1–7, Output, and Quality Criteria) as an explicitly authorized non-consensus P-012 item 5 fallback (`consensus_status: DEGRADED_SINGLE_AGENT (non-consensus)`) with severity-only scoring (`confidence_tier: DEGRADED_SINGLE_AGENT`, `confidence_weight = 1.0`), severity-only action routing, a single `### Degraded Single-Agent Findings (Non-Consensus)` section, and an in-session severity-gated Phase 7 post-remediation re-review over `safe_auto`-modified files, and strictly honor `mode: report-only` in Phases 6–7 (read-only over repo source/config files, `post_remediation.status: "skipped"`, running `safe_auto` edits and Phase 7 re-review ONLY when `mode != report-only` AND `post_remediation_review: true` AND P-021 C1 check passes) | `680A62E6` (`PRRT_kwDOTStvas62RRVH`, PR `#44` threads `PRRT_kwDOTStvas62Ve-8`, `PRRT_kwDOTStvas62V-38`, `008-DL`, Finding 6) | U1 (`019.001-T`) | Template Integrity & Schema-CLI-Docs verification + `go test -race ./...` |
 | R3: Document the post-closure Stage/operator archival rule for `retained_engine_unverified` deliberations with zero live governing/dependency references in `.backlogit/queue/` (distinguishing live governing references from historical audit citations) and the Constitution Principle IV boundary for external `autoharness` `VERIFIED_CASCADE_ENGINE_MINOR_LINES` in `.github/skills/shipment-reconcile/SKILL.md` and `docs/compound/workflow-issues/retained-engine-unverified-deliberation-cleanup.md` | `9A9D8106` (`017-S` closure doc, `006-DL`, `008-DL`, Finding 8) | U2 (`019.002-T`) | Markdown / Template Integrity verification + `backlogit doctor` |
 
@@ -249,18 +256,24 @@ Two contract surfaces are addressed:
        the P-012 Item 5 Privacy / Single-Agent Fallback.
      * Map reviewer JSON severities deterministically (`CRITICAL -> P0`,
        `MAJOR -> P1`, `MINOR -> P2`, with no ambiguous split of `MAJOR`) and
-       explicitly distinguish the two modes (Finding 5 & Round-2 Pass):
+       explicitly distinguish the two modes (Finding 5 & Comment `4543766839`):
        - When `subagent-dispatch` is available (`dispatch_mode: multi-agent`),
          `adversarial-review` requires `active_reviewers >= 2` independent
          reviewer instances returning valid JSON findings within a bounded
          per-reviewer settlement wait; if `active_reviewers < 2`, Ship halts
          with `INSUFFICIENT_REVIEWERS` (`BLOCKED`) and never treats a single
-         reviewer or failed multi-agent dispatch as consensus. When
+         reviewer or failed multi-agent dispatch as consensus. In normal
+         full-pool mode (`active_reviewers == reviewers`), every `HIGH`
+         consensus P0/P1 finding AND every `P0` (`CRITICAL`) finding regardless
+         of confidence (`HIGH`, `MEDIUM` Majority/Plurality, or `LOW`) blocks
+         the gate (`BLOCKED`), while `MEDIUM` (both `Majority` and `Plurality`)
+         P1 findings require explicit disposition/acknowledgment. When
          `2 <= active_reviewers < reviewers` (`REVIEWER_POOL_DEGRADED`), Phase 3
          consensus thresholds are computed against `active_reviewers` AND in
-         Step 4.4 every unresolved P0/P1 (`CRITICAL`/`MAJOR`) finding in `HIGH`
-         (or `MEDIUM` when `REVIEWER_POOL_DEGRADED` is active, plus every P0
-         finding regardless of confidence) blocks the review gate (`BLOCKED`).
+         Step 4.4 **ALL unresolved P0 and P1 (`CRITICAL` and `MAJOR`) findings
+         regardless of confidence (`HIGH`, `MEDIUM` Majority/Plurality, or
+         `LOW`) block the review gate (`BLOCKED`)** until resolved or
+         dispositioned under P-021.
        - When `subagent-dispatch` is unavailable at the pre-dispatch capability
          check or restricted by runtime privacy / no-third-party-transmission
          policy (P-012 item 5), Ship logs
@@ -420,19 +433,25 @@ linked-deliberation post-closure lifecycle in `shipment-reconcile/SKILL.md`.
 ### Protected Invariants
 
 1. **Multi-agent `INSUFFICIENT_REVIEWERS` halt and `active_reviewers`
-   partial-pool consensus thresholds (Finding 5)**: Whenever
-   `dispatch_mode: multi-agent` is active, define `active_reviewers` as the
-   count of independent reviewer instances returning valid JSON findings. If
-   `active_reviewers < 2`, the review gate MUST halt with
+   partial-pool consensus thresholds (Finding 5 & Comment `4543766839`)**:
+   Whenever `dispatch_mode: multi-agent` is active, define `active_reviewers`
+   as the count of independent reviewer instances returning valid JSON findings.
+   If `active_reviewers < 2`, the review gate MUST halt with
    `INSUFFICIENT_REVIEWERS` (`BLOCKED`) and MUST NOT fall back to
-   `single-agent-declared-degradation` mid-run. If
-   `2 <= active_reviewers < reviewers`, the review workflow MUST log
+   `single-agent-declared-degradation` mid-run. In normal full-pool mode
+   (`active_reviewers == reviewers`), every `HIGH` consensus P0/P1 finding AND
+   every `P0` (`CRITICAL`) finding regardless of confidence (`HIGH`, `MEDIUM`
+   Majority/Plurality, or `LOW`) blocks the gate (`BLOCKED`), while `MEDIUM`
+   (both `Majority` and `Plurality`) P1 findings require explicit
+   disposition/acknowledgment. If `2 <= active_reviewers < reviewers`, the
+   review workflow MUST log
    `REVIEWER_POOL_DEGRADED: {active_reviewers}/{reviewers} reviewers returned`,
    compute Phase 3 consensus thresholds against `active_reviewers` (so
    unanimous agreement across all `active_reviewers` is classified
    `HIGH / Consensus`), and in `_ship.agent.md` Step 4.4 block (`BLOCKED`) on
-   any unresolved P0/P1 (`CRITICAL`/`MAJOR`) finding in `HIGH` (or
-   `MEDIUM / Majority` when `REVIEWER_POOL_DEGRADED` is active).
+   **ALL unresolved P0 and P1 (`CRITICAL` and `MAJOR`) findings regardless of
+   confidence (`HIGH`, `MEDIUM` Majority/Plurality, or `LOW`)** until resolved
+   or dispositioned under P-021.
 2. **Non-consensus single-agent degradation and `mode: report-only` read-only
    enforcement across Phases 2–7, Output, and Quality Criteria (Finding 6)**:
    Whenever `dispatch_mode: single-agent-declared-degradation` is entered at

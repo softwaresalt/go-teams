@@ -83,15 +83,26 @@ that peer's final rename fails, rollback also fails, leaving neither `<exe>` nor
        pre-swap and release interleaving (including a hook between initial
        unlocked token inspection and `<exe>.lock.ctl` acquisition in
        `release()`).
-     * **Canonical `executablePath()`, symlink target marker resolution,
-       immediate `os.Stat` re-probe, and `!force` target fingerprint
-       revalidation (Finding 3, Comment `4543360630`, Round-2 Pass)**:
-       - In `executablePath()`, when `u.cfg.ExecutablePath == ""` and
-         `os.Executable()` / `filepath.EvalSymlinks` returns a path ending in
-         `.old` (or ` (deleted)` on Linux `/proc/self/exe` after another process
-         renamed the running binary to `<exe>.old`), strip the `.old` (and any
-         ` (deleted)`) suffix so all processes derive the same canonical
-         installation path `exe` and `<exe>.lock`.
+     * **Executable path safety (preserving legitimate `.old` filenames vs.
+       failing closed on renamed running image), symlink target marker
+       resolution, immediate `os.Stat` re-probe, and start-of-`Update` baseline
+       snapshot + under-lock `installedVersion` / running-image identity guard
+       when `!force` (Finding 3, Comments `4543360630`, `4543766778`,
+       `4543766919`)**:
+       - Do NOT unconditionally strip `.old` in `executablePath()`. A configured
+         `u.cfg.ExecutablePath` ending in `.old` or a process legitimately
+         invoked as `<name>.old` (`filepath.Base(os.Args[0])` ends in `.old`)
+         MUST preserve its exact `.old` path and use `<exe>.old.lock` /
+         `<exe>.old.old` without ever redirecting to a sibling `<exe>`. When
+         `u.cfg.ExecutablePath == ""` and `os.Executable()` /
+         `filepath.EvalSymlinks` resolves to a path ending in ` (deleted)` or
+         ending in `.old` while `filepath.Base(os.Args[0])` does NOT end in
+         `.old` (corroborating that another updater renamed the running
+         executable image after launch), **fail closed** with
+         `ErrConcurrentUpdateModified` (reporting that the running binary was
+         already replaced by another update process) unless `--force` is set
+         with an explicit path, rather than silently redirecting to a sibling
+         path.
        - Add a helper in `internal/updater/updater.go` used by
          `executablePath()` and `downloadVerified()` that, when resolving a
          symlink or statting `exe` during the transient rename gap, resolves the
@@ -109,15 +120,21 @@ that peer's final rename fails, rollback also fails, leaving neither `<exe>` nor
          network download. Also canonicalize a non-empty `u.cfg.ExecutablePath`
          via `filepath.Clean` and `filepath.Abs` (plus `filepath.EvalSymlinks`
          via the wait helper when the target exists).
-       - Record the initial target executable's SHA-256 digest (or
-         size+modtime+digest fingerprint) during the pre-download stat when
-         `!force`; once `swap` acquires `<exe>.lock`, if `!force` and the
-         on-disk `exe` fingerprint changed while downloading/waiting for the
-         lock (meaning another concurrent updater already replaced `exe`), abort
-         `swap` before renaming `exe -> exe.old` and return an actionable error
-         (`ErrConcurrentUpdateModified` / wrapped `ErrUpdateLocked`) so a slower
-         concurrent update can never silently downgrade a newer version
-         installed while it waited.
+       - Capture the baseline snapshot (`os.Stat` + SHA-256) at the **very start
+         of `Update`** (before `lookup` and before any wait); if `exe` is
+         missing or `<exe>.lock` / `<exe>.old` is present at that initial check
+         (so B had to wait for an in-flight swap), mark
+         `concurrentSwapObserved = true` and reject `!force` under `<exe>.lock`
+         (`ErrConcurrentUpdateModified`). In addition, under `<exe>.lock` inside
+         `swap` when `!force`, verify installed-binary version / running-image
+         identity before `rename(exe, old)`: provide an injectable
+         `installedVersion func(ctx context.Context, exePath string) (string, error)`
+         (or running-executable `os.SameFile` + SHA-256 identity check when
+         `u.cfg.ExecutablePath == ""`) that inspects the on-disk `exe` under
+         `<exe>.lock` and rejects the swap with `ErrDowngrade` /
+         `ErrConcurrentUpdateModified` if the on-disk binary at `exe` is already
+         at a version newer than `res.LatestVersion` (or was replaced since B's
+         running image launched).
      * Implement `acquireSwapLock(ctx context.Context, exe string) (release func() error, err error)`
        around `lockPath := exe + lockSuffix` and `ctlPath := lockPath + lockCtlSuffix`:
        - **Fail-closed lock acquisition — zero automatic eviction of `<exe>.lock`
@@ -245,11 +262,26 @@ that peer's final rename fails, rollback also fails, leaving neither `<exe>` nor
        `<exe>.old` exist) and runs Updater B's pre-swap `executablePath` /
        `downloadVerified` `os.Stat(exe)` lookup during that gap (without holding
        `<exe>.lock` across the network download), proving Updater B waits for
-       Updater A to finish `swap` and then succeeds; also tests `.old` /
-       ` (deleted)` suffix stripping in `executablePath()`, dangling-symlink
-       target marker resolution (`<target>.lock` / `<target>.old`), one
-       immediate `os.Stat` re-probe when neither marker is seen, and `!force`
-       pre-download fingerprint revalidation under `<exe>.lock`.
+       Updater A to finish `swap` and then succeeds; also tests dangling-symlink
+       target marker resolution (`<target>.lock` / `<target>.old`) and one
+       immediate `os.Stat` re-probe when neither marker is seen.
+     * `TestUpdateRejectsLateSnapshotDowngradeAfterConcurrentUpgradeWithoutForce`
+       (**late-snapshot downgrade regression test**, Comment `4543766778`):
+       Updater A installs `v3` before Updater B takes its pre-download snapshot
+       while B's `CurrentVersion` is `v1` and target is `v2` without `--force`;
+       proves B rejects the swap under `<exe>.lock` (`ErrDowngrade` /
+       `ErrConcurrentUpdateModified`) via start-of-`Update` baseline snapshot /
+       under-lock `installedVersion` / running-image identity verification and
+       leaves `v3` intact on disk.
+     * `TestExecutablePathPreservesLegitimateOldFilenameAndFailsClosedOnRenamedRunningImage`
+       (**`.old` filename preservation & renamed running-image fail-closed test**,
+       Comment `4543766919`): proves that a legitimate `<name>.old` binary
+       (`u.cfg.ExecutablePath` ending in `.old` or `filepath.Base(os.Args[0])`
+       ending in `.old`) preserves its `.old` path and uses `<exe>.old.lock` /
+       `<exe>.old.old`, while `u.cfg.ExecutablePath == ""` with
+       `os.Executable()` resolving to `.old` (when `filepath.Base(os.Args[0])`
+       does not end in `.old`) or ` (deleted)` fails closed with
+       `ErrConcurrentUpdateModified`.
      * Deterministic tests for both Finding 4 cases: (1) two concurrent
        `Updater.Update` calls against a non-mapped fixture binary serialize via
        `<exe>.lock` and both succeed in sequence; and (2) when `<exe>.old`

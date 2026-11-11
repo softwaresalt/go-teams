@@ -251,15 +251,23 @@ rollback on failure, and post-swap `<exe>.old` cleanup) in a fail-closed,
 executable-keyed inter-process lock `<exe>.lock` with release coordinated by
 fail-closed `<exe>.lock.ctl`:
 
-1. **Keying, `.old` / ` (deleted)` suffix stripping, symlink target resolution,
-   immediate `os.Stat` re-probe, and pre-download `!force` fingerprint
-   revalidation (Finding 3, Comment `4543360630`, Round-2 Pass)**:
-   * In `executablePath()`, when `u.cfg.ExecutablePath == ""` and
-     `os.Executable()` / `filepath.EvalSymlinks` returns a path ending in `.old`
-     (or ` (deleted)` on Linux `/proc/self/exe` after another process renamed
-     the running binary to `<exe>.old`), strip the `.old` (and any ` (deleted)`)
-     suffix so all processes derive the same canonical installation path `exe`
-     and `<exe>.lock`.
+1. **Keying, legitimate `.old` preservation vs. renamed running-image
+   fail-closed guard, symlink target resolution, immediate `os.Stat` re-probe,
+   and start-of-`Update` baseline snapshot + under-lock `installedVersion` /
+   running-image identity guard when `!force` (Finding 3, Comments
+   `4543360630`, `4543766778`, `4543766919`)**:
+   * Do NOT unconditionally strip `.old` in `executablePath()`. A configured
+     `u.cfg.ExecutablePath` ending in `.old` or a process legitimately invoked
+     as `<name>.old` (`filepath.Base(os.Args[0])` ends in `.old`) MUST preserve
+     its exact `.old` path and use `<exe>.old.lock` / `<exe>.old.old` without
+     ever redirecting to a sibling `<exe>`. When `u.cfg.ExecutablePath == ""`
+     and `os.Executable()` / `filepath.EvalSymlinks` resolves to a path ending
+     in ` (deleted)` or ending in `.old` while `filepath.Base(os.Args[0])` does
+     NOT end in `.old` (corroborating that another updater renamed the running
+     executable image after launch), **fail closed** with
+     `ErrConcurrentUpdateModified` (reporting that the running binary was
+     already replaced by another update process) unless `--force` is set with an
+     explicit path, rather than silently redirecting to a sibling path.
    * Add a helper used by `executablePath()` and `downloadVerified()` that, when
      resolving a symlink or statting `exe` during the transient rename gap,
      resolves the symlink's target path (or parent dir + link target when
@@ -273,15 +281,24 @@ fail-closed `<exe>.lock.ctl`:
      `swap` to restore `exe` (returning `ErrUpdateLocked` if `lockWaitTimeout`
      expires while `<target>.lock` is still present), without holding
      `<exe>.lock` across the network download.
-   * Record the initial target executable's SHA-256 digest (or
-     size+modtime+digest fingerprint) during the pre-download stat when
-     `!force`; once `swap` acquires `<exe>.lock`, if `!force` and the on-disk
-     `exe` fingerprint changed while downloading/waiting for the lock (meaning
-     another concurrent updater already replaced `exe`), abort `swap` before
-     renaming `exe -> exe.old` and return an actionable error
-     (`ErrConcurrentUpdateModified` / wrapped `ErrUpdateLocked`) so a slower
-     concurrent update can never silently downgrade a newer version installed
-     while it waited.
+   * Capture the baseline snapshot (`os.Stat` + SHA-256) at the **very start of
+     `Update`** (before `lookup` and before any wait); if `exe` is missing or
+     `<exe>.lock` / `<exe>.old` is present at that initial check (so B had to
+     wait for an in-flight swap), mark `concurrentSwapObserved = true` and
+     reject `!force` under `<exe>.lock` (`ErrConcurrentUpdateModified`). In
+     addition, under `<exe>.lock` inside `swap` when `!force`, verify
+     installed-binary version / running-image identity before
+     `rename(exe, old)`: provide an injectable
+     `installedVersion func(ctx context.Context, exePath string) (string, error)`
+     (or running-executable `os.SameFile` + SHA-256 identity check when
+     `u.cfg.ExecutablePath == ""`) that inspects the on-disk `exe` under
+     `<exe>.lock` and rejects the swap with `ErrDowngrade` /
+     `ErrConcurrentUpdateModified` if the on-disk binary at `exe` is already at
+     a version newer than `res.LatestVersion` (or was replaced since B's running
+     image launched), verified by
+     `TestUpdateRejectsLateSnapshotDowngradeAfterConcurrentUpgradeWithoutForce`
+     and
+     `TestExecutablePathPreservesLegitimateOldFilenameAndFailsClosedOnRenamedRunningImage`.
 2. **Fail-closed atomic acquisition with zero automatic eviction (Findings 1 &
    7, Comment `4543360510`)**: Contenders ONLY acquire `lockPath` via
    `os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)`, writing

@@ -93,12 +93,14 @@ hygiene*), chained after **`018-S`** via `backlogit dep add 019-S 018-S --type b
     local `rubber-duck` pre-push review Findings 5 and 6 to deterministically
     map `CRITICAL -> P0`, `MAJOR -> P1`, `MINOR -> P2`, use a bounded
     per-reviewer settlement wait with `active_reviewers >= 2` as the consensus
-    denominator in `multi-agent` mode, log `REVIEWER_POOL_DEGRADED` when
-    `2 <= active_reviewers < reviewers` and compute Phase 3 consensus thresholds
-    against `active_reviewers` while blocking Ship Step 4.4 on every unresolved
-    P0/P1 finding in `HIGH` or `MEDIUM` under `REVIEWER_POOL_DEGRADED` plus
-    every P0 finding regardless of confidence, strictly enforce
-    `mode: report-only` as read-only in Phases 6–7 with
+    denominator in `multi-agent` mode (blocking every `HIGH` P0/P1 and every
+    `P0` regardless of confidence in full-pool mode), log
+    `REVIEWER_POOL_DEGRADED` when `2 <= active_reviewers < reviewers` and
+    compute Phase 3 consensus thresholds against `active_reviewers` while
+    blocking Ship Step 4.4 on **ALL unresolved P0 and P1 (`CRITICAL` and
+    `MAJOR`) findings regardless of confidence (`HIGH`, `MEDIUM`
+    Majority/Plurality, or `LOW`)** under `REVIEWER_POOL_DEGRADED`, strictly
+    enforce `mode: report-only` as read-only in Phases 6–7 with
     `post_remediation.status: "skipped"` and require `authorized_contract_scope`
     when `mode != report-only` failing closed to `mode: report-only` when
     absent/ambiguous, and branch Phases 2–7, Output, and Quality Criteria for

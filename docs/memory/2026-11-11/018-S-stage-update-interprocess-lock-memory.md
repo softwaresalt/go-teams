@@ -84,13 +84,17 @@ Executed Dark Factory Mode (`DARK_MODE_ACTIVE`, P-017) Stage session for Cycle 1
     and `<exe>.lock.ctl` so both locks fail closed to manual cleanup, classify
     timeout errors diagnostically in `ErrUpdateLocked` via `lockStaleAfter` and
     `isProcessAlive(pid)` for dead-PID orphaned vs. live-PID/OS-PID-reused vs.
-    active/corrupt locks, strip `.old` / ` (deleted)` suffixes in
-    `executablePath()`, resolve symlink targets (`<target>.lock` /
-    `<target>.old`) with one immediate `os.Stat` re-probe and wait-poll in
-    pre-swap `os.Stat(exe)` / `filepath.EvalSymlinks(exe)` without holding
-    `<exe>.lock` across the network download, revalidate the pre-download `exe`
-    fingerprint under `<exe>.lock` when `!force` (`ErrConcurrentUpdateModified`
-    / wrapped `ErrUpdateLocked`), return `(release func() error, err error)`
+    active/corrupt locks, preserve legitimate `<name>.old` filenames in
+    `executablePath()` while failing closed with `ErrConcurrentUpdateModified`
+    when `os.Executable()` resolves to ` (deleted)` or `.old` when
+    `filepath.Base(os.Args[0])` does not end in `.old`, resolve symlink targets
+    (`<target>.lock` / `<target>.old`) with one immediate `os.Stat` re-probe and
+    wait-poll in pre-swap `os.Stat(exe)` / `filepath.EvalSymlinks(exe)` without
+    holding `<exe>.lock` across the network download, capture the baseline
+    snapshot at the very start of `Update` (`concurrentSwapObserved`) and verify
+    both baseline fingerprint and `installedVersion` / running-image identity
+    under `<exe>.lock` when `!force` (`ErrDowngrade` /
+    `ErrConcurrentUpdateModified`), return `(release func() error, err error)`
     from `acquireSwapLock` using
     `context.WithTimeout(context.WithoutCancel(ctx), u.ctlLockWaitTimeout)` and
     `errors.Join(swapErr, relErr)` while setting `res.Updated = true` if
@@ -103,8 +107,11 @@ Executed Dark Factory Mode (`DARK_MODE_ACTIVE`, P-017) Stage session for Cycle 1
     `TestSwapLockReleaseInterleavedWithReplacementDoesNotDeleteNewOwnerLock`,
     `TestUpdateReleaseSucceedsWhenCallerContextCanceled`,
     `TestUpdateReleaseSucceedsWhenCallerContextCanceledDuringSwap`,
-    `TestUpdateReleaseFailureSurfacedWhenControlLockHeld`, and
-    `TestUpdatePreSwapStatWaitsWhileConcurrentSwapMovesExecutableAside`)
+    `TestUpdateReleaseFailureSurfacedWhenControlLockHeld`,
+    `TestUpdatePreSwapStatWaitsWhileConcurrentSwapMovesExecutableAside`,
+    `TestUpdateRejectsLateSnapshotDowngradeAfterConcurrentUpgradeWithoutForce`,
+    and
+    `TestExecutablePathPreservesLegitimateOldFilenameAndFailsClosedOnRenamedRunningImage`)
   * **Task `018.002-T`** (`size: XS`, `complexity: low`, domain: `tests`,
     depends on `018.001-T`, file: `internal/cli/update_test.go`): *Add CLI unit
     and end-to-end lock contention tests for `teams-cli update`* (covering

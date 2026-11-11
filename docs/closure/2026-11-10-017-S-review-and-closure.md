@@ -4,11 +4,11 @@ date: 2026-11-10
 feature: 017-F
 shipment: 017-S
 branch: feat/017-s-p-021-deferred-scope-expansion-reconciliation-shipment-reconcile-deliberation-disposition-and-headed-browser-sandbox-opt-in
-status: pending
-closure_status: PENDING
-compaction_status: pending
-merge_commit: pending
-pr: pending
+status: ready
+closure_status: READY
+compaction_status: done
+merge_commit: 03ba97336d9f16b992d4675fae287ed95730b878
+pr: 42
 ---
 
 ## Release scope
@@ -87,7 +87,11 @@ Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 
 ## Follow-ups
 
-none
+* Stash entry `9A9D8106` (low): deliberation `006-DL` stays queued in
+  `.backlogit/queue/` with no live references (see Post-merge closure). Decide
+  whether to archive it with `backlogit archive 006-DL`, and whether the
+  autoharness plugin's `VERIFIED_CASCADE_ENGINE_MINOR_LINES` (currently only
+  `1.11`) should add `1.12`.
 
 ## Verification evidence
 
@@ -133,6 +137,54 @@ Duration: the next headed `teams-cli` recap launch and the next shipment closure
 Revert the `017-S` merge commit on `main`. The code change only affects argument
 construction; the specification change only affects Ship and `shipment-reconcile`
 prose. No data migration is involved.
+
+## Post-merge closure
+
+PR #42 merged to `main` at `03ba97336d9f16b992d4675fae287ed95730b878`
+(`2026-11-11T18:24:51Z`) with a merge commit (P-009). Dark Factory Mode (P-017)
+post-merge closure ran on `post-merge/017-reconcile-deliberation-and-headed-sandbox`:
+
+* Copilot shadow review raised four threads over two rounds on PR #42, all fixed in
+  scope under P-021 C1 (three in `decaf3f` for the deliberation rules, one in
+  `49815f4` for this document's disposition prediction), replied to, and resolved.
+  No thread was out of scope, so no deferred scope expansion entry was captured.
+  `autoharness gate copilot-review` returned `SATISFIED` for the merged HEAD
+  `49815f4510a30bbd817141e3b4ee37330682c639`, CI passed, and the merge used a merge
+  commit with no admin fallback.
+* `MERGE_CONFIRMED`: `gh pr view 42` returned `state: MERGED`, and
+  `git merge-base --is-ancestor 03ba97336d9f16b992d4675fae287ed95730b878
+  origin/main` exited 0.
+* `autoharness gate pipeline-topology --phase lifecycle --shipment 017-S` passed on
+  the closure branch.
+* Pre-close reconciliation: `017-F`, `017.001-T`, and `017.002-T` were already
+  archived with `status: done`, no orphan declared `shipment_id: 017-S`, and the
+  shipment record was `active`.
+* P-015 fully-covered-root verification: `017-F` is a root feature whose only
+  descendants, `017.001-T` and `017.002-T`, are both `017-S` manifest members, so the
+  classification was `CASCADE`. Step 0(c) linked-deliberation disposition, computed
+  with `compute_linked_deliberation_disposition` (engine `1.12.0` is not in
+  `VERIFIED_CASCADE_ENGINE_MINOR_LINES`), classified `006-DL` (link kinds
+  `source_deliberation_id` and `description`, status `queued`, no live referrer) as
+  `retained_engine_unverified`. It was therefore excluded from `allowed_ids` and
+  `required_ids`. `backlogit shipment ship 017-S --sha
+  03ba97336d9f16b992d4675fae287ed95730b878` returned `archived_ids: [017.001-T,
+  017.002-T, 017-F, 017-S]` and `returned_ids: []`. Both set differences were empty,
+  both tasks kept `parent_id: 017-F`, `017-S` carries `archived_status: shipped`,
+  `006-DL` was still in `.backlogit/queue/` with `status: queued` (retained-deliberation
+  preservation check passed), and no archive file showed as a working-tree deletion
+  (P-007).
+* Source artifact cleanup: stash entries `1B03802C` and `FC763C17` were already
+  archived by Stage (skipped). Deliberation `006-DL` was **retained, not archived**:
+  its disposition is `retained_engine_unverified`, which the reconciled contract never
+  archives. The handoff predicted `retained_description_mention`, but `017-F` sets
+  `source_deliberation_id: 006-DL`, so that link kind is present, and the engine is
+  unverified in any case. Follow-up stash entry `9A9D8106` records the decision.
+  Shipment `010-S` and stash entries `680A62E6` and `2D0BAA19` were not touched.
+* Mandatory P-020 `compact-context` (`target: all`) ran: the session memory was
+  compacted to
+  `docs/memory/compacted/2026-11-10-017-S-reconcile-deliberation-and-headed-sandbox-compacted.md`
+  and the verbose original archived under `docs/archive/memory/2026-11-10/`.
+  Recorded as `compaction_status: done` above.
 
 ## Handoff
 

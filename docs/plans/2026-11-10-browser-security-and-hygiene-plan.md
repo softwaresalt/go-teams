@@ -70,7 +70,7 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
 |---|---|---|---|
 | R1: Initial-URL ingress allowlist for trusted Microsoft/Teams/SharePoint/Office HTTPS hosts + loopback HTTP/HTTPS fixture support in `teams.ValidateMeetingURL` AND pre-allocation entry-point validation in `ChromeRunner.Join` (post-navigation redirects documented as residual risk) | `A99EEABD` | U1 (`013.001-T`) | `go test -race ./internal/teams/... ./internal/browser/... ./internal/cli/...` (`TestValidateMeetingURL`, `TestMutateJoinURLErrors`, `TestChromeRunnerJoinRejectsDisallowedURLBeforeBrowserAllocation`) |
 | R2: Redact userinfo, query strings (`?p=`, `code=`), and fragments from navigation errors, `splitQueueArgs` parse errors, and queue logs | `EEA7F685` | U2 (`013.002-T`) | `go test -race ./internal/teams/... ./internal/browser/... ./internal/cli/...` (`TestRedactURL`, `TestRunnerJoinErrorRedactsURL`, `TestQueueLogsAndParseErrorsRedactURL`) |
-| R3: Explicitly set `no-sandbox: false` and `disable-setuid-sandbox: false` when opt-in is off in both `StealthFlags` (`AllocatorOptions`) and `cleanHeadlessFlags` (`cleanHeadlessAllocatorOptions`); opt-in via `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX=1` | `D2023898` | U3 (`013.003-T`) | `go test -race ./internal/browser/...` (`TestStealthFlagsDefaultSandboxEnabled`, `TestStealthFlagsOptInDisableSandbox`, `TestEffectiveAllocatorLaunchArgsSandboxOptInAndRootOverride`) |
+| R3: Explicitly set `no-sandbox: false` and `disable-setuid-sandbox: false` when opt-in is off in both `StealthFlags` (`AllocatorOptions`) and `cleanHeadlessFlags` (`cleanHeadlessAllocatorOptions`); opt-in via `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX=1` | `D2023898` | U3 (`013.003-T`) | `go test -race ./internal/browser/...` (`TestStealthFlagsDefaultSandboxEnabled`, `TestStealthFlagsOptInDisableSandbox`, `TestEffectiveAllocatorLaunchArgsSandboxOptInAndRootOverride`, `TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox`) |
 | R4: Complete `--browser-path` / `browser_path` (`ExecPath`) CLI and config wiring across `auth`, `schedule`, `root`, `join`, `captions` | `87CDB97A` | U4 (`013.004-T`) | `go test -race ./internal/config/... ./internal/cli/...` (`TestSaveLoadRoundTrip`, `TestBrowserPathWiredAcrossAllCommands`) |
 | R5: `.gitignore` `*.env` coverage + authoritative Git-index secret-hygiene guardrail test in `internal/config/gitignore_test.go` detecting actual credential values bound to `SKYPE-TOKEN` (ignoring bare storage-key references) with negative/positive scanner test cases (paired with always-run CI secret check in `014.002-T` for docs-only PRs) | `3084A83E` | U5 (`013.005-T`) + `014.002-T` | `go test -race ./internal/config/...` (`TestGitignoreCoversLocalEnvAndSecretPatterns`, `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`) + CI `changes` secret-hygiene step |
 
@@ -216,12 +216,24 @@ Five deferred scope expansion items from shipment `010-S` / PR #27 (`EEA7F685`,
      * When `shouldDisableSandbox(opts)` is `true`, both emit
        `Flag{Name: "no-sandbox", Value: true}` and
        `Flag{Name: "disable-setuid-sandbox", Value: true}`.
-* **Files (3 files in `internal/browser`):** `internal/browser/allocator.go`,
-  `internal/browser/meeting.go`, `internal/browser/allocator_test.go`.
-* **Verify:** Update `internal/browser/allocator_test.go` to:
-  * Verify `StealthFlags` and `cleanHeadlessFlags` emit `no-sandbox: false` and
-    `disable-setuid-sandbox: false` by default and `Value: true` when
-    `Options{DisableSandbox: true}` or `TEAMS_DISABLE_SANDBOX=1` is set.
+  4. Update `TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox` in
+     `internal/browser/recap_test.go` (lines 81–85) to call
+     `cleanHeadlessFlags(Options{})` and assert that `no-sandbox` and
+     `disable-setuid-sandbox` carry `Value == false` (explicitly disabled)
+     rather than asserting flag-name absence (while keeping the
+     `assert.NotEqual(t, "disable-blink-features", f.Name)` check).
+* **Files (4 files in `internal/browser`: 2 production files + 2 colocated unit test files):**
+  `internal/browser/allocator.go`, `internal/browser/meeting.go`,
+  `internal/browser/allocator_test.go`, `internal/browser/recap_test.go`.
+* **Verify:** Update `internal/browser/allocator_test.go` and
+  `internal/browser/recap_test.go` to:
+  * Verify `StealthFlags(opts)` and `cleanHeadlessFlags(opts)` emit
+    `no-sandbox: false` and `disable-setuid-sandbox: false` by default
+    (including updating `TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox`
+    in `internal/browser/recap_test.go:81-85` to pass `Options{}` and assert
+    `Value == false` for `no-sandbox` and `disable-setuid-sandbox` rather than
+    flag-name absence) and `Value: true` when `Options{DisableSandbox: true}`
+    or `TEAMS_DISABLE_SANDBOX=1` is set.
   * Verify effective launch arguments for both `AllocatorOptions(opts)` and
     `cleanHeadlessAllocatorOptions(opts)` — including simulated root launches
     where `chromedp.NoSandbox` / `chromedp.Flag("no-sandbox", true)` is preset
@@ -325,7 +337,9 @@ U4 (013.004-T) ──▶ U5 (013.005-T)
 * `013.002-T` depends on `013.001-T` (shared `internal/teams/url.go`,
   `internal/teams/url_test.go`, `internal/browser/runner.go`, and
   `internal/browser/runner_test.go` surface).
-* `013.003-T` (`internal/browser/allocator.go`) is independent.
+* `013.003-T` (`internal/browser/allocator.go`, `internal/browser/meeting.go`,
+  `internal/browser/allocator_test.go`, `internal/browser/recap_test.go`) is
+  independent.
 * `013.005-T` depends on `013.004-T` (both touch `internal/config/*_test.go`).
 * Shipment `013-S` depends on shipped predecessor `012-S` (`013-S blocks 012-S`
   in backlogit's dependency convention where `backlogit dep add 013-S 012-S --type blocks`
@@ -390,9 +404,12 @@ U4 (013.004-T) ──▶ U5 (013.005-T)
   runs) were inspected. `TestValidateMeetingURL` is updated in U1 to assert that
   `http://example.com/x` is now rejected while `http://127.0.0.1:8080/meet/x`
   and `https://teams.microsoft.com/l/meetup-join/x` succeed.
-* **Existing unit test `TestStealthFlagsPresent`**: Updated in U3 so the default
-  case asserts `no-sandbox: false` and `disable-setuid-sandbox: false` are
-  present and effective allocator launch args exclude `--no-sandbox` (including
+* **Existing unit tests `TestStealthFlagsPresent` and `TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox`**:
+  Updated in U3 so the default case in `internal/browser/allocator_test.go` and
+  `internal/browser/recap_test.go:81-85` (updated to call
+  `cleanHeadlessFlags(Options{})`) asserts `no-sandbox: false` and
+  `disable-setuid-sandbox: false` (`Value == false`) rather than flag-name
+  absence and effective allocator launch args exclude `--no-sandbox` (including
   when `NoSandbox` is preset as in root launches), while a dedicated opt-in
   test asserts `Value: true` and `--no-sandbox` presence when
   `DisableSandbox: true` or `TEAMS_DISABLE_SANDBOX=1`.

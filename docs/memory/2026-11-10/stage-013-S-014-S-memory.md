@@ -177,6 +177,25 @@ PR #32 (`chore/stage-013-s-014-s`):
    `SKYPE-TOKEN` JWT credential assignment and live-shaped `?p=` passcode URL)
    scanner unit test cases in `013.005-T` (`internal/config/gitignore_test.go`).
 
+## PR #32 Copilot review remediation — Round 3 (1 in-scope thread)
+
+Addressed the round-3 P-021 C1 in-scope Copilot review comment on staging
+PR #32 (`chore/stage-013-s-014-s`):
+
+1. **Thread `PRRT_kwDOTStvas62Aa3A` (Comment `4533420312` — include `internal/browser/recap_test.go` caller and assertion update in `013.003-T` and plan U3):**
+   Updated `.backlogit/queue/013.003-T.md`,
+   `docs/plans/2026-11-10-browser-security-and-hygiene-plan.md` (U3),
+   `docs/decisions/2026-11-10-browser-security-and-hygiene-deliberation.md`,
+   and `.backlogit/queue/002-DL.md` to add `internal/browser/recap_test.go` to
+   `013.003-T` / U3's file list (`internal/browser/allocator.go`,
+   `internal/browser/meeting.go`, `internal/browser/allocator_test.go`,
+   `internal/browser/recap_test.go`) and specify that
+   `TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox` in
+   `internal/browser/recap_test.go` (lines 81–85) is updated to call
+   `cleanHeadlessFlags(Options{})` and assert that `no-sandbox` and
+   `disable-setuid-sandbox` carry `Value == false` (explicitly disabled) rather
+   than asserting flag-name absence.
+
 ## Next step
 
 Return control to Orchestrator Step 1.5 to merge the staging artifacts to

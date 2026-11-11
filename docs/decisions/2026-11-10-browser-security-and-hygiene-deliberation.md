@@ -162,7 +162,11 @@ routing through Step 2 deliberation (`002-DL`) prior to implementation planning
   `chromedp.NoSandbox` in `DefaultExecAllocatorOptions` even when running as
   root) and emit `Value: true` only when explicitly opted in. Verify effective
   allocator launch arguments (including simulated root launches) in
-  `internal/browser/allocator_test.go`.
+  `internal/browser/allocator_test.go` and update
+  `TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox` in
+  `internal/browser/recap_test.go:81-85` to call `cleanHeadlessFlags(Options{})`
+  and assert `Value == false` for `no-sandbox` and `disable-setuid-sandbox`
+  rather than flag-name absence.
 * **R4 (Complete `ExecPath` / `--browser-path` CLI and config wiring — `87CDB97A`)**:
   Bind `--browser-path` (and `--profile-dir`) on `auth` (`internal/cli/auth.go`)
   and `schedule` (`internal/cli/schedule.go`) so every CLI command supports
@@ -232,8 +236,13 @@ each well under the 2-hour rule:
    opted in via `Options.DisableSandbox` or `TEAMS_DISABLE_SANDBOX`) in both
    `StealthFlags` (`AllocatorOptions`) and `cleanHeadlessFlags`
    (`cleanHeadlessAllocatorOptions`) across `internal/browser/allocator.go`,
-   `internal/browser/meeting.go`, and `internal/browser/allocator_test.go`,
-   verifying effective launch arguments including root launches.
+   `internal/browser/meeting.go`, `internal/browser/allocator_test.go`, and
+   `internal/browser/recap_test.go` (updating
+   `TestCleanHeadlessAllocatorOptionsDoesNotDisableSandbox` in
+   `internal/browser/recap_test.go:81-85` to call
+   `cleanHeadlessFlags(Options{})` and assert `Value == false` for `no-sandbox`
+   and `disable-setuid-sandbox` rather than flag-name absence), verifying
+   effective launch arguments including root launches.
 4. **`013.004-T` (U4)**: Complete `--browser-path` and `BrowserPath` (`ExecPath`)
    wiring across `auth` and `schedule` CLI commands and add config/CLI unit
    tests (`internal/cli/auth.go`, `internal/cli/schedule.go`,

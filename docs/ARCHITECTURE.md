@@ -74,11 +74,12 @@ Rules the layout enforces:
 
 * Leaf packages never import another `internal/` package. `config` knows
   nothing about the browser, and `transcript` knows nothing about Teams.
-* `internal/cli` is the only package that imports `config`, `scheduler`,
-  `updater`, and `version`. It translates the loaded configuration and flags
-  into the plain option structs that adapters consume (`browser.Options`,
-  `capture.SessionConfig`, `updater.Config`), so adapters never read the config
-  file.
+* `internal/cli` is the only package that imports `config`, `scheduler`, and
+  `updater`, and the only one that reads build metadata from `version` for the
+  CLI itself (`updater` imports `version` for comparisons). It translates the
+  loaded configuration and flags into the plain option structs that adapters
+  consume (`browser.Options`, `capture.SessionConfig`, `updater.Config`), so
+  adapters never read the config file.
 * `internal/capture` depends on `browser` and `transcript`; `browser` never
   imports `capture`. Capture-specific behavior such as file naming and
   permissions stays out of the browser layer.

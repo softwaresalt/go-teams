@@ -4,9 +4,11 @@ date: 2026-11-11
 feature: 019-F
 shipment: 019-S
 branch: feat/019-s-reconcile-harness-review-gate-single-agent-fallback-and-post-closure-retained-deliberation-hygiene
-status: ready
+status: closed
 closure_status: READY
-compaction_status: pending
+compaction_status: done
+merge_commit: c4dece0851ca75146cec817385b4a9f2b637449d
+pr: 47
 ---
 
 ## Release scope
@@ -101,7 +103,52 @@ Four `rubber-duck` findings were fixed in a separate commit before PR creation
 
 ## Follow-ups
 
-None captured. No P-021 deferred scope expansion entry was needed.
+One captured follow-up, with no P-021 deferred scope expansion entry:
+
+* `008-DL` (`retained_engine_unverified`) remains queued. Stage or the operator MAY
+  archive it with `backlogit archive 008-DL` under the post-closure rule in
+  `docs/compound/workflow-issues/retained-engine-unverified-deliberation-cleanup.md`
+  once it has zero live governing or dependency references. The deliberation file
+  is `docs/decisions/2026-11-11-harness-review-fallback-and-deliberation-hygiene-deliberation.md`.
+
+## Merge and review gates
+
+| Gate | Result |
+|---|---|
+| Feature PR | #47, merge commit `c4dece0851ca75146cec817385b4a9f2b637449d` (P-009 merge commit strategy) |
+| Reviewed HEAD at merge | `b09cb54f3c777d68cabe4467c4162852ec26e49f` |
+| Copilot review (P-018) | One in-scope thread (child reviewers need `mode: report-only`) fixed in `b09cb54` under P-021 C1, replied to, resolved; gate returned `SATISFIED` |
+| CI | No checks configured for the branch |
+
+## Shipment closure record (P-015 cascade path)
+
+Classification: `CASCADE`. The manifest `[019-F, 019.001-T, 019.002-T]` holds a
+root feature whose descendants are all manifest members. Command:
+`backlogit shipment ship 019-S --sha c4dece0851ca75146cec817385b4a9f2b637449d`.
+
+| Check | Result |
+|---|---|
+| `returned_ids` | `[]` |
+| `archived_ids` | `019.001-T`, `019.002-T`, `019-F`, `019-S` |
+| `archived_ids - allowed_ids` | empty |
+| `required_ids - archived_ids` | empty (members were relocated to `archive/` but declared `status: done`, so all were required) |
+| `parent_id` preservation | `019.001-T` and `019.002-T` both keep `parent_id: 019-F` |
+| Shipment provenance | `019-S` archived with `archived_status: shipped` |
+| Archive integrity (P-007) | no deletions in `git status -- .backlogit/archive/` |
+
+### Retained deliberation preservation check
+
+| Deliberation | Link kind | Pre-close disposition | Pre-close location and status | Post-close location and status | Result |
+|---|---|---|---|---|---|
+| `008-DL` | `source_deliberation_id` on `019-F` | `retained_engine_unverified` | `.backlogit/queue/`, `queued` | `.backlogit/queue/`, `queued` | preserved, not in `archived_ids` |
+
+### Source artifact cleanup
+
+* Stash `680A62E6` and `9A9D8106`: already archived by Stage before the shipment
+  was claimed; skipped.
+* `008-DL`: retained (`retained_engine_unverified`); Ship's automated step never
+  archives it.
+* Stash `stash@{0}` (`operator-option-a-and-engram-fixes`) was untouched.
 
 ## Verification evidence
 
@@ -145,5 +192,7 @@ documentation, with no data migration.
 
 Related [decision](../decisions/2026-11-11-harness-review-fallback-and-deliberation-hygiene-deliberation.md)
 and [plan](../plans/2026-11-11-harness-review-fallback-and-deliberation-hygiene-plan.md).
-Local review fixes from the pre-push `rubber-duck` pass are committed on the
-feature branch and pushed with the feature PR.
+Local review fixes from the pre-push `rubber-duck` pass and the Copilot thread are
+merged in PR #47. Compacted memory:
+`docs/memory/compacted/2026-11-11-019-S-harness-review-and-deliberation-hygiene-compacted.md`
+(`compaction_status: done`, P-020).

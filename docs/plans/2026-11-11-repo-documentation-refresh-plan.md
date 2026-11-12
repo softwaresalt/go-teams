@@ -61,11 +61,11 @@ shipment **`020-S`** (sequenced after `019-S` via
      double quote handling with Windows backslash preservation, rejection of
      nested `--queue` / `-q` flags, per-line isolated execution that comments
      out each completed line in-place by prepending `::` (attempting an atomic
-     temp-file rename via `writeQueueLinesAtomically` and falling back to an
-     in-place `os.WriteFile` if the rename fails), inheritance of outer capture
-     flags except `--url` and `--queue` (`inheritedQueueFlags`), and URL
-     query/userinfo/fragment redaction (`teams.RedactArgs`) in queue logs and
-     error messages.
+     temp-file rename via `writeQueueLines` in `internal/cli/queue.go:200` and
+     falling back to an in-place `os.WriteFile` if the rename fails),
+     inheritance of outer capture flags except `--url` and `--queue`
+     (`inheritedQueueFlags`), and URL query/userinfo/fragment redaction
+     (`teams.RedactArgs`) in queue logs and error messages.
   2. **Complete capture flag and output naming reference**: On root, `captions`,
      and `join`, add `--queue` (`-q`), `--category` (`-c`),
      `--filename-template` (and alias `--name-template`), and `--output-folder`
@@ -92,8 +92,12 @@ shipment **`020-S`** (sequenced after `019-S` via
      `<exe>.old` exists, restore `<exe>.old` to `<exe>`; then remove
      `<exe>.lock` and any `<exe>.lock.ctl`).
   4. **Complete `## Configuration`**: Expand the YAML example and field
-     reference to cover `output_dir`, `output_folder` (and `default_path` /
-     `output` aliases), `output_file`, `filename_template` (and `name_template`
+     reference to cover `output_dir`, `output_folder` (and `default_path`) as
+     the directory-only alias for `output_dir`, the YAML `output`
+     file-or-directory target (`internal/config/config.go:192-198`, where
+     `config.Load` treats `.md`/`.markdown` values in `output` as `OutputFile` —
+     overriding `output_file` when `output_file` is unset — and other values as
+     `OutputDir`), `output_file`, `filename_template` (and `name_template`
      alias), `meeting_url` (and `url` alias), `category`, `profile_dir`,
      `browser_path`, `bot_name`, `headless` (and `headed` alias),
      `capture_audio` (and `audio` alias), and `meetings`, plus default config
@@ -135,11 +139,12 @@ shipment **`020-S`** (sequenced after `019-S` via
        clipboard interception with 20-attempt retry, identity-verified Web Audio
        decode -> MP3), (d) batch `--queue` execution with `::` in-place
        completion marking (attempting an atomic temp-file rename via
-       `writeQueueLinesAtomically` and falling back to an in-place
-       `os.WriteFile` if the rename fails) and outer capture flag inheritance
-       except `--url` and `--queue` (`inheritedQueueFlags`), (e) cron `schedule`
-       daemon, and (f) self-update (`update` with `SHA256SUMS` verification,
-       `<exe>.lock` / `<exe>.lock.ctl` coordination, and `.old` rollback).
+       `writeQueueLines` in `internal/cli/queue.go:200` and falling back to an
+       in-place `os.WriteFile` if the rename fails) and outer capture flag
+       inheritance except `--url` and `--queue` (`inheritedQueueFlags`), (e)
+       cron `schedule` daemon, and (f) self-update (`update` with `SHA256SUMS`
+       verification, `<exe>.lock` / `<exe>.lock.ctl` coordination, and `.old`
+       rollback).
      * Security and isolation invariants: meeting URL host allowlist and
        credential rejection (`teams.ValidateMeetingURL`), URL redaction in
        errors/logs (`teams.RedactURL`, `teams.RedactArgs`), participant text
@@ -163,9 +168,9 @@ shipment **`020-S`** (sequenced after `019-S` via
        pending live Microsoft Teams tenant qualification in `010-S`).
      * Test coverage tiers: (1) unit & concurrency `-race` suite, (2) synthetic
        browser & compiled-binary E2E harness (`TestChromeMeetingEndToEnd` in
-       `internal/browser/meeting_chrome_test.go`,
+       `internal/browser/meeting_e2e_test.go:25`,
        `TestCompiledBinaryCapturesRecapToExplicitOutput` in
-       `internal/cli/recap_e2e_test.go`), (3) deterministic golden MP3
+       `internal/cli/binary_automation_test.go:16`), (3) deterministic golden MP3
        regression (`TestEncoderDeterministicGoldenReference` in
        `internal/audio/mp3_test.go`, which verifies inline golden SHA-256
        digests and MP3 frame headers), (4) tracked-file secret scan

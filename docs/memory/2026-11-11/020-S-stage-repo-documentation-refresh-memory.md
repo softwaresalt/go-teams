@@ -42,13 +42,20 @@ for `go-teams` (`teams-cli`):
 * **Backlog hierarchy and shipment**:
   * **`020-F`** (`source_deliberation_id: 009-DL`, `source_stash_id: 6227A297`) -> **`020-S`** (`blocks 019-S`):
     * `020.001-T` (`Size: S` / `Complexity: low`, `docs`, independent):
-      `README.md` (batch queue mode `--queue`/`-q`, complete capture flag &
-      filename template reference, `018-S` self-update `<exe>.lock` /
-      `<exe>.lock.ctl` & manual recovery, complete YAML config fields, and all
+      `README.md` (batch queue mode `--queue`/`-q` with `writeQueueLines` in
+      `internal/cli/queue.go:200`, complete capture flag & filename template
+      reference, `018-S` self-update `<exe>.lock` / `<exe>.lock.ctl` & manual
+      recovery, complete YAML config fields separating `output_folder`
+      directory-only alias for `output_dir` from the YAML `output`
+      file-or-directory target in `internal/config/config.go:192-198`, and all
       10 `internal/` packages in Project layout)
     * `020.002-T` (`Size: S` / `Complexity: low`, `docs`, independent):
       `docs/ARCHITECTURE.md`, `docs/QUALITY_SCORE.md` (progressive-disclosure
-      maps signposted in `AGENTS.md`)
+      maps signposted in `AGENTS.md`, including `writeQueueLines` in
+      `internal/cli/queue.go:200`, `TestChromeMeetingEndToEnd` in
+      `internal/browser/meeting_e2e_test.go:25`, and
+      `TestCompiledBinaryCapturesRecapToExplicitOutput` in
+      `internal/cli/binary_automation_test.go:16`)
     * `020.003-T` (`Size: S` / `Complexity: low`, `docs`, independent):
       `docs/design-docs/2026-11-11-self-update-and-interprocess-locking.md`
       (`016-S` + `018-S` graduation) and

@@ -42,11 +42,12 @@ documentation has drifted or remains ungraduated:
    * Batch queue mode (`--queue` / `-q <file>` in `internal/cli/queue.go` and
      `internal/cli/join.go`) is shown in a single `--help` example on `root.go`
      but is missing from `README.md` (`## Commands`, flag reference, and batch
-     execution/commenting/redaction behavior: `writeQueueLinesAtomically`
-     attempts an atomic temp-file rename and falls back to an in-place
-     `os.WriteFile` if the rename fails, `inheritedQueueFlags` forwards outer
-     capture flags except `--url` and `--queue`, and `teams.RedactArgs` redacts
-     query strings, userinfo, and fragments).
+     execution/commenting/redaction behavior: `writeQueueLines` in
+     `internal/cli/queue.go:200` attempts an atomic temp-file rename and falls
+     back to an in-place `os.WriteFile` if the rename fails,
+     `inheritedQueueFlags` forwards outer capture flags except `--url` and
+     `--queue`, and `teams.RedactArgs` redacts query strings, userinfo, and
+     fragments).
    * Capture flags `--category` (`-c`), `--filename-template` (and alias
      `--name-template`), and `--output-folder`, along with the complete output
      target precedence (positional output argument `arg[1]` > `--output-file` >
@@ -64,8 +65,13 @@ documentation has drifted or remains ungraduated:
      the transient `.old` rename window, launch/installed-version identity
      guards `ErrConcurrentUpdateModified` / `ErrDowngrade` / `ErrUpdateLocked`,
      and safe manual operator lock/backup recovery preconditions).
-   * `## Configuration` omits `output_folder`, `output_file`,
-     `filename_template`, `category`, `browser_path`, and `audio` alias details.
+   * `## Configuration` omits `output_folder` (and `default_path`) as the
+     directory-only alias for `output_dir`, the YAML `output` file-or-directory
+     target (`internal/config/config.go:192-198`, where `config.Load` treats
+     `.md`/`.markdown` values in `output` as `OutputFile` — overriding
+     `output_file` when `output_file` is unset — and other values as
+     `OutputDir`), `output_file`, `filename_template` (and `name_template`
+     alias), `category`, `browser_path`, and `audio` alias details.
    * `## Project layout` lists 8 of the 10 `internal/` packages, omitting
      `internal/audio/` and `internal/capture/`.
 2. **Missing progressive-disclosure maps (`docs/ARCHITECTURE.md` and `docs/QUALITY_SCORE.md`)**:
@@ -75,18 +81,18 @@ documentation has drifted or remains ungraduated:
      in `docs/`.
    * `docs/ARCHITECTURE.md` must accurately document the 10 `internal/`
      packages, dependency direction, runtime flows (including batch `--queue`
-     `writeQueueLinesAtomically` atomic temp-file rename with in-place
-     `os.WriteFile` fallback and `inheritedQueueFlags` forwarding outer capture
-     flags except `--url` and `--queue`), and security/isolation invariants
-     (including that `internal/capture` creates *new* directories with `0o700`
-     and *new* transcript/MP3 files with `0o600`, while pre-existing directories
-     and explicitly overwritten files retain their existing filesystem
-     permissions).
+     `writeQueueLines` in `internal/cli/queue.go:200` atomic temp-file rename
+     with in-place `os.WriteFile` fallback and `inheritedQueueFlags` forwarding
+     outer capture flags except `--url` and `--queue`), and security/isolation
+     invariants (including that `internal/capture` creates *new* directories
+     with `0o700` and *new* transcript/MP3 files with `0o600`, while
+     pre-existing directories and explicitly overwritten files retain their
+     existing filesystem permissions).
    * `docs/QUALITY_SCORE.md` must accurately document per-domain quality grades
-     and test coverage tiers, referencing the exact test names
-     `TestChromeMeetingEndToEnd` (`internal/browser/meeting_chrome_test.go`),
+     and test coverage tiers, referencing the exact test names and paths
+     `TestChromeMeetingEndToEnd` (`internal/browser/meeting_e2e_test.go:25`),
      `TestCompiledBinaryCapturesRecapToExplicitOutput`
-     (`internal/cli/recap_e2e_test.go`),
+     (`internal/cli/binary_automation_test.go:16`),
      `TestEncoderDeterministicGoldenReference` (`internal/audio/mp3_test.go`,
      which verifies inline golden SHA-256 digests and MP3 frame headers), and
      `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` (`internal/config`,
@@ -141,24 +147,33 @@ each) with zero overlapping file paths and no intra-feature `blocks` dependency
 edges:
 
 1. **`020.001-T` (`README.md`)**: User-facing CLI, batch queue
-   (`writeQueueLinesAtomically` atomic temp-file rename with in-place
-   `os.WriteFile` fallback, `inheritedQueueFlags` forwarding outer capture flags
-   except `--url` and `--queue`, `teams.RedactArgs` redaction), complete capture
-   flag and output target precedence (`arg[1]` > `--output-file` > `--output` >
-   `--output-dir` > `--output-folder` > config `output_file` > config
-   `output_folder` > config `output_dir`), self-update lock/recovery,
-   configuration, and project layout reference (1 file).
+   (`writeQueueLines` in `internal/cli/queue.go:200` atomic temp-file rename
+   with in-place `os.WriteFile` fallback, `inheritedQueueFlags` forwarding outer
+   capture flags except `--url` and `--queue`, `teams.RedactArgs` redaction),
+   complete capture flag and output target precedence (`arg[1]` >
+   `--output-file` > `--output` > `--output-dir` > `--output-folder` > config
+   `output_file` > config `output_folder` > config `output_dir`), self-update
+   lock/recovery, configuration (specifying `output_folder` and `default_path`
+   as directory-only aliases for `output_dir` separately from the YAML `output`
+   file-or-directory target in `internal/config/config.go:192-198`, where
+   `config.Load` treats `.md`/`.markdown` values in `output` as `OutputFile` —
+   overriding `output_file` when `output_file` is unset — and other values as
+   `OutputDir`), and project layout reference (1 file).
 2. **`020.002-T` (`docs/ARCHITECTURE.md`, `docs/QUALITY_SCORE.md`)**:
    Top-level domain map, dependency direction, runtime flows (including batch
-   `--queue` atomic rename with `os.WriteFile` fallback and `inheritedQueueFlags`
-   excluding `--url` and `--queue`), security/isolation invariants (including
-   `internal/capture` creating *new* directories with `0o700` and *new*
-   transcript/MP3 files with `0o600` while pre-existing directories and
-   explicitly overwritten files retain their existing permissions), per-package
-   quality grades, test coverage tiers (`TestChromeMeetingEndToEnd`,
-   `TestEncoderDeterministicGoldenReference`,
-   `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`), and explicit
-   live-verification gaps (`010-S`) (2 files).
+   `--queue` `writeQueueLines` in `internal/cli/queue.go:200` atomic rename with
+   `os.WriteFile` fallback and `inheritedQueueFlags` excluding `--url` and
+   `--queue`), security/isolation invariants (including `internal/capture`
+   creating *new* directories with `0o700` and *new* transcript/MP3 files with
+   `0o600` while pre-existing directories and explicitly overwritten files
+   retain their existing permissions), per-package quality grades, test coverage
+   tiers (`TestChromeMeetingEndToEnd` in
+   `internal/browser/meeting_e2e_test.go:25`,
+   `TestCompiledBinaryCapturesRecapToExplicitOutput` in
+   `internal/cli/binary_automation_test.go:16`,
+   `TestEncoderDeterministicGoldenReference` in `internal/audio/mp3_test.go`,
+   `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` in `internal/config`),
+   and explicit live-verification gaps (`010-S`) (2 files).
 3. **`020.003-T` (`docs/design-docs/2026-11-11-self-update-and-interprocess-locking.md`, `docs/design-docs/2026-11-09-teams-browser-caption-and-recap-capture.md`)**:
    Graduate `016-S` + `018-S` self-update and inter-process locking design
    decisions and update the browser caption/recap capture design doc for

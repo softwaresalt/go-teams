@@ -32,7 +32,9 @@ planned under deliberation `007-DL`.
   * Overlapping installations are coordinated through `acquireSwapLockChain`: a swap
     on `foo.old` first takes the locks of every shorter prefix (`foo`, then
     `foo.old`) in a fixed order, so a `foo` update and a forced `foo.old` update
-    cannot move each other's rollback copy.
+    cannot move each other's rollback copy. The `.old` suffix is case-folded on
+    Windows and macOS, and targets whose names end in `.lock` or `.lock.ctl` are
+    rejected before any mutation so a marker can never overwrite an executable.
   * With `force` false, `swap` verifies under the lock that the executable and the
     running image still match the baseline snapshot, and that the installed version
     is neither a downgrade nor different from the running version. It aborts with
@@ -71,13 +73,15 @@ folded in before this review.
 | Scope | Changes stay in the three authorized Go files plus `018-S` backlog, plan, decision, closure, and memory records; the operator's `.github/` and `docs/scratch/` edits are excluded | No action |
 | Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62eVwU`): the launch-image snapshot hashed the whole executable at package initialization, so every CLI invocation (capture, auth, `--help`, `--version`, the version subprocess) paid for a full binary read | Fixed in-scope (P-021 C1: completes the authorized launch-identity guard without changing its contract); the snapshot is now a `sync.OnceValue` captured on the first `New` that needs it, which only the update command path reaches, before any wait or network work. The identity reference point moves from package initialization to first updater construction |
 | Concurrency | Copilot round 1 (thread `PRRT_kwDOTStvas62eVwm`): the installed-version probe ran under the swap lock with no deadline, so a stalled `--version` would hold the lock until manual interruption | Fixed in-scope (P-021 C1: bounds the authorized lock's hold time); the probe has a 30s deadline and `Cmd.WaitDelay` of 2s, and `TestReadInstalledVersionTimesOutStalledProbe` covers it |
+| Concurrency | Copilot round 2 (thread `PRRT_kwDOTStvas62ed97`): an executable named `foo.lock` takes marker `foo.lock.lock`, while a concurrent `foo` update creates `foo.lock`, which the first updater's `rename(tmp, exe)` could overwrite | Fixed in-scope (P-021 C1: protects the authorized lock's marker namespace); `acquireSwapLockChain` rejects any chain path ending in `.lock` or `.lock.ctl` (case-folded) with `errReservedMarkerName` before any mutation, covered by `TestSwapRejectsTargetsCollidingWithLockMarkerNames` |
+| Concurrency | Copilot round 2 (thread `PRRT_kwDOTStvas62ed-D`): `.old` suffix case folding was Windows-only, so on case-insensitive macOS a `foo.OLD` target skipped the `foo` lock and could move the base rollback copy | Fixed in-scope (P-021 C1: completes the authorized backup-overlap protection); folding now applies on Windows and macOS, covered by `TestUpdateOverlappingBaseHeldBlocksCaseVariantOldInstallation` (skipped where the filesystem is case-sensitive; exercised locally on Windows only, not on macOS) |
 
 Accepted boundary (not a defect): on platforms without `/proc/self/exe`, a
 sub-millisecond replacement of the executable with an identical version before
 the updater captures its launch snapshot cannot be distinguished using only the
 standard library. This is recorded in `018-F` as an accepted stdlib-only boundary.
 
-Reviewed code HEAD: `feb47dde772120d6fdeb5e44a1ddd4c9d350392f` (the final PR HEAD
+Reviewed code HEAD: `06ef5010c1241bed642d7dd87a59e0ef25a09291` (the final PR HEAD
 adds only documentation records on top of it).
 Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 
@@ -95,7 +99,7 @@ deferred scope expansion entry was created.
 | Integration compilation | `go vet -tags=integration ./...` | PASS |
 | Format | `gofmt -l cmd internal` (0 files listed) | PASS |
 | Lint | `golangci-lint run`, CI-pinned v1.64.8 with `GOTOOLCHAIN=go1.26.0` | PASS |
-| Race suite | `go test -race -count=1 ./...` (all packages), re-run after the Copilot round 1 fixes | PASS |
+| Race suite | `go test -race -count=1 ./...` (all packages), re-run after the Copilot round 1 and 2 fixes | PASS |
 | Flake check | `go test -race -count=20` on the cancellation test | PASS |
 | Secret hygiene | `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` | PASS |
 | Platform coverage | Windows only; Linux and macOS runtime behavior was not exercised locally and relies on CI | NOTED |

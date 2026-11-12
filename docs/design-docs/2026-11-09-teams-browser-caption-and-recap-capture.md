@@ -32,8 +32,13 @@ Recap capture bootstraps authentication at the matching `/v2/` origin
 before navigating to the recap URL, and tracks OAuth callback completion and
 single-tab COOP `targetId` swaps across Microsoft identity hosts without
 rebinding to concurrent tabs. Headless mode requires an already usable profile
-and authorized access. A zero-config run prefers an existing profile beside
-the executable, then working-directory `bin\profile`; automation should supply
+and authorized access. `config.DefaultConfig()` sets `ProfileDir` to
+`%LOCALAPPDATA%\teams-cli\profile` on Windows when `LOCALAPPDATA` is set, and
+otherwise to `teams-cli/profile` under `os.UserConfigDir()` (for example
+`~/.config/teams-cli/profile` on Linux). The browser package performs no
+fallback search: when `Options.UserDataDir` is empty, as with a direct library
+caller that bypasses `DefaultConfig`, no user-data directory is passed to
+Chromium and the session is not persisted. Automation should supply
 `--profile-dir` explicitly. Browser profiles contain credentials and must
 never be committed or shared.
 

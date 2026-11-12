@@ -29,6 +29,7 @@ commits. The session stops before `git push`; the Orchestrator runs
 | Review fix: `--force` skips identity guards | applied | `7132936` |
 | Review fix: queue comment syntax | applied | `83fd1b4` |
 | Review fix: import ownership wording | applied | `6f4f223` |
+| Pre-push `rubber-duck` fixes (6 findings: queue output rank, secret-scan limits, closure verification accuracy, default profile directory, scheduler busy gate, release asset platforms) | applied in one new commit; task commits not amended | see `git log` |
 | `020-F` | done | n/a |
 
 ## Items blocked
@@ -54,6 +55,12 @@ None.
   and `internal/config` is `B` (69.7% coverage).
 * Review corrections went into separate commits so the task commits tracked in
   backlogit stay unamended.
+* Pre-push `rubber-duck` finding 4 named `browser.resolveProfileDir`, which does
+  not exist in the repository or its history. Docs now follow the code:
+  `defaultProfileDir` prefers `%LOCALAPPDATA%\teams-cli\profile`, then
+  `os.UserConfigDir()`; there is no executable-adjacent or `bin\profile` search.
+  The scheduler busy gate lives in `internal/cli/schedule.go` (`scheduleJob`),
+  not `internal/scheduler`.
 * Follow-up stash entries (POSIX permission test, `internal/config` coverage,
   Windows CI) are left for the PR stage; none were created in this session.
 

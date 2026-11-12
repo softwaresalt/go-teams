@@ -156,6 +156,14 @@ entries through `scheduler.Build`. Each job runs the same capture path as a
 manual `join`. It is meant to run as a long-lived daemon with an explicit
 `--profile-dir`.
 
+All configured meetings share one Chromium `UserDataDir` profile, so
+`scheduleJob` in `internal/cli/schedule.go` wraps `runCapture` (the same capture
+path as a manual `join`) in a single-flight `atomic.Bool` busy gate. If a prior live capture still
+holds the profile when another cron trigger fires, the overlapping trigger is
+logged as `schedule: skipped, profile busy` and skipped rather than queued or
+launched concurrently. `internal/scheduler` itself only builds the cron
+entries and does not enforce this gate.
+
 ### Self-update
 
 `teams-cli update` calls `updater.Update`:
@@ -202,8 +210,15 @@ The protocol details are in the
   evicted automatically, and the updater refuses to run when the executable
   identity changed or a downgrade is attempted without `--force`.
 * **Tracked-file hygiene.** `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`
-  scans `git ls-files` so no live passcode or token is committed. Documentation
-  examples use synthetic values only.
+  and the CI secret-hygiene step scan the git-tracked regular text files
+  reported by `git ls-files`, so no live passcode or token is committed. Both
+  skip binary files (a NUL byte in the first 8000 bytes) and files larger than
+  `8 MiB`, and neither follows symlinks. They flag tracked local `.env`
+  filenames (`.env`, `.env.*`, `*.env`, except `.env.example`), Teams
+  passcodes (`?p=` or `&p=` values of eight or more characters on Teams meeting
+  URLs, excluding obvious synthetic placeholders), `SKYPE-TOKEN` assigned a
+  JWT value, and `Bearer eyJ...` JWTs. Documentation examples use synthetic
+  values only.
 
 ## Keeping this document current
 

@@ -59,6 +59,12 @@ external reviewer model.
 | Correctness | README queue sample used `#` as a comment marker, but `runQueueFile` honors only `::` | Fixed in-scope (P-021 C1, same documentation contract); commit `83fd1b4` |
 | Correctness | README presented the update identity guards without noting `--force` skips them (`swap` runs them only when `!force`) | Fixed in-scope; commit `7132936` |
 | Correctness | `ARCHITECTURE.md` said `internal/cli` is the only importer of `version`, but `internal/updater` also imports it | Fixed in-scope; commit `6f4f223` |
+| Correctness (pre-push `rubber-duck` 1) | README queue note did not say output flag rank still applies after outer and per-line flags merge, so an outer `--output-file` outranks a per-line `--output` or `--output-dir` | Fixed in-scope in the pre-push fix commit; README now recommends an outer `--output-dir` / `--output-folder` |
+| Correctness (pre-push `rubber-duck` 2) | Secret-scan scope and limits were unstated in `ARCHITECTURE.md` and `QUALITY_SCORE.md` | Fixed in-scope: tracked regular text files up to `8 MiB`, binary files skipped, `.env` filenames, Teams passcodes, `SKYPE-TOKEN`, and `Bearer eyJ...` patterns listed |
+| Correctness (pre-push `rubber-duck` 3) | This record overstated CI coverage for a docs/backlog-only PR | Fixed in-scope: see Verification evidence |
+| Correctness (pre-push `rubber-duck` 4) | README and the capture design doc claimed a profile search next to the executable and in `bin\profile`; verified against source, no such fallback exists (`defaultProfileDir` prefers `%LOCALAPPDATA%`, then `os.UserConfigDir()`; an empty `UserDataDir` passes no user-data directory to Chromium) | Fixed in-scope to match the code; the finding text named `browser.resolveProfileDir`, which does not exist in the repository or its history |
+| Correctness (pre-push `rubber-duck` 5) | `ARCHITECTURE.md` omitted the scheduler's shared-profile busy gate | Fixed in-scope: the gate is `scheduleJob`'s `atomic.Bool` in `internal/cli/schedule.go`, not in `internal/scheduler` |
+| Correctness (pre-push `rubber-duck` 6) | README implied `teams-cli update` works on every OS, but `release.yml` publishes only `windows/amd64` and `windows/arm64` | Fixed in-scope: README `Self-update` notes `ErrAssetNotFound` on other platforms |
 | Correctness | First `QUALITY_SCORE.md` draft claimed `internal/capture` tests assert `0o700` / `0o600`; no test asserts mode bits | Fixed before commit: package graded `B`, gap recorded |
 | Correctness | First design-doc draft said the direct-exec launcher once hardcoded `--no-sandbox`; `006-DL` records that it never consulted the opt-in | Fixed before commit |
 | Correctness | Task text cites `TestEncoderDeterministicGoldenReference` near `mp3_test.go:105`; it is at line 158 | No line number cited in the docs; no action |
@@ -74,8 +80,8 @@ Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 
 | Field | Value |
 |---|---|
-| Reviewed diff identity | `main..6f4f223` (`6f4f223`, task commits `3fc94af`, `5c0c60c`, `b9628fe`) |
-| Reviewed HEAD | `6f4f223`; the closure commit that follows adds only `.backlogit/`, this record, and the memory record. The final PR HEAD SHA appears in the PR body `## Local Review Readiness` block. |
+| Reviewed diff identity | `main..6f4f223` (`6f4f223`, task commits `3fc94af`, `5c0c60c`, `b9628fe`), plus the pre-push `rubber-duck` fix commit |
+| Reviewed HEAD | `6f4f223` for the original review; the pre-push fix commit and the closure commit that follows add only documentation, backlog, and memory records. The final PR HEAD SHA appears in the PR body `## Local Review Readiness` block. |
 | `dispatch_mode` | `single-agent-declared-degradation` |
 | `confidence_tier` | `DEGRADED_SINGLE_AGENT` |
 | `consensus_status` | `DEGRADED_SINGLE_AGENT (non-consensus)` |
@@ -101,7 +107,8 @@ follow-up stash entries at the PR stage (Ship Step 5 item 9):
 | Secret hygiene | `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`, run after every staged commit | PASS |
 | Backlog integrity | `backlogit sync` (116 artifacts) and `backlogit doctor` ("No issues found.") | PASS |
 | Coverage snapshot | `go test -cover` per package (host ran out of memory on parallel builds; rerun with `-p 1`): `version` 97.8%, `teams` 93.8%, `scheduler` 93.3%, `transcript` 91.2%, `audio` 87.5%, `updater` 84.5%, `cli` 82.0%, `capture` 81.7%, `browser` 72.9%, `config` 69.7% | PASS (recorded in `QUALITY_SCORE.md`) |
-| Full build and `go test -race ./...` | Not applicable: no Go source changed; CI runs the full suite and `golangci-lint` on the PR | N/A |
+| Full build and `go test -race ./...` | Not applicable: no Go source changed. On this docs/backlog-only PR, GitHub Actions runs `Detect code changes` (which includes the always-run tracked-file secret scan) and `Detect CLI-affecting changes`, and skips `Build, vet, lint & test` because `needs.changes.outputs.code == 'true'` is false | N/A |
+| Local commands executed | `go vet ./...`, `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` after each staged commit (including the pre-push fix commit), `go test -cover` per package, `backlogit sync`, and `backlogit doctor`; no full `go test -race ./...` or `golangci-lint` run | PASS |
 | Telemetry | `autoharness telemetry begin` returned `disabled`; no telemetry recorded | N/A |
 
 ## Strict-safety action record

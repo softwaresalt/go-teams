@@ -83,10 +83,14 @@ alters the bitstream fails this test and forces a deliberate golden update.
 ### Tier 4: tracked-file secret scan
 
 `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` in
-`internal/config/gitignore_test.go` scans every file reported by
-`git ls-files` for live passcodes and tokens. It reads the git index, so new
-files must be staged with `git add` before the test can see them. CI also runs
-a separate secret hygiene step on tracked files.
+`internal/config/gitignore_test.go` scans every git-tracked regular text file
+reported by `git ls-files`, skipping binary files and files larger than
+`8 MiB`. It flags tracked local `.env` filenames, Teams passcodes (`?p=` or
+`&p=` values on Teams meeting URLs), `SKYPE-TOKEN` JWT assignments, and
+`Bearer eyJ...` JWTs. It reads the git index, so new files must be staged with
+`git add` before the test can see them. CI runs a separate secret-hygiene step
+with the same rules and the same `8 MiB` limit on tracked files, including on
+documentation-only pull requests.
 
 ### Tier 5: integration-tagged live harness
 

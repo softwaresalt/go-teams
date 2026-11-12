@@ -187,8 +187,14 @@ teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=sy
   `--output`, `--output-file`, `--filename-template` / `--name-template`,
   `--profile-dir`, `--bot-name`, `--category`, `--browser-path`, `--headless`,
   `--headed`, and `--audio` / `--recap-audio`. The outer `--url` and `--queue`
-  are never forwarded. Flags written on a line come after the inherited ones
-  and take precedence.
+  are never forwarded. Flags written on a line come after the inherited ones,
+  so repeating the same flag on a line overrides the inherited value.
+* [Output target precedence](#output-target-precedence) still applies after the
+  outer and per-line flags are merged. An inherited outer `--output-file`
+  therefore outranks a per-line `--output` or `--output-dir`; only a per-line
+  `--output-file` or a positional output argument (`arg[1]`) overrides it.
+  Pass `--output-dir` or `--output-folder`, not `--output-file`, as the outer
+  flag with `--queue`.
 * Queue logs print every URL as `scheme://host/path` only. Query strings
   (including passcodes), userinfo, and fragments are removed by
   `teams.RedactArgs`.
@@ -219,9 +225,16 @@ Sign in using a visible capture session first and reuse that profile:
 .\bin\teams-cli.exe captions --url "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --output-file ".\transcripts\recap.md" --profile-dir ".\bin\profile" --headless
 ```
 
-For zero-config runs, an existing profile next to the executable is preferred
-over the working-directory `bin\profile`. Use an explicit `--profile-dir` for
-scheduled automation. Do not run two browser instances against the same profile.
+The default profile directory comes from `config.DefaultConfig()`. It is
+`%LOCALAPPDATA%\teams-cli\profile` on Windows when `LOCALAPPDATA` is set, and
+otherwise `teams-cli/profile` under `os.UserConfigDir()` (for example
+`~/.config/teams-cli/profile` on Linux). The code does not search for a profile
+next to the executable or in `bin\profile`; the `.\bin\profile` paths above are
+explicit `--profile-dir` values. When `UserDataDir` is empty, as with a direct
+library caller that bypasses `DefaultConfig`, no user-data directory is passed
+to Chromium and the browser uses a temporary profile that does not keep your
+sign-in. Use an explicit `--profile-dir` for scheduled automation. Do not run
+two browser instances against the same profile.
 Headless mode cannot complete interactive login, MFA, or lobby admission for
 you. Live capture continues until cancellation; recap capture exits after
 exporting available transcript entries and the optional AI summary, separated
@@ -247,6 +260,12 @@ Release build from `softwaresalt/go-teams`:
 .\bin\teams-cli.exe update --version v1.1.0 --force   # reinstall or downgrade
 ```
 
+* `internal/updater` resolves release assets named
+  `teams-cli-<goos>-<goarch>[.exe]` on any OS and architecture, but
+  `.github/workflows/release.yml` currently builds and publishes only
+  `windows/amd64` and `windows/arm64` binaries. On Linux or macOS,
+  `teams-cli update` returns `ErrAssetNotFound` until non-Windows assets are
+  added to `release.yml`
 * `--check` only reports availability and never modifies the executable
 * `--version <tag>` installs that release instead of the latest
 * `--force` reinstalls the target version even when it is already current, and

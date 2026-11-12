@@ -29,6 +29,7 @@ See the [capture design](docs/design-docs/2026-11-09-teams-browser-caption-and-r
 teams-cli [meeting-url] [output-markdown-path]          Capture directly
 teams-cli captions [meeting-url] [output-markdown-path] Capture live captions or a Meeting Recap
 teams-cli join <meeting-url> [output-markdown-path]     Join and capture (also accepts --url)
+teams-cli --queue <file>         Run every meeting listed in a batch queue file (also -q)
 teams-cli auth                   Sign in interactively and cache the session
 teams-cli schedule               Run as a daemon, joining meetings on a cron schedule
 teams-cli update                 Update teams-cli to the latest GitHub Release
@@ -68,9 +69,17 @@ paths containing spaces. Absolute destinations such as
 Flags for the root command, `captions`, and `join`:
 
 * `--url`, `-u`: input meeting or Meeting Recap URL
+* `--queue`, `-q`: batch queue file that lists one capture per line (see
+  [Batch queue mode](#batch-queue-mode))
 * `--output`, `-o`: Markdown file (`.md` or `.markdown`) or output directory
 * `--output-file`: explicit Markdown destination file
 * `--output-dir`: output directory, even if its name ends in `.md`
+* `--output-folder`: default folder for generated transcript names; behaves
+  like `--output-dir` with the lowest flag precedence
+* `--category`, `-c`: optional meeting category written to the transcript
+  header and used by the `<category>` filename placeholder
+* `--filename-template`: filename pattern used when output goes to a directory
+* `--name-template`: alias for `--filename-template`
 * `--profile-dir`: browser user-data directory to persist login state across runs
 * `--bot-name`: display name injected when joining as an unauthenticated guest
 * `--browser-path`: explicit Chrome, Edge, or Brave executable path (also reads `TEAMS_BROWSER_PATH`)
@@ -90,11 +99,101 @@ and `browser_path` in the config file applies to every command.
 
 Parent output directories are created automatically. Explicit file destinations
 are replaced on each successful capture admission; use unique paths if you
-need to retain previous results. Directory output generates timestamped names
-and rejects collisions. An existing directory passed to `--output` is always
-treated as a directory. Positional URL and destination arguments override
-their corresponding flags; output flag precedence is `--output-file`,
-then `--output`, then `--output-dir`.
+need to retain previous results. Directory output generates names from the
+filename template and rejects collisions. An existing directory passed to
+`--output` is always treated as a directory. Positional URL and destination
+arguments override their corresponding flags.
+
+### Output target precedence
+
+When several output settings are present, the most specific one wins. From
+highest to lowest precedence:
+
+1. positional output argument (`arg[1]`)
+2. `--output-file`
+3. `--output`
+4. `--output-dir`
+5. `--output-folder`
+6. config `output_file`
+7. config `output_folder`
+8. config `output_dir`
+
+A directory-selecting flag (`--output-dir`, `--output-folder`, or an `--output`
+value that is a directory) clears any `output_file` from the config file, so a
+command-line directory always replaces a configured file target. Config
+`output` and `default_path` follow the rules in [Configuration](#configuration).
+
+### Filename templates
+
+When output goes to a directory, the transcript file name comes from the
+filename template. The default template is:
+
+```text
+<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md
+```
+
+Set a different pattern with `--filename-template` (or its alias
+`--name-template`) or the `filename_template` config key. Supported
+placeholders:
+
+| Placeholder | Value |
+|---|---|
+| `<category>` | Value of `--category` / `category` |
+| `<concat-meeting-name>` | Meeting title words joined without separators, with filler words dropped |
+| `<meeting-name>` | Meeting title sanitized for use in a file name |
+| `<meeting-id>` | Identifier derived from the meeting URL, used when the title is unavailable |
+| `<YYYYMMDD>` | Capture date, for example `20261112` |
+| `<YYYY-MM-DD>` | Capture date with dashes |
+| `<HHMMSS>` | Capture time |
+| `<timestamp>` | Full date and time stamp |
+
+### Batch queue mode
+
+`--queue <file>` (short form `-q`) captures several meetings in one run. It is
+accepted on the root command, `captions`, and `join`:
+
+```powershell
+.\bin\teams-cli.exe --queue .\transcript-queue.txt --output-folder ".\transcripts" --headless
+```
+
+Each queue file line is one capture invocation:
+
+```text
+# Blank lines are ignored
+"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-1" --category standup
+teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-2" -o "C:\out\review.md"
+:: "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-3"
+```
+
+* Empty lines and lines that start with `::` (after leading whitespace) are
+  skipped. A leading `teams-cli` or `teams-cli.exe` token is stripped, so you
+  can paste a full command line.
+* Single quotes and double quotes group arguments that contain spaces. Windows
+  backslash paths pass through unchanged; inside double quotes, `\"` produces a
+  literal quote. An unterminated quote fails that line.
+* A line cannot contain `--queue` or `-q`; nested queues are rejected.
+* Every line runs as its own isolated invocation. A failing line is logged and
+  skipped, the remaining lines still run, and all failures are returned
+  together at the end.
+* After a line succeeds, the CLI comments it out in place by prepending `::`,
+  so rerunning the same queue file skips completed meetings. The update goes
+  through `writeQueueLines` (`internal/cli/queue.go`), which writes a temporary
+  file next to the queue file and renames it over the original. If the
+  temporary file or rename fails, it falls back to an in-place `os.WriteFile`
+  with `0o600` permissions. Line endings (LF or CRLF) are preserved.
+* Capture flags on the outer command are forwarded to every line
+  (`inheritedQueueFlags`): `--config`, `--output-folder`, `--output-dir`,
+  `--output`, `--output-file`, `--filename-template` / `--name-template`,
+  `--profile-dir`, `--bot-name`, `--category`, `--browser-path`, `--headless`,
+  `--headed`, and `--audio` / `--recap-audio`. The outer `--url` and `--queue`
+  are never forwarded. Flags written on a line come after the inherited ones
+  and take precedence.
+* Queue logs print every URL as `scheme://host/path` only. Query strings
+  (including passcodes), userinfo, and fragments are removed by
+  `teams.RedactArgs`.
+
+Pointing every line at one explicit `--output-file` replaces that file on each
+capture, so use `--output-folder` or per-line destinations for batches.
 
 ### Browser security posture
 
@@ -129,8 +228,8 @@ by a Markdown horizontal rule. AI summary discovery retries up to 20 times
 with 500 ms between attempts; transcript export still succeeds if no summary
 is available.
 
-A `--config` flag overrides the config file path, which defaults to the
-per-user configuration directory (for example `~/.config/teams-cli/config.yaml`).
+A `--config` flag overrides the config file path; see [Configuration](#configuration)
+for the default discovery order.
 When no config file exists on disk, `teams-cli` uses built-in defaults and opens
 a visible browser window automatically.
 
@@ -170,13 +269,91 @@ Local builds report the version `dev` and treat any release as an upgrade.
 Release builds embed their version through the `.github/workflows/release.yml`
 link flags.
 
+#### Update locking and concurrent updates
+
+Two `teams-cli update` processes cannot swap the same executable at once. Each
+update takes an inter-process lock next to the executable before it modifies
+anything:
+
+* `<exe>.lock` is created with `O_CREATE|O_EXCL` and `0o600` permissions. It
+  holds JSON owner metadata: `pid`, a random `token`, and `created_at`.
+* A contender polls every 50 ms and gives up after 15 seconds with
+  `ErrUpdateLocked`.
+* The lock fails closed. A lock older than 2 minutes only changes the
+  diagnostic message (an orphaned dead PID versus a live or reused PID);
+  `teams-cli` never evicts or deletes another process's lock on its own.
+* When the target path itself ends in `.old` (for example when you launch the
+  backup copy), `acquireSwapLockChain` locks every overlapping path in order,
+  shortest prefix first, so two updaters cannot deadlock or overlap. On Windows
+  and macOS the `.old` suffix is matched case-insensitively.
+* Executable names that end in `.lock` or `.lock.ctl` are rejected before
+  any change, because a lock marker could otherwise overwrite a live
+  executable.
+* Releasing the lock takes a short-lived `<exe>.lock.ctl` control lock, rereads
+  the lock file, and removes `<exe>.lock` only when the stored token matches.
+  The release ignores cancellation of the update context
+  (`context.WithoutCancel`) and waits at most 2 seconds, polling every 10 ms,
+  so pressing Ctrl+C does not leave a stale lock behind.
+
+While another update holds the lock, a process that finds the executable
+missing waits (up to the same 15 seconds) for the swap to restore it. This
+covers the brief window in which the running binary has been renamed to
+`.old` and the new binary is not yet in place; symlinked install paths are
+resolved first so the wait follows the real target.
+
+Before replacing the binary, the updater also verifies identity under the
+lock, so it never overwrites a binary it did not launch from:
+
+* `ErrConcurrentUpdateModified` means the executable changed since the process
+  started: it was deleted, replaced, or no longer matches the launch snapshot,
+  the running image, or the `.old` provenance. Rerun `teams-cli update`.
+* `ErrDowngrade` means the installed binary is already newer than the
+  requested release. Pass `--force` to downgrade deliberately.
+* `ErrUpdateLocked` means another update is in progress or left a lock
+  behind. `ErrConcurrentUpdateModified` wraps it, so both satisfy
+  `errors.Is(err, ErrUpdateLocked)`.
+
+The installed binary's own version comes from running `<exe> --version` with a
+30-second timeout and a 2-second output cleanup delay, so a stalled binary
+cannot hold the lock indefinitely.
+
+#### Manual lock and backup recovery
+
+Only recover by hand when no `teams-cli update` is running and the lock error
+persists. Follow these steps in order:
+
+1. Confirm that every `teams-cli update` process has exited. Check the PID
+   named in the error message; the operating system can reuse a PID after a
+   crash, so a live PID does not by itself prove an update is running.
+2. If `<exe>` is missing and `<exe>.old` exists, restore the backup by
+   renaming `<exe>.old` back to `<exe>`.
+3. Remove `<exe>.lock` and any `<exe>.lock.ctl`.
+4. Run `teams-cli update` again.
+
+> [!WARNING]
+> Never delete `<exe>.lock` while an update might still be running. Removing
+> the lock early lets a second process swap the executable concurrently.
+
 ## Configuration
 
-The CLI reads a YAML configuration file:
+The CLI reads a YAML configuration file. Pass `--config <path>` (`-f`) to use a
+specific file. Without it, `teams-cli` uses the first file that exists:
+
+1. `./config.yaml` in the working directory
+2. `config.yaml` next to the executable
+3. the per-user config directory: `%APPDATA%\teams-cli\config.yaml` on
+   Windows, `~/.config/teams-cli/config.yaml` on Linux
+
+When none exists, built-in defaults apply. Keys you omit keep their built-in
+defaults. A sample file lives in [`config.example.yaml`](config.example.yaml).
 
 ```yaml
 output_dir: /home/user/.config/teams-cli/transcripts
+# output_file: /home/user/transcripts/standup.md   # fixed file path; takes precedence over output_dir
+filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
+category: standup
 profile_dir: /home/user/.config/teams-cli/profile
+browser_path: /usr/bin/google-chrome
 bot_name: Transcription Agent
 headless: true
 capture_audio: false # true also writes an .mp3 for live meetings and Meeting Recaps
@@ -186,19 +363,55 @@ meetings:
     cron: "0 9 * * 1-5"
 ```
 
+| Key | Alias | Meaning |
+|---|---|---|
+| `output_dir` | | Directory for generated transcript file names |
+| `output_folder` | `default_path` | Directory-only aliases for `output_dir`; `output_folder` wins over `default_path` |
+| `output` | | File-or-directory target (see below) |
+| `output_file` | | Explicit Markdown file path; overrides directory naming |
+| `filename_template` | `name_template` | Filename pattern for directory output |
+| `meeting_url` | `url` | Meeting or Meeting Recap URL to capture |
+| `category` | | Category for the transcript header and filename |
+| `profile_dir` | | Browser user-data directory |
+| `browser_path` | | Chrome, Edge, or Brave executable |
+| `bot_name` | | Display name for guest joins |
+| `headless` | `headed` | Browser visibility; `headed: true` forces a visible window |
+| `capture_audio` | `audio` | Also write an `.mp3` next to the transcript |
+| `meetings` | | Scheduled meetings (`name`, `url`, `cron`) used by `schedule` |
+
+`output_folder` and `default_path` only ever set the output directory. The
+separate `output` key accepts either a file or a directory. When `config.Load`
+reads it, a value ending in `.md` or `.markdown` unconditionally sets
+`output_file`, overriding any `output_file` in the same config file. Any
+other value sets `output_dir`. Because `output` is read after the other
+aliases, it also overrides `output_folder` and `default_path`. Validation
+requires `output_dir`, `profile_dir`, and `bot_name` to be non-empty, and every
+scheduled meeting needs a `url` and a `cron` expression.
+
+Omitting both `headless` and `headed` opens a visible browser window, so
+interactive sign-in works out of the box. Set `headless: true` for unattended
+runs. Command-line flags override every config value (see
+[Output target precedence](#output-target-precedence)).
+
 ## Project layout
 
 ```text
 cmd/teams-cli/        CLI entrypoint
-internal/cli/         Cobra command wiring
+internal/audio/       PCM-to-MP3 encoder for meeting and recap audio
+internal/browser/     chromedp allocator, stealth flags, live meeting and recap runner
+internal/capture/     Capture session, output paths, filename templates, and file writes
+internal/cli/         Cobra command wiring and batch queue runner
 internal/config/      Configuration model and YAML persistence
-internal/teams/       Teams meeting URL mutation
-internal/transcript/  Caption deduplication and Markdown writer
 internal/scheduler/   Cron schedule construction
-internal/browser/     chromedp allocator, stealth flags, and runner
-internal/updater/     Release lookup, SHA-256 verification, and executable swap
+internal/teams/       Teams meeting URL validation, mutation, and redaction
+internal/transcript/  Caption deduplication and Markdown writer
+internal/updater/     Release lookup, SHA-256 verification, locking, and executable swap
 internal/version/     Build metadata and semantic version comparison
 ```
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the dependency direction
+between these packages and [`docs/QUALITY_SCORE.md`](docs/QUALITY_SCORE.md) for
+per-package quality grades.
 
 ## Development
 

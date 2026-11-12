@@ -6,9 +6,9 @@ shipment: 018-S
 branch: feat/018-s-add-inter-process-lock-around-teams-cli-update-binary-swap-rollback-and-old-cleanup
 status: ready
 closure_status: READY
-compaction_status: pending
-merge_commit: pending
-pr: pending
+compaction_status: done
+merge_commit: 3be466618936f5bf7d2bbc2412d719264c4259db
+pr: 45
 ---
 
 ## Release scope
@@ -136,6 +136,57 @@ Revert the `018-S` merge commit on `main`. The change only affects the update
 command's swap path. No data migration is involved. An operator who finds a stale
 `<exe>.lock` follows the recovery steps in the error message; if the executable is
 missing, restore `<exe>.old` to `<exe>` first.
+
+## Post-merge closure
+
+PR #45 merged to `main` at `3be466618936f5bf7d2bbc2412d719264c4259db`
+(`2026-11-12T05:11:56Z`) with a merge commit (P-009). Dark Factory Mode (P-017)
+post-merge closure ran on `post-merge/018-update-interprocess-lock`:
+
+* Copilot shadow review raised four threads over two rounds on PR #45, all fixed in
+  scope under P-021 C1 (`feb47dd` and `06ef501`), replied to, and resolved. No thread
+  was out of scope, so no deferred scope expansion entry was captured.
+  `autoharness gate copilot-review` returned `SATISFIED` for the merged HEAD
+  `9562ebaeedd59d2dfa13e549d4ac29df55dde870` and again at the last-mile re-check, CI
+  passed, and the merge used a merge commit with no admin fallback.
+* `MERGE_CONFIRMED`: `gh pr view 45` returned `state: MERGED`, and
+  `git merge-base --is-ancestor 3be466618936f5bf7d2bbc2412d719264c4259db
+  origin/main` exited 0.
+* `autoharness gate pipeline-topology --phase lifecycle --shipment 018-S` passed on
+  the closure branch (`BRANCH_POST_MERGE_CLOSURE_ELIGIBLE`).
+* Pre-close snapshot: `018-F`, `018.001-T`, and `018.002-T` already resided in
+  `.backlogit/archive/` with declared `status: done`, so all three were required in
+  `archived_ids`. Both tasks declared `parent_id: 018-F`; the shipment record was
+  `active`; no orphan declared `shipment_id: 018-S`.
+* P-015 fully-covered-root verification: `classify_shipment_close_path` returned
+  `CASCADE` (`018-F` is a root whose only descendants are the two manifest tasks), and
+  `assess_cascade_engine_semantics` for backlogit `1.12.0` (commit `718e710`, CLI) is
+  `VERIFIED` because `1.12` is now in `VERIFIED_CASCADE_ENGINE_MINOR_LINES`.
+  `backlogit shipment ship 018-S --sha 3be466618936f5bf7d2bbc2412d719264c4259db`
+  returned `archived_ids: [018.001-T, 018.002-T, 018-F, 018-S]` and
+  `returned_ids: []`. `archived_ids - allowed_ids` and `required_ids - archived_ids`
+  are both empty, both tasks kept `parent_id: 018-F`, `018-S` carries
+  `archived_status: shipped`, and no archive file showed as a working-tree deletion
+  (P-007).
+* Linked-deliberation disposition (`compute_linked_deliberation_disposition`):
+  `007-DL` (link kind `description` only, declared status `queued`) is
+  `retained_shared_reference` with live referrer `019-S`. It was excluded from
+  `allowed_ids` and `required_ids`, and the retained-deliberation preservation check
+  passed: `007-DL` is still in `.backlogit/queue/` with `status: queued`. It was
+  **not archived**; Cascade Close step 7 never archives a shared-reference
+  deliberation. The handoff offered archiving it only once it had zero live
+  governing references, which does not hold while `019-S` references it. `019-S`
+  stays responsible for it.
+* Source artifact cleanup: stash entry `2D0BAA19` was already archived by Stage
+  (skipped; present in `.backlogit/archive/stash.jsonl`). `018-F` carries no
+  `custom_fields.source_stash_id`. Stash entries `680A62E6` and `9A9D8106` and
+  shipment `019-S` were not touched.
+* Mandatory P-020 `compact-context` (`target: all`) ran: the session memory was
+  compacted to
+  `docs/memory/compacted/2026-11-11-018-S-update-interprocess-lock-compacted.md`
+  and the verbose originals (`018-S-update-interprocess-lock-memory.md` and
+  `018-S-stage-update-interprocess-lock-memory.md`) were archived under
+  `docs/archive/memory/2026-11-11/`. Recorded as `compaction_status: done` above.
 
 ## Handoff
 

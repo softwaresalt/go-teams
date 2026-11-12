@@ -159,15 +159,16 @@ accepted on the root command, `captions`, and `join`:
 Each queue file line is one capture invocation:
 
 ```text
-# Blank lines are ignored
+:: Lines that start with :: are comments or completed entries
 "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-1" --category standup
 teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-2" -o "C:\out\review.md"
-:: "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-3"
+::"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-3"
 ```
 
 * Empty lines and lines that start with `::` (after leading whitespace) are
-  skipped. A leading `teams-cli` or `teams-cli.exe` token is stripped, so you
-  can paste a full command line.
+  skipped. `::` is the only comment marker; a line starting with `#` is parsed
+  as arguments. A leading `teams-cli` or `teams-cli.exe` token is stripped, so
+  you can paste a full command line.
 * Single quotes and double quotes group arguments that contain spaces. Windows
   backslash paths pass through unchanged; inside double quotes, `\"` produces a
   literal quote. An unterminated quote fails that line.

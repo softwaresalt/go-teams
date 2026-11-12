@@ -67,11 +67,12 @@ documentation has drifted or remains ungraduated:
      and safe manual operator lock/backup recovery preconditions).
    * `## Configuration` omits `output_folder` (and `default_path`) as the
      directory-only alias for `output_dir`, the YAML `output` file-or-directory
-     target (`internal/config/config.go:192-198`, where `config.Load` treats
-     `.md`/`.markdown` values in `output` as `OutputFile` — overriding
-     `output_file` when `output_file` is unset — and other values as
-     `OutputDir`), `output_file`, `filename_template` (and `name_template`
-     alias), `category`, `browser_path`, and `audio` alias details.
+     target (`internal/config/config.go:192-198`, where in `config.Load` a
+     `.md`/`.markdown` value in `output` unconditionally sets `OutputFile` —
+     overriding `output_file` if both are present in `config.yaml` — and any
+     non-`.md`/`.markdown` value in `output` sets `OutputDir`), `output_file`,
+     `filename_template` (and `name_template` alias), `category`,
+     `browser_path`, and `audio` alias details.
    * `## Project layout` lists 8 of the 10 `internal/` packages, omitting
      `internal/audio/` and `internal/capture/`.
 2. **Missing progressive-disclosure maps (`docs/ARCHITECTURE.md` and `docs/QUALITY_SCORE.md`)**:
@@ -155,10 +156,11 @@ edges:
    `output_file` > config `output_folder` > config `output_dir`), self-update
    lock/recovery, configuration (specifying `output_folder` and `default_path`
    as directory-only aliases for `output_dir` separately from the YAML `output`
-   file-or-directory target in `internal/config/config.go:192-198`, where
-   `config.Load` treats `.md`/`.markdown` values in `output` as `OutputFile` —
-   overriding `output_file` when `output_file` is unset — and other values as
-   `OutputDir`), and project layout reference (1 file).
+   file-or-directory target in `internal/config/config.go:192-198`, where in
+   `config.Load` a `.md`/`.markdown` value in `output` unconditionally sets
+   `OutputFile` — overriding `output_file` if both are present in `config.yaml`
+   — and any non-`.md`/`.markdown` value in `output` sets `OutputDir`), and
+   project layout reference (1 file).
 2. **`020.002-T` (`docs/ARCHITECTURE.md`, `docs/QUALITY_SCORE.md`)**:
    Top-level domain map, dependency direction, runtime flows (including batch
    `--queue` `writeQueueLines` in `internal/cli/queue.go:200` atomic rename with

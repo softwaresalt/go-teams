@@ -47,8 +47,11 @@ for `go-teams` (`teams-cli`):
       reference, `018-S` self-update `<exe>.lock` / `<exe>.lock.ctl` & manual
       recovery, complete YAML config fields separating `output_folder`
       directory-only alias for `output_dir` from the YAML `output`
-      file-or-directory target in `internal/config/config.go:192-198`, and all
-      10 `internal/` packages in Project layout)
+      file-or-directory target in `internal/config/config.go:192-198` where in
+      `config.Load` a `.md`/`.markdown` value in `output` unconditionally sets
+      `OutputFile` — overriding `output_file` if both are present in
+      `config.yaml` — and any non-`.md`/`.markdown` value in `output` sets
+      `OutputDir`, and all 10 `internal/` packages in Project layout)
     * `020.002-T` (`Size: S` / `Complexity: low`, `docs`, independent):
       `docs/ARCHITECTURE.md`, `docs/QUALITY_SCORE.md` (progressive-disclosure
       maps signposted in `AGENTS.md`, including `writeQueueLines` in

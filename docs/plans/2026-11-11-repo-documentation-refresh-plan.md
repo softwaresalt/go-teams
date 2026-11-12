@@ -94,9 +94,10 @@ shipment **`020-S`** (sequenced after `019-S` via
   4. **Complete `## Configuration`**: Expand the YAML example and field
      reference to cover `output_dir`, `output_folder` (and `default_path`) as
      the directory-only alias for `output_dir`, the YAML `output`
-     file-or-directory target (`internal/config/config.go:192-198`, where
-     `config.Load` treats `.md`/`.markdown` values in `output` as `OutputFile` —
-     overriding `output_file` when `output_file` is unset — and other values as
+     file-or-directory target (`internal/config/config.go:192-198`, where in
+     `config.Load` a `.md`/`.markdown` value in `output` unconditionally sets
+     `OutputFile` — overriding `output_file` if both are present in
+     `config.yaml` — and any non-`.md`/`.markdown` value in `output` sets
      `OutputDir`), `output_file`, `filename_template` (and `name_template`
      alias), `meeting_url` (and `url` alias), `category`, `profile_dir`,
      `browser_path`, `bot_name`, `headless` (and `headed` alias),

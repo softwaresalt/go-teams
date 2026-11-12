@@ -231,10 +231,12 @@ otherwise `teams-cli/profile` under `os.UserConfigDir()` (for example
 `~/.config/teams-cli/profile` on Linux). The code does not search for a profile
 next to the executable or in `bin\profile`; the `.\bin\profile` paths above are
 explicit `--profile-dir` values. When `UserDataDir` is empty, as with a direct
-library caller that bypasses `DefaultConfig`, no user-data directory is passed
-to Chromium and the browser uses a temporary profile that does not keep your
-sign-in. Use an explicit `--profile-dir` for scheduled automation. Do not run
-two browser instances against the same profile.
+library caller that bypasses `DefaultConfig`, the result depends on the launch
+path. The chromedp allocator paths pass no user-data directory, so chromedp
+uses a temporary profile that does not keep your sign-in. The direct-exec
+headed launcher omits `--user-data-dir`, so Chromium uses its own default
+profile, which may retain credentials. Use an explicit `--profile-dir` for
+scheduled automation. Do not run two browser instances against the same profile.
 Headless mode cannot complete interactive login, MFA, or lobby admission for
 you. Live capture continues until cancellation; recap capture exits after
 exporting available transcript entries and the optional AI summary, separated

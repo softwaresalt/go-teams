@@ -37,8 +37,11 @@ and authorized access. `config.DefaultConfig()` sets `ProfileDir` to
 otherwise to `teams-cli/profile` under `os.UserConfigDir()` (for example
 `~/.config/teams-cli/profile` on Linux). The browser package performs no
 fallback search: when `Options.UserDataDir` is empty, as with a direct library
-caller that bypasses `DefaultConfig`, no user-data directory is passed to
-Chromium and the session is not persisted. Automation should supply
+caller that bypasses `DefaultConfig`, behavior depends on the launch path. The
+chromedp allocator paths pass no user-data directory, so chromedp uses a
+temporary profile and the session is not persisted. The direct-exec headed
+launcher omits `--user-data-dir`, so Chromium uses its own default profile,
+which may retain credentials. Automation should supply
 `--profile-dir` explicitly. Browser profiles contain credentials and must
 never be committed or shared.
 

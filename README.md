@@ -302,7 +302,9 @@ covers the brief window in which the running binary has been renamed to
 resolved first so the wait follows the real target.
 
 Before replacing the binary, the updater also verifies identity under the
-lock, so it never overwrites a binary it did not launch from:
+lock, so it never overwrites a binary it did not launch from. `--force` skips
+these identity checks but still takes the lock, because it exists for
+deliberate reinstalls and downgrades:
 
 * `ErrConcurrentUpdateModified` means the executable changed since the process
   started: it was deleted, replaced, or no longer matches the launch snapshot,

@@ -84,8 +84,14 @@ model family.
 * `ruleset`: (Optional) Path to a ruleset file. Defaults to
   `.github/copilot-review-instructions.md` if present, otherwise uses the
   built-in harness review ruleset.
-* `output_mode`: (Optional) `consensus-only` (return only high-confidence findings)
-  or `full` (default — return consensus + majority + unique with confidence labels).
+* `output_mode`: (Optional) `consensus-only` or `full` (default — return
+  consensus + majority + unique with confidence labels). `consensus-only` is a
+  display filter for `LOW`-confidence `MINOR` (`P2`) advisory observations only.
+  It never filters out or suppresses `P0` (`CRITICAL`) findings, `P1` (`MAJOR`)
+  findings when `REVIEWER_POOL_DEGRADED` is active, `DEGRADED_SINGLE_AGENT`
+  findings, or any confidence section the gate evaluates (for example `MEDIUM`
+  `P1` findings that need disposition). The gate always evaluates the unfiltered
+  finding set.
 * `post_remediation_review`: (Optional, default `true`) Whether to run the
   post-remediation re-review phase (Phase 7) after auto-fixes are applied. Set
   to `false` to disable re-review and exit after the remediation plan.
@@ -301,6 +307,7 @@ In `dispatch_mode: multi-agent`, route by `confidence_tier × severity`:
 | HIGH confidence + MAJOR severity | `gated_auto` or `manual` |
 | MEDIUM confidence + CRITICAL/MAJOR (majority or plurality) | `gated_auto` — confirm before applying |
 | LOW confidence + CRITICAL | `gated_auto` — unusual enough to flag despite single source |
+| LOW confidence + MAJOR (P1) | `gated_auto` when `REVIEWER_POOL_DEGRADED` is active (gate-blocking); `advisory` in full-pool mode (`active_reviewers == reviewers`) |
 | Any + MINOR | `advisory` |
 
 In `dispatch_mode: single-agent-declared-degradation`, route by severity only:
@@ -389,8 +396,13 @@ findings in the output report and halt the re-review loop — do not continue.
    reviewer agents in `multi-agent` mode, or re-run the in-session rubric in
    `single-agent-declared-degradation` mode.
 3. Aggregate and classify new findings per Phases 3–5.
-4. If new HIGH-confidence findings (or, in `single-agent-declared-degradation`,
-   new P0/P1 findings) are introduced: add them to the remediation plan,
+4. If new gate-blocking findings are introduced: in `multi-agent` mode, any new
+   `HIGH`-confidence `P0`/`P1` (`CRITICAL`/`MAJOR`) finding, any new `P0`
+   (`CRITICAL`) finding regardless of confidence (`HIGH`/`MEDIUM`/`LOW`), or,
+   when `REVIEWER_POOL_DEGRADED` is active, any new `P0`/`P1`
+   (`CRITICAL`/`MAJOR`) finding regardless of confidence
+   (`HIGH`/`MEDIUM`/`LOW`); in `single-agent-declared-degradation`, any new
+   P0/P1 finding. Add them to the remediation plan,
    apply any new `safe_auto` entries, and increment the cycle counter.
 5. If the cycle counter reaches 2 and findings remain: record them as
    `post_remediation_residual` in the output report. Do not apply further fixes.

@@ -3,7 +3,7 @@ title: 019-S ship session memory (steps 1 through 4.4)
 date: 2026-11-11
 shipment: 019-S
 feature: 019-F
-status: local-commits-unpushed
+status: pushed-with-feature-pr
 ---
 
 ## Items completed
@@ -36,6 +36,10 @@ depth 0 before Phase B pushes and opens the PR. `stash@{0}`
 * One in-scope P-021 C1 fix (adversarial-review introduction wording) landed as a
   separate commit rather than an amend, so the commit SHA recorded on `019.001-T`
   stays valid.
+* The Orchestrator `rubber-duck` review returned 4 findings (2 P1, 2 P2). All four
+  were fixed in a new commit before the push, without amending `4675ae9` or
+  `90f7f16`. The `consensus-only` finding targeted a `consensus_threshold` input
+  that does not exist; the real input is `output_mode`, so the fix was applied there.
 
 ## Errors encountered
 

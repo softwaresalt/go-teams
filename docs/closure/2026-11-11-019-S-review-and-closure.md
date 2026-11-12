@@ -72,6 +72,33 @@ external reviewer model.
 
 Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 
+### Review record
+
+| Field | Value |
+|---|---|
+| Reviewed diff identity | `main..cc49389` (`cc49389f89fa41b5a3e51c54a71ecd64dd697e36`, includes task commits `4675ae9` and `90f7f16`) |
+| Reviewed HEAD | The pre-push review covered `cc49389`. The review-fix commit that follows it contains the `rubber-duck` fixes below. The final PR HEAD SHA appears in the PR body `## Local Review Readiness` block. |
+| `dispatch_mode` | `single-agent-declared-degradation` |
+| `confidence_tier` | `DEGRADED_SINGLE_AGENT` |
+| `consensus_status` | `DEGRADED_SINGLE_AGENT (non-consensus)` |
+| `post_remediation.status` | `"skipped (mode: report-only)"` |
+
+### Pre-push rubber-duck findings
+
+Four `rubber-duck` findings were fixed in a separate commit before PR creation
+(task commits `4675ae9` and `90f7f16` were not amended):
+
+* P1: `output_mode: consensus-only` could hide blocking findings. It is now a
+  display filter for `LOW`-confidence `MINOR` (`P2`) advisory observations only.
+  It never suppresses `P0` findings, `P1` findings under `REVIEWER_POOL_DEGRADED`,
+  `DEGRADED_SINGLE_AGENT` findings, or any confidence section the gate evaluates.
+* P1: Phase 7 step 4 re-review now uses the full gate-blocking rule from
+  Phases 3 to 5 instead of "new HIGH-confidence findings".
+* P2: Phase 5 gained a `LOW confidence + MAJOR (P1)` route: `gated_auto` when
+  `REVIEWER_POOL_DEGRADED` is active, `advisory` in full-pool mode.
+* P2: This review record now carries the reviewed diff identity, confidence
+  tier, consensus status, and post-remediation status.
+
 ## Follow-ups
 
 None captured. No P-021 deferred scope expansion entry was needed.
@@ -118,4 +145,5 @@ documentation, with no data migration.
 
 Related [decision](../decisions/2026-11-11-harness-review-fallback-and-deliberation-hygiene-deliberation.md)
 and [plan](../plans/2026-11-11-harness-review-fallback-and-deliberation-hygiene-plan.md).
-Local commits are unpushed pending Orchestrator `rubber-duck` review.
+Local review fixes from the pre-push `rubber-duck` pass are committed on the
+feature branch and pushed with the feature PR.

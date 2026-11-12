@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -511,8 +512,9 @@ func newUpdater(cfg Config, executable func() (string, error)) *Updater {
 	}
 	if cfg.ExecutablePath == "" {
 		if executable == nil {
-			u.launchSnapshot = processSnapshot.snapshot
-			u.launchSnapshotErr = processSnapshot.err
+			process := captureProcessSnapshot()
+			u.launchSnapshot = process.snapshot
+			u.launchSnapshotErr = process.err
 		} else {
 			u.launchSnapshotInjected = true
 			path, err := executable()
@@ -660,15 +662,22 @@ type executableSnapshot struct {
 	concurrent bool
 }
 
-// On Linux procfs refers to the executable's backing file even if its pathname
-// changes. Elsewhere this is only an early pathname snapshot, not proof that
-// the file still represented the launch image when initialization began.
-// Neither approach proves that file contents already modified before this
-// snapshot match the bytes mapped when the process was started.
-var processSnapshot = func() struct {
+// processSnapshotResult is the lazily captured identity of the running image.
+type processSnapshotResult struct {
 	snapshot executableSnapshot
 	err      error
-} {
+}
+
+// On Linux procfs refers to the executable's backing file even if its pathname
+// changes. Elsewhere this is only an early pathname snapshot, not proof that
+// the file still represented the launch image when the snapshot was taken.
+// Neither approach proves that file contents already modified before this
+// snapshot match the bytes mapped when the process was started.
+//
+// The snapshot reads and hashes the whole executable, so it is captured on the
+// first New call that needs it (the update command path) instead of at package
+// initialization, which would charge every unrelated CLI invocation.
+var captureProcessSnapshot = sync.OnceValue(func() processSnapshotResult {
 	path := "/proc/self/exe"
 	var err error
 	if runtime.GOOS != "linux" {
@@ -678,11 +687,8 @@ var processSnapshot = func() struct {
 	if err == nil {
 		snapshot, err = snapshotExecutable(path)
 	}
-	return struct {
-		snapshot executableSnapshot
-		err      error
-	}{snapshot, err}
-}()
+	return processSnapshotResult{snapshot, err}
+})
 
 func snapshotExecutable(path string) (executableSnapshot, error) {
 	var snapshot executableSnapshot
@@ -1160,9 +1166,30 @@ func (u *Updater) swap(ctx context.Context, exe, tmp string, baseline executable
 	return true, nil
 }
 
+// installedVersionProbeTimeout bounds the installed-binary version probe, which
+// runs while the swap lock is held. versionProbeWaitDelay bounds output-pipe
+// cleanup after the probe is killed.
+const (
+	installedVersionProbeTimeout = 30 * time.Second
+	versionProbeWaitDelay        = 2 * time.Second
+)
+
 func readInstalledVersion(ctx context.Context, exe string) (string, error) {
-	output, err := exec.CommandContext(ctx, exe, "--version").Output()
+	return readInstalledVersionWithTimeout(ctx, exe, installedVersionProbeTimeout)
+}
+
+// readInstalledVersionWithTimeout runs exe --version with a dedicated deadline
+// so a stalled subprocess cannot hold the swap lock indefinitely.
+func readInstalledVersionWithTimeout(ctx context.Context, exe string, timeout time.Duration) (string, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, exe, "--version")
+	cmd.WaitDelay = versionProbeWaitDelay
+	output, err := cmd.Output()
 	if err != nil {
+		if probeErr := probeCtx.Err(); probeErr != nil {
+			err = errors.Join(err, probeErr)
+		}
 		return "", fmt.Errorf("run installed executable --version: %w", err)
 	}
 	fields := strings.Fields(string(output))

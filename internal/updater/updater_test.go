@@ -453,13 +453,32 @@ func TestConfiguredExecutableDoesNotBecomeLaunchSnapshot(t *testing.T) {
 }
 
 func TestNewDefaultUsesProcessInitializationSnapshot(t *testing.T) {
-	require.NoError(t, processSnapshot.err)
+	process := captureProcessSnapshot()
+	require.NoError(t, process.err)
 	u := New(Config{})
 	require.NoError(t, u.launchSnapshotErr)
 	require.NotNil(t, u.launchSnapshot.info)
-	assert.True(t, os.SameFile(processSnapshot.snapshot.info, u.launchSnapshot.info))
-	assert.Equal(t, processSnapshot.snapshot.digest, u.launchSnapshot.digest)
+	assert.True(t, os.SameFile(process.snapshot.info, u.launchSnapshot.info))
+	assert.Equal(t, process.snapshot.digest, u.launchSnapshot.digest)
 	assert.False(t, u.launchSnapshotInjected)
+}
+
+func TestReadInstalledVersionTimesOutStalledProbe(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.go")
+	program := `package main
+import "time"
+func main() { time.Sleep(time.Minute) }`
+	require.NoError(t, os.WriteFile(source, []byte(program), 0o600))
+	built := filepath.Join(dir, "stall.exe")
+	output, err := exec.Command("go", "build", "-o", built, source).CombinedOutput()
+	require.NoError(t, err, "%s", output)
+
+	start := time.Now()
+	_, err = readInstalledVersionWithTimeout(context.Background(), built, 300*time.Millisecond)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 10*time.Second)
 }
 
 func TestUpdateNonForceSelfUpdateRejectsInPlaceRunningImageChange(t *testing.T) {

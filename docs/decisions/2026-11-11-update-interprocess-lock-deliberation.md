@@ -315,8 +315,15 @@ fail-closed `<exe>.lock.ctl`:
      `u.cfg.ExecutablePath == ""`) that inspects the on-disk `exe` under
      `<exe>.lock` and rejects the swap with `ErrDowngrade` /
      `ErrConcurrentUpdateModified` if the on-disk binary at `exe` is already at
-     a version newer than `res.LatestVersion` (or was replaced since B's running
-     image launched), verified by
+     a version newer than `res.LatestVersion` or was replaced since Go package
+     initialization (`processSnapshot`, using `/proc/self/exe` on Linux and
+     `os.Executable()` on Windows/macOS, or `u.osExecutable` in tests) combined
+     with the under-lock `installedVersion` check
+     (`installed == u.cfg.CurrentVersion` when `CurrentVersion != "dev"` and
+     `installed <= res.LatestVersion`; any sub-millisecond replacement with an
+     identical version string before Go package `init()` on non-procfs platforms
+     is an accepted stdlib-only boundary and NOT a required check or defect),
+     verified by
      `TestUpdateRejectsLateSnapshotDowngradeAfterConcurrentUpgradeWithoutForce`
      and
      `TestExecutablePathPreservesLegitimateOldFilenameAndFailsClosedOnRenamedRunningImage`.

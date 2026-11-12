@@ -153,8 +153,15 @@ that peer's final rename fails, rollback also fails, leaving neither `<exe>` nor
          `u.cfg.ExecutablePath == ""`) that inspects the on-disk `exe` under
          `<exe>.lock` and rejects the swap with `ErrDowngrade` /
          `ErrConcurrentUpdateModified` if the on-disk binary at `exe` is already
-         at a version newer than `res.LatestVersion` (or was replaced since B's
-         running image launched).
+         at a version newer than `res.LatestVersion` or was replaced since Go
+         package initialization (`processSnapshot`, using `/proc/self/exe` on
+         Linux and `os.Executable()` on Windows/macOS, or `u.osExecutable` in
+         tests) combined with the under-lock `installedVersion` check
+         (`installed == u.cfg.CurrentVersion` when `CurrentVersion != "dev"` and
+         `installed <= res.LatestVersion`; any sub-millisecond replacement with
+         an identical version string before Go package `init()` on non-procfs
+         platforms is an accepted stdlib-only boundary and NOT a required check
+         or defect).
      * Implement `acquireSwapLock(ctx context.Context, exe string) (release func() error, err error)`
        around `lockPath := exe + lockSuffix` and `ctlPath := lockPath + lockCtlSuffix`:
        - **Fail-closed lock acquisition — zero automatic eviction of `<exe>.lock`

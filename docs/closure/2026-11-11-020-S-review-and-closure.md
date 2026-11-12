@@ -4,9 +4,11 @@ date: 2026-11-11
 feature: 020-F
 shipment: 020-S
 branch: feat/020-s-update-and-complete-go-teams-repository-documentation-and-graduate-013-s-018-s-design-decisions
-status: review-complete
+status: closed
 closure_status: READY
-compaction_status: pending
+compaction_status: done
+merge_commit: 480e7162851583fe684598e50d2c0b2bc0a45f7c
+pull_request: 50
 ---
 
 ## Release scope
@@ -89,15 +91,55 @@ Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 
 ## Follow-ups
 
-The grading work surfaced improvements that are outside this documentation
-shipment. They are recorded in `docs/QUALITY_SCORE.md` and are candidates for
-follow-up stash entries at the PR stage (Ship Step 5 item 9):
+The grading work and the Ship pass surfaced improvements that are outside this
+documentation shipment. They were stashed at post-merge closure (Ship Step 6
+item 6) for Stage triage:
 
-* Add a POSIX-only test asserting the `0o700` and `0o600` modes created by
-  `internal/capture`.
-* Raise `internal/config` coverage above 80% with alias and precedence cases.
-* Add a Windows CI job so Windows-only tests run outside developer machines.
-* `010-S` (live Teams verification) remains queued and untouched.
+| Stash ID | Follow-up |
+|---|---|
+| `70ABBB2C` | POSIX-only test asserting the `0o700` and `0o600` modes created by `internal/capture` |
+| `A368D60E` | Raise `internal/config` coverage above 80% with alias and precedence cases |
+| `D3A9CBD0` | Add a Windows CI job so Windows-only tests run outside developer machines |
+| `EC6D1CAF` | Publish non-Windows release assets or document Windows-only `update` support (`release.yml` builds `windows/amd64` and `windows/arm64` only) |
+
+`010-S` (live Teams verification) remains queued and untouched.
+
+## Post-merge closure
+
+| Field | Value |
+|---|---|
+| Feature PR | #50, merge commit `480e7162851583fe684598e50d2c0b2bc0a45f7c`, merge commit strategy (P-009) |
+| Merge confirmation | `state: MERGED`; `git merge-base --is-ancestor` against `origin/main` returned 0 |
+| Close path | P-015 verified fully-covered-root cascade (`020-F` is a root, and its three children are all manifest members) |
+| Command | `backlogit shipment ship 020-S --sha 480e7162851583fe684598e50d2c0b2bc0a45f7c` |
+| `archived_ids` | `020.001-T`, `020.002-T`, `020.003-T`, `020-F`, `020-S` |
+| `returned_ids` | empty |
+| `allowed_ids` / `required_ids` | Tasks, `020-F`, and `020-S` were all required: the tasks and `020-F` were relocated to `.backlogit/archive/` earlier but declared `status: done`, so none was truly archived before the close. `009-DL` was in neither set. |
+| Unexpected artifacts / missing required | none / none |
+| `parent_id` preservation | `020.001-T`, `020.002-T`, `020.003-T` all kept `parent_id: 020-F` |
+| Final records | `020-S`: `archived_status: shipped`; tasks and `020-F`: `archived_status: done` |
+| Archive integrity (P-007) | No archive file reported as deleted |
+| Topology gate | `lifecycle` passed before the close (`BRANCH_POST_MERGE_CLOSURE_ELIGIBLE`) |
+
+### Source artifact cleanup
+
+| Artifact | Disposition | Result |
+|---|---|---|
+| Stash `6227A297` | already archived by Stage at harvest; `backlogit stash get` reports not found | skipped |
+| `009-DL` | `retained_engine_unverified` (linked through `020-F` `source_deliberation_id`; the cascade engine cannot verify it) | retained |
+
+Retained-deliberation preservation check: before the cascade `009-DL` was in
+`.backlogit/queue/` with `status: queued`; after the cascade it is in the same
+location with the same status, absent from `archived_ids`. Stage or the operator
+may archive it later under the post-closure rule once it has zero live
+governing or dependency references.
+
+### Compaction (P-020)
+
+`compact-context` ran at closure. It wrote
+`docs/memory/compacted/2026-11-11-020-S-repo-documentation-refresh-compacted.md`
+and moved the Ship and Stage memory records to `docs/archive/memory/2026-11-11/`.
+`compaction_status` is `done`.
 
 ## Verification evidence
 
@@ -143,6 +185,5 @@ records, with no data migration.
 
 Related [decision](../decisions/2026-11-11-repo-documentation-refresh-deliberation.md)
 and [plan](../plans/2026-11-11-repo-documentation-refresh-plan.md). Compaction
-(P-020) runs at post-merge closure; `compaction_status` stays `pending` until
-then. Phase B pushes the branch and opens the pull request after the
-Orchestrator's `rubber-duck` pass.
+(P-020) completed at post-merge closure; see the compacted
+[memory summary](../memory/compacted/2026-11-11-020-S-repo-documentation-refresh-compacted.md).

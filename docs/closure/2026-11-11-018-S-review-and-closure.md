@@ -69,13 +69,16 @@ folded in before this review.
 | Go | Errors wrapped with `%w` and classified through sentinel errors; contexts passed first; no goroutine in production code lacks cancellation | No action |
 | Maintainability | Lock helpers stay unexported and local to `internal/updater`; injection seams are unexported fields | No action |
 | Scope | Changes stay in the three authorized Go files plus `018-S` backlog, plan, decision, closure, and memory records; the operator's `.github/` and `docs/scratch/` edits are excluded | No action |
+| Correctness | Copilot round 1 (thread `PRRT_kwDOTStvas62eVwU`): the launch-image snapshot hashed the whole executable at package initialization, so every CLI invocation (capture, auth, `--help`, `--version`, the version subprocess) paid for a full binary read | Fixed in-scope (P-021 C1: completes the authorized launch-identity guard without changing its contract); the snapshot is now a `sync.OnceValue` captured on the first `New` that needs it, which only the update command path reaches, before any wait or network work. The identity reference point moves from package initialization to first updater construction |
+| Concurrency | Copilot round 1 (thread `PRRT_kwDOTStvas62eVwm`): the installed-version probe ran under the swap lock with no deadline, so a stalled `--version` would hold the lock until manual interruption | Fixed in-scope (P-021 C1: bounds the authorized lock's hold time); the probe has a 30s deadline and `Cmd.WaitDelay` of 2s, and `TestReadInstalledVersionTimesOutStalledProbe` covers it |
 
 Accepted boundary (not a defect): on platforms without `/proc/self/exe`, a
 sub-millisecond replacement of the executable with an identical version before
-package initialization cannot be distinguished using only the standard library.
-This is recorded in `018-F` as an accepted stdlib-only boundary.
+the updater captures its launch snapshot cannot be distinguished using only the
+standard library. This is recorded in `018-F` as an accepted stdlib-only boundary.
 
-Reviewed code HEAD: `009c23f790e155d1c5a21006cc6638c30d3bed52`.
+Reviewed code HEAD: `feb47dde772120d6fdeb5e44a1ddd4c9d350392f` (the final PR HEAD
+adds only documentation records on top of it).
 Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 
 ## Follow-ups
@@ -92,7 +95,7 @@ deferred scope expansion entry was created.
 | Integration compilation | `go vet -tags=integration ./...` | PASS |
 | Format | `gofmt -l cmd internal` (0 files listed) | PASS |
 | Lint | `golangci-lint run`, CI-pinned v1.64.8 with `GOTOOLCHAIN=go1.26.0` | PASS |
-| Race suite | `go test -race -count=1 ./...` (all packages) | PASS |
+| Race suite | `go test -race -count=1 ./...` (all packages), re-run after the Copilot round 1 fixes | PASS |
 | Flake check | `go test -race -count=20` on the cancellation test | PASS |
 | Secret hygiene | `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` | PASS |
 | Platform coverage | Windows only; Linux and macOS runtime behavior was not exercised locally and relies on CI | NOTED |

@@ -23,8 +23,11 @@ high-confidence findings; unique findings from a single model are preserved as
 low-confidence observations worth human attention. The result is a structured
 remediation queue with findings ordered by confidence × severity.
 
-After auto-fixes are applied, a post-remediation re-review phase re-dispatches the
-same reviewer pool over the fixed files to verify no new issues were introduced.
+After auto-fixes are applied (only when `mode` is not `report-only` and an
+`authorized_contract_scope` is provided), a post-remediation re-review phase
+re-dispatches the same reviewer pool over the fixed files to verify no new issues
+were introduced (or re-runs the in-session rubric in
+`single-agent-declared-degradation` mode).
 Recursion is capped at 2 cycles to prevent infinite loops.
 
 ## Why Adversarial

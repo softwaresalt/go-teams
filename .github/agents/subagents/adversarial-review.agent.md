@@ -229,7 +229,11 @@ Launch all reviewer agents **simultaneously** as parallel subagents. Each receiv
 * Its assigned model tier or Anchor Reviewer route instruction (prepend to the reviewer's system prompt:
   "You are operating as the Anchor Reviewer or Tier N reviewer. Use concise, precise findings only.")
 * Instruction to return **structured JSON findings only** — no prose summaries
-
+* `mode: report-only`, passed explicitly to every child `review` skill instance
+  (including the Anchor Reviewer and any Phase 7 re-reviewers) so the child never
+  enters the review skill's interactive or fix-applying workflow. Child reviewers
+  are always read-only; fix application stays with the parent agent under the
+  Phase 6 rules.
 Each reviewer produces a JSON array of findings:
 
 ```json
@@ -377,7 +381,7 @@ were introduced. This phase prevents a fix in one location from inadvertently
 breaking a related invariant.
 
 * `dispatch_mode: multi-agent`: re-dispatch the same reviewer pool over the fixed
-  files.
+  files, passing `mode: report-only` to every child reviewer as in Phase 2.
 * `dispatch_mode: single-agent-declared-degradation`: run an in-session
   severity-gated re-review over only the files modified by `safe_auto` fixes,
   without subagent pool redispatch. Evaluate residual P0/P1 findings under

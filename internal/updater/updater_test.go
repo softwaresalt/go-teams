@@ -1428,6 +1428,87 @@ func TestUpdateOverlappingBaseHeldBlocksOldInstallation(t *testing.T) {
 	assert.NoFileExists(t, old+".lock")
 }
 
+func TestUpdateOverlappingBaseHeldBlocksCaseVariantOldInstallation(t *testing.T) {
+	if !caseInsensitiveSuffixes() {
+		t.Skip("case-variant .old aliases only exist on case-insensitive filesystems")
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "teams-cli")
+	variant := exe + ".OLD"
+	baseTmp := filepath.Join(dir, "base-download")
+	variantTmp := filepath.Join(dir, "variant-download")
+	require.NoError(t, os.WriteFile(exe, []byte("base"), 0o755))
+	require.NoError(t, os.WriteFile(baseTmp, []byte("new base"), 0o755))
+	require.NoError(t, os.WriteFile(variantTmp, []byte("new variant"), 0o755))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	var once sync.Once
+	resumeSwap := func() { once.Do(func() { close(resume) }) }
+	defer resumeSwap()
+	u := New(Config{TestHooks: &TestHooks{AfterMoveAside: func(ctx context.Context) {
+		close(paused)
+		select {
+		case <-resume:
+		case <-ctx.Done():
+		}
+	}}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := u.swap(ctx, exe, baseTmp, executableSnapshot{}, "2.0.0", true)
+		done <- err
+	}()
+	select {
+	case <-paused:
+	case err := <-done:
+		t.Fatalf("base installation did not reach swap: %v", err)
+	case <-ctx.Done():
+		t.Fatal("base installation did not reach swap")
+	}
+
+	contender := New(Config{})
+	contender.lockPollInterval = time.Millisecond
+	waitCtx, stopWaiting := context.WithTimeout(ctx, 200*time.Millisecond)
+	updated, err := contender.swap(waitCtx, variant, variantTmp, executableSnapshot{}, "2.0.0", true)
+	stopWaiting()
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.False(t, updated)
+	// The paused base swap owns its rollback copy; the variant must not touch it.
+	assert.Equal(t, "base", string(mustReadFile(t, exe+".old")))
+
+	resumeSwap()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("base installation did not finish")
+	}
+	assert.Equal(t, "new base", string(mustReadFile(t, exe)))
+}
+
+func TestSwapRejectsTargetsCollidingWithLockMarkerNames(t *testing.T) {
+	for _, name := range []string{"teams-cli.lock", "teams-cli.lock.ctl", "teams-cli.lock.old", "teams-cli.LOCK"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			target := filepath.Join(dir, name)
+			tmp := filepath.Join(dir, "download")
+			require.NoError(t, os.WriteFile(target, []byte("current"), 0o755))
+			require.NoError(t, os.WriteFile(tmp, []byte("new"), 0o755))
+			u := New(Config{})
+			updated, err := u.swap(context.Background(), target, tmp, executableSnapshot{}, "2.0.0", true)
+			require.ErrorIs(t, err, errReservedMarkerName)
+			assert.False(t, updated)
+			assert.Equal(t, "current", string(mustReadFile(t, target)))
+			assert.Equal(t, "new", string(mustReadFile(t, tmp)))
+			entries, readErr := os.ReadDir(dir)
+			require.NoError(t, readErr)
+			assert.Len(t, entries, 2, "no lock or backup file may be created")
+		})
+	}
+}
+
 func TestSwapOldChainReleasesAcquiredLocksOnCancellation(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "teams-cli")
 	target := exe + ".old.old"

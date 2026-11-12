@@ -247,8 +247,27 @@ func (u *Updater) acquireSwapLock(ctx context.Context, exe string) (func() error
 	}
 }
 
+// errReservedMarkerName rejects executables whose names collide with the lock
+// marker namespace, because a marker could then overwrite a live executable.
+var errReservedMarkerName = errors.New("updater: executable name collides with a reserved lock marker suffix")
+
+// caseInsensitiveSuffixes reports whether the filesystem is commonly case
+// insensitive, so name suffixes must be compared case-folded.
+func caseInsensitiveSuffixes() bool {
+	return runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+}
+
+// hasReservedMarkerSuffix reports whether path ends with a suffix used for the
+// lock or control-lock marker of another installation. The comparison is
+// case-folded on every platform, which is conservative on case-sensitive volumes.
+func hasReservedMarkerSuffix(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	return strings.HasSuffix(name, lockSuffix) || strings.HasSuffix(name, lockSuffix+lockCtlSuffix)
+}
+
 // acquireSwapLockChain protects both the target and any executable whose backup
-// could overlap it. All contenders acquire the shortest prefix first.
+// could overlap it. All contenders acquire the shortest prefix first. It rejects
+// targets whose names collide with the marker namespace before any mutation.
 func (u *Updater) acquireSwapLockChain(ctx context.Context, exe string) (func() error, error) {
 	paths := []string{exe}
 	for path := exe; ; {
@@ -257,11 +276,16 @@ func (u *Updater) acquireSwapLockChain(ctx context.Context, exe string) (func() 
 			break
 		}
 		suffix := name[len(name)-len(oldSuffix):]
-		if suffix != oldSuffix && !(runtime.GOOS == "windows" && strings.EqualFold(suffix, oldSuffix)) {
+		if suffix != oldSuffix && !(caseInsensitiveSuffixes() && strings.EqualFold(suffix, oldSuffix)) {
 			break
 		}
 		path = path[:len(path)-len(oldSuffix)]
 		paths = append(paths, path)
+	}
+	for _, path := range paths {
+		if hasReservedMarkerSuffix(path) {
+			return nil, fmt.Errorf("%w: %s", errReservedMarkerName, path)
+		}
 	}
 
 	releases := make([]func() error, 0, len(paths))

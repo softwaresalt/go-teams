@@ -2,8 +2,9 @@
 title: Teams browser caption and recap capture
 date: 2026-11-09
 status: implemented
-feature: 011-F
-shipment: 011-S
+feature: 011-F, 013-F, 015-F, 017-F
+shipment: 011-S, 013-S, 015-S, 017-S
+deliberation: 002-DL, 006-DL
 ---
 
 ## Architecture and dependency direction
@@ -20,7 +21,8 @@ belongs to `internal/teams`. Configuration persistence remains in
 The capture path discovers Chrome, Edge, or Brave, or uses `--browser-path`
 and `TEAMS_BROWSER_PATH`. It launches a browser with a loopback CDP port,
 optional user-data directory, and `--headless=new` only when requested.
-Clean capture launch omits `AutomationControlled` and `--no-sandbox`.
+Clean capture launch omits `AutomationControlled` and keeps the Chromium
+sandbox enabled (see [Browser sandbox posture](#browser-sandbox-posture)).
 This does not redefine the separate legacy authentication allocator.
 
 Headed mode supports operator sign-in and meeting admission. When a profile
@@ -34,6 +36,72 @@ and authorized access. A zero-config run prefers an existing profile beside
 the executable, then working-directory `bin\profile`; automation should supply
 `--profile-dir` explicitly. Browser profiles contain credentials and must
 never be committed or shared.
+
+## Meeting URL validation and redaction
+
+Decision `002-DL` (shipment `013-S`) puts a trust boundary in front of browser
+launch and keeps secrets out of every diagnostic.
+
+**Ingress allowlist.** `teams.ValidateMeetingURL` is the single source of truth
+for whether an initial meeting URL is acceptable. It runs before any browser is
+allocated: `ChromeRunner.Join`, the live meeting path in `internal/browser`, and
+`teams.MutateJoinURL` all call it, so a validation failure never starts a
+process. The rules are:
+
+* the URL must parse, use `http` or `https`, and carry a host
+* embedded userinfo (`user:password@host`) is rejected
+* loopback hosts (`localhost`, `127.0.0.1`, `::1`) may use `http` or `https` so
+  synthetic fixtures keep working
+* every other host must use `https` and equal, or be a dot-delimited subdomain
+  of, a trusted Microsoft suffix: `teams.microsoft.com`, `teams.live.com`,
+  `teams.cloud.microsoft`, `sharepoint.com`, `microsoft.com`, `office.com`,
+  `sfx.ms`, or `aka.ms`
+
+Validation error messages name the scheme or host but never echo the raw URL.
+The check covers the initial URL only. Redirects that the browser follows after
+navigation are not intercepted; this is a documented residual risk, accepted
+because the meeting flow legitimately passes through Microsoft identity hosts.
+
+**Redaction.** `teams.RedactURL` reduces a URL to `scheme://host/path`,
+removing userinfo, the query string (which carries the `?p=` passcode and OAuth
+parameters), and the fragment. For input that cannot be parsed, it strips query
+and fragment text before splitting the path and returns a placeholder rather
+than risk leaking userinfo. `teams.RedactArgs` applies the same rule to every
+URL-shaped token in an argument list. Navigation errors, browser logs, and the
+batch queue logs and parse errors use these helpers; an unterminated quote in a
+queue line reports the problem without printing the line.
+
+**Rationale.** Meeting URLs are bearer links, and a transcription bot that
+navigates to attacker-supplied hosts could expose the signed-in profile. A
+host allowlist at the one ingress, plus redaction at every egress, is cheaper
+and easier to audit than scattered checks.
+
+## Browser sandbox posture
+
+Decisions `002-DL` and `006-DL` (shipments `013-S` and `017-S`) keep the
+Chromium sandbox enabled by default on every launch path and give containers an
+explicit opt-out.
+
+* `013-S` introduced `Options.DisableSandbox` and the `TEAMS_DISABLE_SANDBOX`
+  environment variable for the `chromedp` allocator paths (`AllocatorOptions`,
+  `StealthFlags`, and the headless meeting flags).
+* `017-S` extended the same opt-in to the direct-exec launcher. Before that,
+  `join --headed` and `captions` sessions started through `exec.Command` never
+  consulted the opt-in, so operators in root or container environments could
+  not disable the sandbox even with the variable set.
+* All paths now share one predicate, `shouldDisableSandbox`. It is true only
+  when `Options.DisableSandbox` is set or `TEAMS_DISABLE_SANDBOX` is `1` or
+  `true` (case-insensitive, trimmed).
+* `cleanBrowserArgsForOptions` builds the direct-exec arguments. When the
+  predicate is false, it emits neither `--no-sandbox` nor
+  `--disable-setuid-sandbox`. When it is true, it appends both flags before the
+  trailing `initialURL`, so the URL stays the last argument.
+* No flag, config key, or heuristic turns the opt-out on automatically; an
+  operator must choose it.
+
+**Rationale.** One shared predicate keeps the allocator and direct-exec paths
+from drifting apart, and a default-on sandbox means a workstation never loses a
+security boundary without someone asking for it.
 
 ## Live caption path
 
@@ -104,17 +172,25 @@ Tenant policy, localization, and UI changes can prevent summary extraction.
 | `teams-cli captions "<url>" "<output.md>"` | Live or recap capture |
 | `teams-cli join "<url>" "<output.md>"` | Explicit join/capture entrypoint |
 | `-u/--url` | Input URL when positional URL is absent |
+| `-q/--queue` | Batch queue file; one capture per line (see the README) |
 | `-o/--output` | File for `.md`/`.markdown`, otherwise directory |
 | `--output-file` | Explicit transcript path |
 | `--output-dir` | Directory regardless of extension |
+| `--output-folder` | Default directory for generated names; lowest flag precedence |
+| `-c/--category` | Category for the transcript header and filename |
+| `--filename-template`, `--name-template` | Filename pattern for directory output |
 | `--headless` | Headless clean-browser launch |
 | `--audio` | Also capture meeting or Recap audio to a same-basename `.mp3` |
 | `--recap-audio` | Also capture Meeting Recap audio to a same-basename `.mp3` |
 
-Positional inputs override flags. Output flags resolve as `--output-file`
-over `--output` over `--output-dir`. Existing directory targets remain
-directories. Explicit output selection overrides configured `output_file`.
-Parent directories are created as needed.
+Positional inputs override flags. Output settings resolve, from highest to
+lowest precedence, as the positional output argument, `--output-file`,
+`--output`, `--output-dir`, `--output-folder`, then the config keys
+`output_file`, `output_folder`, and `output_dir`. Existing directory targets
+remain directories. Explicit output selection overrides configured
+`output_file`. Parent directories are created as needed. The
+[README](../../README.md#output-target-precedence) documents the full
+reference.
 
 Explicit file destinations are truncated after admission, including their
 same-basename MP3 companion when audio is enabled. Reusing these paths is

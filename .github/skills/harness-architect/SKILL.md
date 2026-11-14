@@ -47,17 +47,17 @@ warn the operator that visibility is degraded and continue locally.
 
 * `${input:feature}`: (Required) Feature or chore ID such as `001-F`
 * `${input:tasks}`: (Optional) Comma-separated task IDs to scaffold.
-  When omitted, use all ready tasks under the feature.
+  When omitted, use all executable (`queued` or `active`) tasks under the feature.
 
 ## Workflow
 
-### Step 1: Claim the ready task set
+### Step 1: Claim the target task set
 
-1. Load the feature or chore and its ready descendants through backlog
+1. Load the feature or chore and its descendant tasks (`queued` or `active`) through backlog
    query or queue operations.
 2. If `${input:tasks}` is present, restrict the scope to that explicit
    task set.
-3. Exclude blocked, done, or otherwise non-ready work items.
+3. Exclude tasks whose status is `blocked`, `done`, or `archived`. Do **not** exclude a `queued` or `active` task merely because it has an intra-feature / intra-shipment `blocks` dependency on another task in the same batch: instead, sort the batch in topological dependency order so upstream structural stubs are created first, allowing downstream test harnesses in the same batch to compile against those stubs in the red phase. (Dependencies between tasks in the same feature govern the subsequent `build-feature` implementation order, not up-front harness generation.)
 4. Preserve the work-item-to-task mapping so each harness can be traced
    back to the correct backlog item.
 

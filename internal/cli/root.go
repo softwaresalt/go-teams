@@ -187,6 +187,7 @@ func newRootCommand(d *deps) *cobra.Command {
 		newCaptionsCommand(d, &configPath),
 		newScheduleCommand(d, &configPath),
 		newUpdateCommand(d),
+		newGenerateConfigCommand(d),
 	)
 	return root
 }

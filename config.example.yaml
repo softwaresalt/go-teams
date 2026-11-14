@@ -41,9 +41,9 @@
 #   <concat-meeting-name> meeting title with filler words removed, words joined
 #   <meeting-name>        meeting title with words joined by hyphens
 #   <meeting-id>          cleaned-up Teams meeting identifier
-#   <YYYYMMDD>            meeting date, for example 20261109
-#   <YYYY-MM-DD>          meeting date, for example 2026-11-09
-#   <HHMMSS>              meeting start time, for example 080000
+#   <YYYYMMDD>            capture date, for example 20261109
+#   <YYYY-MM-DD>          capture date, for example 2026-11-09
+#   <HHMMSS>              capture time, for example 080000
 #   <timestamp>           capture timestamp
 #   Alias: name_template
 # filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
@@ -84,7 +84,8 @@
 # ai_summary_delay: "30m"
 # lobby_timeout: "5m"
 
-# Batch queue file used by --queue and for deferred AI Summary entries.
+# Queue file where deferred --append-ai-summary entries are written. "teams-cli
+# schedule" sweeps it at startup. Defaults to transcription_queue.txt.
 # queue_file: "C:\\Transcripts\\Team\\transcription_queue.txt"
 
 # ---------------------------------------------------------------------------

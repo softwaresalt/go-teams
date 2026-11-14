@@ -1,7 +1,7 @@
 ---
 title: Architecture and Domain Map
 description: Domain map, enforced dependency direction, runtime flows, and security invariants for go-teams (teams-cli)
-date: 2026-11-11
+date: 2026-11-14
 ---
 
 ## System overview
@@ -269,7 +269,10 @@ never loads a configuration file and ignores the root `--config` flag:
   `config.WriteTemplate` (`generate-config`) also creates missing parent
   directories with `0o700` and generated configuration files with `0o600`,
   using `O_EXCL` unless `--force` is set, and rejects filenames that could
-  escape the target directory with `ErrInvalidConfigName`.
+  escape the target directory or collide with Windows reserved device names
+  with `ErrInvalidConfigName`. The `0o700` and `0o600` modes are enforced on
+  POSIX platforms; on Windows the files inherit the access control list of the
+  parent folder.
 * **Recap identity isolation.** Recap export is bound to the requested recap's
   tab, frame, and recording identity. Audio whose identity cannot be verified
   is rejected rather than captured.

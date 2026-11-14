@@ -1,7 +1,7 @@
 ---
 title: Quality Grades by Domain
 description: Honest quality grades, test coverage tiers, and live-verification gaps for each go-teams package
-date: 2026-11-11
+date: 2026-11-14
 ---
 
 ## How to read this document
@@ -42,7 +42,8 @@ signal, not a target; CI reports its own figure with
 Documentation grade for the repository as a whole is B: the README cover page,
 the [user guide](USER_GUIDE.md), [ARCHITECTURE.md](ARCHITECTURE.md), and the
 graduated design docs describe the shipped behavior, but no per-package GoDoc audit has been done and
-`docs/product-specs/` still holds a single blueprint document.
+`docs/product-specs/` holds two specification documents (the architecture
+blueprint and the scheduled live-call capture requirements).
 
 ## Test coverage tiers
 

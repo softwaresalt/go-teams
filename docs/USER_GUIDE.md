@@ -13,7 +13,9 @@ to the section you need through the contents list below.
 * [Getting started](#getting-started)
 * [Generating a configuration file](#generating-a-configuration-file)
 * [Commands](#commands)
-* [Command-line flags and output rules](#compiled-executable-and-explicit-output-file)
+* [Current capabilities and limits](#current-capabilities-and-limits)
+* [Quick Start (Interactive Live Captions MVP)](#quick-start-interactive-live-captions-mvp)
+* [Compiled executable and explicit output file](#compiled-executable-and-explicit-output-file)
 * [Output target precedence](#output-target-precedence)
 * [Filename templates](#filename-templates)
 * [Batch queue mode](#batch-queue-mode)
@@ -22,6 +24,8 @@ to the section you need through the contents list below.
 * [Headless automation](#headless-automation)
 * [Self-update](#self-update)
 * [Configuration](#configuration)
+* [Project layout](#project-layout)
+* [Development](#development)
 
 ## Why teams-cli exists
 
@@ -184,16 +188,18 @@ teams-cli generate-config C:\teams\team.yaml
 
 Rules to know:
 
-* The command prints the path it wrote and creates missing folders. Folders
-  are created readable only by you, and the file is created with owner-only
-  permissions.
+* The command prints the path it wrote and creates missing folders. On Linux
+  and macOS, new folders get mode `0o700` and the file gets mode `0o600`, so
+  only you can read them. On Windows these modes do not apply; the new folder
+  and file inherit the access control list of the parent folder.
 * An existing file is never overwritten. The command stops with an error
   unless you pass `--force`, which replaces the file atomically.
 * A positional argument that ends in `.yaml` or `.yml` is treated as the full
   file path, unless it is an existing folder or you also pass `--output-dir` or
   `--name`.
 * The filename must be a plain name. Names that contain path separators, `..`,
-  a drive letter or colon, or no name before the extension are rejected.
+  a drive letter or colon, no name before the extension, or a Windows reserved
+  device name such as `NUL`, `CON`, `COM1`, or `LPT1` are rejected.
 * The root `--config` / `-f` flag is not read by this command. The destination
   is set only by the options above.
 * The generated file is valid as written. With every setting commented out,
@@ -727,7 +733,7 @@ meetings:
 | `ai_summary_delay` | | Post-call delay before reopening Recap to append `# AI Summary` (default `30m` for `live-with-summary`) |
 | `lobby_timeout` | | Maximum pre-join / lobby wait window before aborting |
 | `queue_file` | | Path to `transcription_queue.txt` used to persist deferred `--append-ai-summary` entries |
-| `meetings` | | Scheduled meetings (`name`, `url`, `cron` or `at`, plus optional `mode`, `duration`, `idle_timeout`, `ai_summary_delay`, `lobby_timeout`, `category`, `capture_audio`/`audio`, `output_dir`) |
+| `meetings` | | Scheduled meetings (`name`, `url`, `cron` or `at`, plus optional `mode`/`capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`, `lobby_timeout`, `category`, `capture_audio`/`audio`, `output_dir`) |
 
 `output_folder` and `default_path` only ever set the output directory. The
 separate `output` key accepts either a file or a directory. When `config.Load`

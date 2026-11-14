@@ -77,9 +77,9 @@ const templateYAML = `# teams-cli configuration file
 #   <concat-meeting-name> meeting title with filler words removed, words joined
 #   <meeting-name>        meeting title with words joined by hyphens
 #   <meeting-id>          cleaned-up Teams meeting identifier
-#   <YYYYMMDD>            meeting date, for example 20261109
-#   <YYYY-MM-DD>          meeting date, for example 2026-11-09
-#   <HHMMSS>              meeting start time, for example 080000
+#   <YYYYMMDD>            capture date, for example 20261109
+#   <YYYY-MM-DD>          capture date, for example 2026-11-09
+#   <HHMMSS>              capture time, for example 080000
 #   <timestamp>           capture timestamp
 #   Alias: name_template
 # filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
@@ -120,7 +120,8 @@ const templateYAML = `# teams-cli configuration file
 # ai_summary_delay: "30m"
 # lobby_timeout: "5m"
 
-# Batch queue file used by --queue and for deferred AI Summary entries.
+# Queue file where deferred --append-ai-summary entries are written. "teams-cli
+# schedule" sweeps it at startup. Defaults to transcription_queue.txt.
 # queue_file: "C:\\Transcripts\\Team\\transcription_queue.txt"
 
 # ---------------------------------------------------------------------------
@@ -210,6 +211,28 @@ func ResolveTemplatePath(outputDir, name string) (string, error) {
 	return filepath.Join(dir, fileName), nil
 }
 
+// ExpandPath expands user and environment path prefixes (%VAR%, $VAR, and a
+// leading ~) in raw using the same rules as other configuration paths, after
+// trimming surrounding whitespace.
+func ExpandPath(raw string) string {
+	return expandUserPath(strings.TrimSpace(raw))
+}
+
+// isWindowsReservedName reports whether name, compared case-insensitively on
+// the stem before the first ".", is a Windows reserved device name (CON, PRN,
+// AUX, NUL, COM1-COM9, LPT1-LPT9). Such names cannot be created as ordinary
+// files on Windows, so they are rejected on every platform for portability.
+func isWindowsReservedName(name string) bool {
+	stem, _, _ := strings.Cut(name, ".")
+	switch strings.ToUpper(strings.TrimSpace(stem)) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
+}
+
 // validateTemplateName checks that name is a bare filename and returns it
 // trimmed, with a .yaml extension appended when it has no YAML extension.
 func validateTemplateName(name string) (string, error) {
@@ -221,7 +244,8 @@ func validateTemplateName(name string) (string, error) {
 		strings.ContainsAny(trimmed, `/\:`),
 		strings.HasSuffix(trimmed, "."),
 		filepath.VolumeName(trimmed) != "",
-		strings.TrimSpace(strings.TrimSuffix(trimmed, ext)) == "":
+		strings.TrimSpace(strings.TrimSuffix(trimmed, ext)) == "",
+		isWindowsReservedName(trimmed):
 		return "", fmt.Errorf("config: filename %q: %w", name, ErrInvalidConfigName)
 	}
 	if !strings.EqualFold(ext, ".yaml") && !strings.EqualFold(ext, ".yml") {
@@ -261,12 +285,12 @@ func createTemplate(path string, content []byte) error {
 		return fmt.Errorf("config: write template %s: %w", path, err)
 	}
 	if _, err := f.Write(content); err != nil {
-		_ = f.Close()       // best-effort close; the write error is returned
+		_ = f.Close()       // best-effort close on the failure path; the write error is the one returned
 		_ = os.Remove(path) // best-effort removal of the partial file we created
 		return fmt.Errorf("config: write template %s: %w", path, err)
 	}
 	if err := f.Sync(); err != nil {
-		_ = f.Close()
+		_ = f.Close()       // best-effort close on the failure path; the sync error is the one returned
 		_ = os.Remove(path) // best-effort removal of the partial file we created
 		return fmt.Errorf("config: sync template %s: %w", path, err)
 	}
@@ -291,12 +315,12 @@ func replaceTemplate(dir, path string, content []byte) error {
 		return fmt.Errorf("config: chmod temp file: %w", err)
 	}
 	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
+		_ = tmp.Close()        // best-effort close on the failure path; the write error is the one returned
 		_ = os.Remove(tmpName) // best-effort temp cleanup
 		return fmt.Errorf("config: write temp file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
+		_ = tmp.Close()        // best-effort close on the failure path; the sync error is the one returned
 		_ = os.Remove(tmpName) // best-effort temp cleanup
 		return fmt.Errorf("config: sync temp file: %w", err)
 	}

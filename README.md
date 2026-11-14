@@ -49,19 +49,19 @@ Then follow three steps:
 1. Create a commented configuration file:
 
    ```powershell
-   teams-cli generate-config
+   .\bin\teams-cli.exe generate-config
    ```
 
 2. Sign in interactively once to cache your browser session:
 
    ```powershell
-   teams-cli auth
+   .\bin\teams-cli.exe auth
    ```
 
 3. Capture live captions, or export a Meeting Recap:
 
    ```powershell
-   teams-cli captions "<meeting-or-recap-url>"
+   .\bin\teams-cli.exe captions "<meeting-or-recap-url>"
    ```
 
 Transcripts are written to the `output_dir` you set in the generated
@@ -81,7 +81,9 @@ Transcripts are written to the `output_dir` you set in the generated
 | `teams-cli update` | Update to the latest GitHub Release |
 | `teams-cli --version` | Print the installed version |
 
-The [user guide](docs/USER_GUIDE.md#commands) lists every flag.
+The [user guide](docs/USER_GUIDE.md#commands) lists every command, and
+[Compiled executable and explicit output file](docs/USER_GUIDE.md#compiled-executable-and-explicit-output-file)
+documents the capture flags.
 
 ## Key rules at a glance
 

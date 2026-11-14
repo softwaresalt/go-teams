@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -83,6 +84,19 @@ func TestTemplateYAMLContentAndLoad(t *testing.T) {
 		}
 		for _, mode := range []string{"auto", "ephemeral-live", "live-with-summary", "past-recap"} {
 			assert.Containsf(t, tpl, mode, "template must explain capture mode %s", mode)
+		}
+	})
+
+	t.Run("documents every Config and MeetingSchedule yaml key", func(t *testing.T) {
+		for _, typ := range []reflect.Type{reflect.TypeOf(Config{}), reflect.TypeOf(MeetingSchedule{})} {
+			for i := range typ.NumField() {
+				tag := typ.Field(i).Tag.Get("yaml")
+				key, _, _ := strings.Cut(tag, ",")
+				if key == "" || key == "-" {
+					continue
+				}
+				assert.Containsf(t, tpl, key, "template must document %s yaml key %q", typ.Name(), key)
+			}
 		}
 	})
 
@@ -208,6 +222,10 @@ func TestResolveTemplatePath(t *testing.T) {
 		{"bare yml", ".yml"},
 		{"bare upper yaml", ".YAML"},
 		{"trailing dot", "config."},
+		{"reserved NUL", "NUL"},
+		{"reserved con with extension", "con.yaml"},
+		{"reserved COM1 yml", "COM1.yml"},
+		{"reserved lowercase lpt9", "lpt9"},
 	}
 	for _, tc := range invalid {
 		t.Run("rejects "+tc.name, func(t *testing.T) {
@@ -310,6 +328,17 @@ func TestWriteTemplate(t *testing.T) {
 		require.ErrorIs(t, WriteTemplate("", false), ErrInvalidConfigName)
 		require.ErrorIs(t, WriteTemplate("   ", true), ErrInvalidConfigName)
 	})
+}
+
+func TestExpandPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("EXPAND_PATH_TEST", "expanded")
+
+	assert.Equal(t, expandUserPath("~/cfg"), ExpandPath("  ~/cfg  "))
+	assert.Equal(t, "expanded", ExpandPath("$EXPAND_PATH_TEST"))
+	assert.Empty(t, ExpandPath("   "))
 }
 
 func TestExampleConfigMatchesTemplateYAML(t *testing.T) {

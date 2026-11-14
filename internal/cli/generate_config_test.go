@@ -159,3 +159,80 @@ func TestGenerateConfigCommandRejectsInvalidName(t *testing.T) {
 	_, statErr = os.Stat(filepath.Join(parent, "escape.yaml"))
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
+
+func TestGenerateConfigPositionalEnvVarExpandedBeforeExtensionCheck(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "envfile", "team.yaml")
+	t.Setenv("GEN_CFG_TARGET", target)
+
+	// The raw argument "$GEN_CFG_TARGET" has no YAML extension; only the
+	// expanded value does, so it must be treated as the full file path.
+	out, err := runGenerate(t, "generate-config", "$GEN_CFG_TARGET")
+	require.NoError(t, err)
+	assert.Equal(t, target+"\n", out)
+	data, readErr := os.ReadFile(target)
+	require.NoError(t, readErr)
+	assert.Equal(t, config.TemplateYAML(), string(data))
+}
+
+func TestGenerateConfigPositionalDoesNotDoubleExpand(t *testing.T) {
+	base := t.TempDir()
+	// A directory whose real name contains a literal "$" and looks like a
+	// variable reference; it must not be expanded a second time.
+	literalDir := filepath.Join(base, "$GEN_CFG_LITERAL")
+	t.Setenv("GEN_CFG_LITERAL", "wrong")
+	t.Setenv("GEN_CFG_PARENT", literalDir)
+
+	out, err := runGenerate(t, "generate-config", "$GEN_CFG_PARENT/team.yaml")
+	require.NoError(t, err)
+	want := filepath.Join(literalDir, "team.yaml")
+	assert.Equal(t, want+"\n", out)
+	_, statErr := os.Stat(want)
+	require.NoError(t, statErr)
+	_, statErr = os.Stat(filepath.Join(base, "wrong"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "expanded directory must not be expanded again")
+
+	// Same guarantee for a positional directory argument.
+	out, err = runGenerate(t, "generate-config", "$GEN_CFG_PARENT")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(literalDir, "config.yaml")+"\n", out)
+}
+
+func TestGenerateConfigExistsErrorIsActionable(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("original"), 0o600))
+
+	_, err := runGenerate(t, "generate-config", "-d", dir)
+	require.ErrorIs(t, err, config.ErrConfigExists)
+	assert.Contains(t, err.Error(), "--force")
+}
+
+func TestGenerateConfigUsesInjectedWriter(t *testing.T) {
+	var gotPath string
+	var gotForce bool
+	d := generateConfigDeps(t)
+	d.writeTemplate = func(path string, force bool) error {
+		gotPath, gotForce = path, force
+		return nil
+	}
+	dir := t.TempDir()
+	var out bytes.Buffer
+	root := newRootCommand(d)
+	root.SetArgs([]string{"generate-config", "-d", dir, "--force"})
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+	require.NoError(t, root.Execute())
+	assert.Equal(t, filepath.Join(dir, "config.yaml"), gotPath)
+	assert.True(t, gotForce)
+	_, statErr := os.Stat(gotPath)
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "injected writer replaces the real write")
+}
+
+func TestGenerateConfigRejectsReservedDeviceNames(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"NUL", "con.yaml", "COM1.yml"} {
+		out, err := runGenerate(t, "generate-config", "-d", dir, "--name", name)
+		require.ErrorIsf(t, err, config.ErrInvalidConfigName, "name %q", name)
+		assert.Empty(t, out)
+	}
+}

@@ -424,3 +424,212 @@ func TestSessionRunRecapModeHonorsCaptionsOnlyFlag(t *testing.T) {
 type failWriter struct{ err error }
 
 func (f failWriter) Write(_ []byte) (int, error) { return 0, f.err }
+
+func TestSessionRunStopsAfterNominalDurationAndIdleTimeout(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.microsoft.com/meet/123456",
+		BotName:      "Bot",
+		Duration:     30 * time.Millisecond,
+		IdleTimeout:  20 * time.Millisecond,
+		PollInterval: 5 * time.Millisecond,
+	})
+	fm := &fakeMeeting{
+		events: []captionPair{{"Alice", "Initial statement."}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := s.Run(ctx, fm)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("expected watchdog to stop session before outer context timeout")
+	}
+	if s.LastTranscriptPath() == "" {
+		t.Fatalf("expected non-empty LastTranscriptPath")
+	}
+	if s.WasRecap() {
+		t.Fatalf("expected WasRecap() to be false for live call")
+	}
+}
+
+func TestSessionRunExtendsOvertimeWhileCaptionOrAudioActivityPersists(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.microsoft.com/meet/123456",
+		BotName:      "Bot",
+		Duration:     35 * time.Millisecond,
+		IdleTimeout:  45 * time.Millisecond,
+		PollInterval: 5 * time.Millisecond,
+		CaptionsOnly: true,
+	})
+	emitted := make(chan struct{})
+	fm := &fakeMeeting{
+		events:  []captionPair{{"Alice", "Start of call."}},
+		emitted: emitted,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		errCh <- s.Run(ctx, fm)
+	}()
+
+	<-emitted
+	// Feed periodic caption and audio activity heartbeats well past the 35ms nominal duration.
+	for i := 0; i < 6; i++ {
+		time.Sleep(20 * time.Millisecond)
+		if i%2 == 0 {
+			s.RecordCaptionActivity()
+		} else {
+			s.RecordAudioActivity()
+		}
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed < 120*time.Millisecond {
+		t.Fatalf("session stopped too early (%v); expected overtime continuation while activity persisted", elapsed)
+	}
+}
+
+func TestSessionRunStopsEarlyOnCallEndedSignal(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.microsoft.com/meet/123456",
+		BotName:      "Bot",
+		Duration:     10 * time.Second,
+		IdleTimeout:  20 * time.Millisecond,
+		PollInterval: 5 * time.Millisecond,
+		CaptionsOnly: true,
+	})
+	emitted := make(chan struct{})
+	fm := &fakeMeeting{
+		events:  []captionPair{{"Bob", "Wrapping up early."}},
+		emitted: emitted,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.Run(ctx, fm)
+	}()
+
+	<-emitted
+	s.RecordCallEnded()
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("expected call-ended signal to stop session well before 1s outer timeout")
+	}
+}
+
+type metadataMeeting struct {
+	fakeMeeting
+	meta browser.MeetingMetadata
+}
+
+func (m *metadataMeeting) MeetingMetadata() browser.MeetingMetadata {
+	return m.meta
+}
+
+func TestSessionRunUsesConfiguredMeetingTitleFallbackWhenDOMTitleEmpty(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.microsoft.com/meet/123456",
+		MeetingTitle: "Weekly Architecture Sync",
+		Category:     "ENG",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		Duration:     15 * time.Millisecond,
+		IdleTimeout:  10 * time.Millisecond,
+		PollInterval: 5 * time.Millisecond,
+		CaptionsOnly: true,
+	})
+	fm := &metadataMeeting{
+		fakeMeeting: fakeMeeting{events: []captionPair{{"Alice", "Hello."}}},
+		meta:        browser.MeetingMetadata{Title: ""},
+	}
+	if err := s.Run(context.Background(), fm); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	mdPath := s.LastTranscriptPath()
+	if !strings.Contains(filepath.Base(mdPath), "ENG-WeeklyArchitectureSync-transcript-") {
+		t.Fatalf("expected fallback MeetingTitle in filename, got %s", filepath.Base(mdPath))
+	}
+	b, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "Weekly Architecture Sync") {
+		t.Fatalf("expected fallback MeetingTitle in Markdown header, got:\n%s", string(b))
+	}
+
+	// Verify non-empty DOM title overrides the fallback.
+	dir2 := t.TempDir()
+	s2 := NewSession(SessionConfig{
+		OutputDir:    dir2,
+		MeetingURL:   "https://teams.microsoft.com/meet/123456",
+		MeetingTitle: "Fallback Name",
+		Category:     "ENG",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		Duration:     15 * time.Millisecond,
+		IdleTimeout:  10 * time.Millisecond,
+		PollInterval: 5 * time.Millisecond,
+		CaptionsOnly: true,
+	})
+	fm2 := &metadataMeeting{
+		fakeMeeting: fakeMeeting{events: []captionPair{{"Alice", "Hello."}}},
+		meta:        browser.MeetingMetadata{Title: "DOM Rich Title"},
+	}
+	if err := s2.Run(context.Background(), fm2); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !strings.Contains(filepath.Base(s2.LastTranscriptPath()), "ENG-DOMRichTitle-transcript-") {
+		t.Fatalf("expected DOM title to override fallback, got %s", filepath.Base(s2.LastTranscriptPath()))
+	}
+}
+
+func TestAppendAISummaryToFileAppendsWithoutOverwritingAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	mdPath := filepath.Join(dir, "live.md")
+	initial := "# Meeting Transcript\n\n> **Alice:** Live caption line.\n"
+	if err := os.WriteFile(mdPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendAISummaryToFile(mdPath, "Action items:\nFollow up tomorrow."); err != nil {
+		t.Fatalf("AppendAISummaryToFile failed: %v", err)
+	}
+	b, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstContent := string(b)
+	if !strings.Contains(firstContent, "Live caption line.") || !strings.Contains(firstContent, "# AI Summary") || !strings.Contains(firstContent, "Follow up tomorrow.") {
+		t.Fatalf("unexpected file content:\n%s", firstContent)
+	}
+	// Second call must be idempotent.
+	if err := AppendAISummaryToFile(mdPath, "Duplicate summary"); err != nil {
+		t.Fatalf("second AppendAISummaryToFile failed: %v", err)
+	}
+	b2, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b2) != firstContent {
+		t.Fatalf("expected idempotent append; got:\n%s", string(b2))
+	}
+}

@@ -96,8 +96,9 @@ Following the accepted deliberation in
          a duplicate extension to uppercase `.YAML`/`.YML`), and rejection
          (`errors.Is(err, ErrInvalidConfigName)`) of whitespace-only names,
          `"."`, `".."`, `"../evil.yaml"`, `"sub/config.yaml"`,
-         `'sub\config.yaml'`, volume-prefixed names, and bare `".yaml"` /
-         `".yml"`.
+         `'sub\config.yaml'`, volume-prefixed names, colon-bearing Windows
+         NTFS alternate-data-stream names (`"config.yaml:extra"`), and bare
+         `".yaml"` / `".yml"`.
      * `TestWriteTemplate`:
        - Test creation of nested parent directories, refusal to overwrite an
          existing file when `force == false` (`errors.Is(err, ErrConfigExists)`
@@ -155,7 +156,9 @@ Following the accepted deliberation in
          * `trimmed == ""` (whitespace-only `name` passed explicitly)
          * `trimmed == "."` or `trimmed == ".."`
          * `strings.Contains(trimmed, "..")`
-         * `strings.ContainsAny(trimmed, `/\`)`
+         * `strings.ContainsAny(trimmed, `/\:`)` (rejecting path separators as
+           well as Windows drive prefixes and NTFS alternate-data-stream names
+           such as `"config.yaml:extra"`)
          * `filepath.VolumeName(trimmed) != ""`
          * `strings.TrimSpace(strings.TrimSuffix(trimmed, filepath.Ext(trimmed))) == ""`
            (e.g., bare `".yaml"` or `".yml"` with no filename stem)

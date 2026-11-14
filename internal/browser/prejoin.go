@@ -175,8 +175,12 @@ func selectEntraAccountJS(account string) string {
 		}
 		const pwdInputs = Array.from(document.querySelectorAll('input[type="password"]:not([aria-hidden="true"])'));
 		for (const pwd of pwdInputs) {
+			const style = window.getComputedStyle(pwd);
+			if (style && (style.display === 'none' || style.visibility === 'hidden')) {
+				continue;
+			}
 			const rect = pwd.getBoundingClientRect();
-			if (rect && rect.width > 0 && rect.height > 0 && document.querySelector('#tilesHolder') === null) {
+			if (rect && rect.width > 0 && rect.height > 0) {
 				return false;
 			}
 		}
@@ -191,6 +195,10 @@ func selectEntraAccountJS(account string) string {
 		}
 		const matches = [];
 		for (const el of tiles) {
+			const style = window.getComputedStyle(el);
+			if (style && (style.display === 'none' || style.visibility === 'hidden')) {
+				continue;
+			}
 			const rawId = (el.getAttribute('id') || '').trim();
 			const rawTestId = (el.getAttribute('data-test-id') || '').trim();
 			const rawDataBind = (el.getAttribute('data-bind') || '').trim();

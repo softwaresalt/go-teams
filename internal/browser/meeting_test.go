@@ -172,8 +172,8 @@ func TestSelectEntraAccountJSDOM(t *testing.T) {
 	assert.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS("otherTile"), &clicked)))
 	assert.False(t, clicked, "#otherTile must always be skipped")
 
-	// 6. Visible password input without #tilesHolder returns false without clicking.
-	setBody(`<input type="password" style="width:120px;height:32px;display:block" /><div class="table" role="button" data-test-id="alice@contoso.com" onclick="window.__clicked='pwd-page'">Alice@Contoso.com</div>`)
+	// 6. Visible password input (even if #tilesHolder remains in DOM) returns false without clicking.
+	setBody(`<div id="tilesHolder"><input type="password" style="width:120px;height:32px;display:block" /><div class="table" role="button" data-test-id="alice@contoso.com" onclick="window.__clicked='pwd-page'">Alice@Contoso.com</div></div>`)
 	assert.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS("alice@contoso.com"), &clicked)))
-	assert.False(t, clicked, "visible password input without #tilesHolder must not click")
+	assert.False(t, clicked, "visible password input must prevent clicking account tiles")
 }

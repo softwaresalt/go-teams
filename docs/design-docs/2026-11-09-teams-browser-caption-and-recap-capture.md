@@ -2,9 +2,9 @@
 title: Teams browser caption and recap capture
 date: 2026-11-13
 status: implemented
-feature: 011-F, 013-F, 015-F, 017-F, 021-F
-shipment: 011-S, 013-S, 015-S, 017-S, 021-S
-deliberation: 002-DL, 006-DL, 010-DL
+feature: 011-F, 013-F, 015-F, 017-F, 021-F, 022-F
+shipment: 011-S, 013-S, 015-S, 017-S, 021-S, 022-S
+deliberation: 002-DL, 006-DL, 010-DL, 011-DL
 ---
 
 ## Architecture and dependency direction
@@ -271,3 +271,70 @@ These fixtures establish the executable contract, not production Teams DOM
 compatibility, transcript completeness, authorization, or audio fidelity.
 Live qualification and rollback ownership are defined in the
 [closure record](../closure/2026-11-09-011-S-review-and-closure.md).
+
+## Scheduled and protocol-driven live call capture (`011-DL`, `022-S`)
+
+Decision `011-DL` (shipment `022-S`, requirements `R1`–`R15`) extends the
+live-call and Meeting Recap architecture with four capture protocols,
+activity-aware overtime and idle shutdown, recurring `cron` and one-shot `at`
+scheduling, and the Idea 2C hybrid delayed AI Summary enrichment workflow:
+
+* **Meeting Capture Protocols (`capture_mode` / `--mode`).** Every capture is
+  classified into one of four protocols:
+  * `ephemeral-live`: real-time live caption and MP3 audio capture (`CaptureAudio`
+    defaults to `true` across YAML config, per-meeting config, and `--mode`
+    unless explicitly disabled via `capture_audio: false` / `--audio=false`)
+    with zero post-call AI Summary wait (`AISummaryDelay = 0s`).
+  * `live-with-summary`: real-time live caption and optional audio capture,
+    immediate browser teardown and profile-gate release when the call ends, a
+    crash-safe pending entry in `transcription_queue.txt` (`queue_file`), and a
+    delayed Recap enrichment pass (`ai_summary_delay`, default `30m`) that
+    appends `# AI Summary` via `capture.AppendAISummaryToFile`.
+  * `past-recap`: finite post-meeting Recap extraction (`ForceRecap: true`,
+    bounded by `lobby_timeout` or a 2-minute default timeout, resolving
+    `/l/meetingrecap?threadId=...` when given a live join URL carrying a
+    `threadId`).
+  * `auto` (default): selects `past-recap` for Recap views and live capture
+    otherwise.
+* **Activity-aware nominal duration, overtime, and call-end shutdown.**
+  `--duration` / `duration` defines the nominal baseline window rather than a
+  blind cutoff:
+  * In `internal/browser`, `captionObserverJS` emits throttled 1000 ms
+    `interim: true` activity heartbeats while non-empty caption text is
+    mutating; `handleCaptionPayloadWithActivity` notifies
+    `Session.RecordCaptionActivity` without passing un-settled interim text to
+    deduplication or the Markdown sink.
+  * When audio capture is enabled, `PCMRMS` and `HasVoiceActivity`
+    (`DefaultVoiceRMSThreshold = 300.0`, ~`-40.8 dBFS`) notify
+    `Session.RecordAudioActivity` whenever speech energy is present.
+  * A 2-second DOM poller in `EnableCaptions` evaluates `callEndedProbeJS()` and
+    triggers `Session.RecordCallEnded` when an explicit post-call screen appears
+    without `#hangup-button` or when the active hangup toolbar is absent for 3
+    consecutive polls (`6s`) outside a Recap view.
+  * `capture.Session.Run` extends live capture past `Duration` into overtime
+    while caption or voice activity has occurred within `IdleTimeout` (default
+    `3m`), and cancels `runCtx` cleanly once `Duration` (or `RecordCallEnded`)
+    has elapsed and neither signal has occurred for `IdleTimeout`.
+* **Idea 2C hybrid delayed AI Summary enrichment.** When a `live-with-summary`
+  call finishes, `runCaptureWithHooks` closes Chromium immediately (`defer cleanup()`)
+  and invokes `onLiveCallFinished` (releasing the `schedule` daemon's `busy`
+  gate) *before* starting the `ai_summary_delay` timer. It persists a recovery
+  line (`"<url>" --append-ai-summary "<transcript.md>" --not-before <RFC3339>`
+  plus `--config`, `--profile-dir`, `--browser-path`, `--account`,
+  `--lobby-timeout`, and `--headless` formatted via `quoteQueueArg`) under an
+  inter-process file lock (`withQueueFileLock` on `<queuePath>.lock`). When the
+  timer fires (detached onto a daemon `sync.WaitGroup` in `schedule` mode so
+  `cron.SkipIfStillRunning` never blocks recurring triggers), `runAppendAISummary`
+  reopens the meeting in Recap mode, appends `# AI Summary` via
+  `capture.AppendAISummaryToFile` (`O_WRONLY|O_APPEND`, idempotent), and marks
+  the queue line `::`.
+* **Recurring `cron` and one-shot `at` scheduling.** `internal/scheduler`
+  remains a pure leaf package and adds `ParseAt` (RFC 3339 and local
+  `YYYY-MM-DD HH:MM`) and `BuildWithClock`, registering future one-shot `at`
+  entries via a single-fire `oneShotSchedule` (`atomic.Bool`) and skipping past
+  `at` entries on startup. `internal/cli/schedule.go` maps per-meeting
+  `MeetingSchedule` overrides (`Name` -> fallback `MeetingTitle`, `Mode`,
+  `Duration` defaulting to `1h`, `IdleTimeout` defaulting to `3m`,
+  `AISummaryDelay`, `LobbyTimeout`, `Category`, `CaptureAudio`, `OutputDir`) and
+  runs a startup catch-up sweep for due `--append-ai-summary` queue lines.
+

@@ -385,11 +385,14 @@ Release build from `softwaresalt/go-teams`:
 ```
 
 * `internal/updater` resolves release assets named
-  `teams-cli-<goos>-<goarch>[.exe]` on any OS and architecture, but
-  `.github/workflows/release.yml` currently builds and publishes only
-  `windows/amd64` and `windows/arm64` binaries. On Linux or macOS,
-  `teams-cli update` returns `ErrAssetNotFound` until non-Windows assets are
-  added to `release.yml`
+  `teams-cli-<goos>-<goarch>` (with an `.exe` suffix on Windows), and
+  `.github/workflows/release.yml` builds and publishes CGO-free
+  (`CGO_ENABLED=0`) binaries for `linux`, `darwin`, and `windows` on both
+  `amd64` and `arm64`, together with `SHA256SUMS`. The release jobs
+  cross-compile on `ubuntu-latest` after the Linux and Windows quality gates
+  pass, and publication fails if `SHA256SUMS` lacks any of the six platform
+  entries. Platforms outside those six published targets
+  (`{linux, darwin, windows} x {amd64, arm64}`) return `ErrAssetNotFound`
 * `--check` only reports availability and never modifies the executable
 * `--version <tag>` installs that release instead of the latest
 * `--force` reinstalls the target version even when it is already current, and

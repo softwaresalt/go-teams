@@ -31,8 +31,8 @@ signal, not a target; CI reports its own figure with
 | `internal/scheduler` | A | 93.5% | Cron and one-shot `at` (`ParseAt`, `BuildWithClock`, `oneShotSchedule`) construction and validation error paths are covered |
 | `internal/transcript` | A | 91.2% | Deduplication, ordering, and Markdown sanitization are covered with deterministic fixtures |
 | `internal/audio` | A | 87.5% | Encoder output is pinned by a golden digest, and sibling tests parse MPEG-1 Layer III frame headers to count frames. The grade covers the encoder only; real Teams audio fidelity is a browser-domain gap |
-| `internal/updater` | A | 84.5% | Fail-closed lock protocol, identity guards, checksum verification, and rollback are tested with injected clocks, process liveness, and rename failures. The Windows rename window is exercised only on Windows hosts (see gaps) |
-| `internal/capture` | B | 84.8% | Output path resolution, filename templates, activity-aware nominal duration/overtime/idle shutdown, call-end early stop, fallback `MeetingTitle`, and idempotent `AppendAISummaryToFile` are covered, and the `0o700` / `0o600` creation modes are set by the `dirPerm` and `filePerm` constants. No test asserts the resulting mode bits, so the owner-only guarantee rests on code review rather than a regression test |
+| `internal/updater` | A | 84.5% | Fail-closed lock protocol, identity guards, checksum verification, and rollback are tested with injected clocks, process liveness, and rename failures. The Windows rename window is exercised on `windows-latest` in CI (`test-windows`) as well as on Windows development hosts |
+| `internal/capture` | A | 84.8% | Output path resolution, filename templates, activity-aware nominal duration/overtime/idle shutdown, call-end early stop, fallback `MeetingTitle`, and idempotent `AppendAISummaryToFile` are covered. `internal/capture/output_unix_test.go` asserts the `0o700` (`dirPerm`) directory and `0o600` (`filePerm`) file creation modes under `syscall.Umask(0)`, the preservation of a pre-existing directory's mode, and `AppendAISummaryToFile` mode preservation, so the owner-only guarantee has a POSIX regression test. The coverage figure was measured on a Windows host, where the `//go:build unix` tests do not run |
 | `internal/cli` | A | 80.0% | Flag binding, capture protocols, Idea 2C delayed AI summary timer + inter-process locked queue fallback, `--not-before` gating, schedule overrides, output precedence, and flag inheritance are covered through the injected `deps`; the compiled-binary harness adds an end-to-end check |
 | `internal/config` | A | 86.9% | Load, capture modes, lifecycle durations, per-meeting overrides (`cron` vs `at`), `default_account` (`entra_account` / `account`) and output alias precedence (`output` versus `output_file` versus `output_folder` versus `default_path`), `headless` / `headed` and `audio` pointer combinations, `expandUserPath`, `defaultProfileDir`, atomic `Save`, and validation are table-tested, and the tracked-file secret scan lives here |
 | `internal/browser` | B | 71.6% | Synthetic-page and unit tests cover the pre-join machine, lobby timeout (`ErrLobbyTimeout`), `ForceRecap`, PCM RMS voice activity (`PCMRMS`/`HasVoiceActivity`), interim caption heartbeats, call-end probes (`shouldNotifyCallEnded`), recap export, and sandbox flags. The Teams DOM changes without notice, and no automated test runs against a real tenant (queued in `010-S`) |
@@ -50,9 +50,13 @@ that skips on a given host does not prove anything for that host.
 
 ### Tier 1: unit and concurrency suite
 
-`go test -race ./...` runs every hermetic test with the race detector. This is
-the CI gate (`.github/workflows/ci.yml`) alongside `go vet ./...`,
-`go vet -tags=integration ./...`, and `golangci-lint run`. Run it with
+`go test -race ./...` runs every hermetic test with the race detector. CI runs
+it on both `ubuntu-latest` (`test`) and `windows-latest` (`test-windows`) in
+`.github/workflows/ci.yml`, alongside `go vet ./...`,
+`go vet -tags=integration ./...`, and, on `ubuntu-latest` only,
+`golangci-lint run`. The `//go:build unix` mode tests in
+`internal/capture/output_unix_test.go` run on `ubuntu-latest`; the Windows
+updater rename-window tests run on `windows-latest`. Run the suite with
 `-p 1` on memory-constrained hosts, because parallel package builds can exhaust
 the Windows commit limit.
 
@@ -63,13 +67,17 @@ the Windows commit limit.
   `httptest`. It covers the sign-in wait, the launcher interstitial, pre-join
   (mute, bot name, Join), lobby admission, the caption menu, and the live
   caption `MutationObserver`. It skips unless the host is Windows and a
-  Chromium-based browser is installed.
+  Chromium-based browser is installed (`ResolveExecPath("")` must find one).
+  The `test-windows` job in `ci.yml` and `release.yml` runs it in a dedicated
+  step that fails if the test skips, so CI enforces a non-skipped pass on
+  `windows-latest`.
 * `TestCompiledBinaryCapturesRecapToExplicitOutput` in
   `internal/cli/binary_automation_test.go:16` runs a freshly built
   `teams-cli` executable against a synthetic Meeting Recap page and checks the
   transcript and AI Summary output across the root, `captions`, short-flag,
   `join`, output-file, and output-directory invocation forms. It skips unless
-  `GO_TEAMS_BINARY` points at a built executable.
+  `GO_TEAMS_BINARY` points at a built executable, and CI does not set that
+  variable, so this test remains a local check.
 
 ### Tier 3: deterministic golden MP3 regression
 
@@ -108,8 +116,7 @@ These gaps are known and unresolved. Tiers 1 to 4 cannot close them.
 | No automated run against a real Microsoft Teams tenant: login, MFA, tenant policy, lobby, and caption DOM selectors are verified only against synthetic pages | A Teams UI change can break capture without failing any test | `010-S` |
 | Real Meeting Recap completeness and AI Summary availability are unverified | Recap export can miss entries or the summary in production | `010-S` |
 | Real meeting audio fidelity (levels, sync, long recordings) is unverified; only the encoder is pinned by golden output | MP3 output may differ from the meeting audio in ways tests cannot see | `010-S` |
-| CI runs on `ubuntu-latest` only, and `TestChromeMeetingEndToEnd` skips on non-Windows hosts | The Windows browser path and the Windows `.old` rename window in `internal/updater` are exercised only on developer machines | Open; consider a Windows CI job |
-| No test asserts the `0o700` directory and `0o600` file modes that `internal/capture` requests; the constants are the only evidence, and Windows ACLs do not map to POSIX mode bits | The owner-only output guarantee is unproven by tests | Open; add a POSIX-only mode assertion test |
+| The `darwin/{amd64,arm64}`, `linux/arm64`, and `windows/arm64` release binaries are cross-compiled on `ubuntu-latest` at release time and never execute a test suite; only `linux/amd64` (`ubuntu-latest`) and `windows/amd64` (`windows-latest`) run native tests in CI | Platform-specific regressions on the cross-compiled targets surface only after release | `023-S` |
 
 ## Improvement roadmap
 
@@ -118,9 +125,11 @@ These gaps are known and unresolved. Tiers 1 to 4 cannot close them.
 2. ~~Add table cases to `internal/config` for alias and precedence interactions
    and raise its coverage above 80%.~~ Completed in `021-S` (83.3% statement
    coverage, Grade A).
-3. Add a POSIX-only test that asserts the `0o700` and `0o600` modes created by
-   `internal/capture`, which would lift that package to A.
-4. Add a Windows runner to CI so the Windows-only tests stop depending on
-   developer hosts.
+3. ~~Add a POSIX-only test that asserts the `0o700` and `0o600` modes created by
+   `internal/capture`, which would lift that package to A.~~ Completed in
+   `023-S` (`internal/capture/output_unix_test.go`, Grade A).
+4. ~~Add a Windows runner to CI so the Windows-only tests stop depending on
+   developer hosts.~~ Completed in `023-S` (`test-windows` on `windows-latest`
+   in `ci.yml` and `release.yml`).
 5. Re-grade this table at each post-merge closure that changes a package's
    behavior or tests.

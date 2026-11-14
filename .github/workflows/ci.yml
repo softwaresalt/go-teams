@@ -193,6 +193,50 @@ jobs:
       - name: Coverage report
         run: go tool cover -func=coverage.out
 
+  # Native Windows verification. golangci-lint stays on ubuntu-latest only (it
+  # compiles from source via install-mode: goinstall), so this job covers build,
+  # vet, and the race-enabled test suite on the platform that exercises the
+  # Windows rename window in internal/updater and the Windows browser E2E.
+  test-windows:
+    name: Build, vet & test (Windows)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          go-version-file: go.mod
+      - name: Install dependencies
+        run: go mod download
+      - name: Build Windows executable
+        run: go build -o bin/teams-cli.exe ./cmd/teams-cli
+      - name: Vet
+        run: go vet ./...
+      - name: Vet (integration harness)
+        run: go vet -tags=integration ./...
+      - name: Verify Windows browser E2E does not skip
+        shell: pwsh
+        # ResolveExecPath("") must locate the pre-installed Chromium/Edge
+        # browser on windows-latest so TestChromeMeetingEndToEnd executes
+        # instead of silently skipping.
+        run: |
+          $output = go test -v ./internal/browser -run "^TestChromeMeetingEndToEnd$" 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          if ($exitCode -ne 0) {
+            Write-Error "TestChromeMeetingEndToEnd failed (exit code $exitCode)"
+            exit 1
+          }
+          if ($output -match '--- SKIP:' -or $output -notmatch '--- PASS: TestChromeMeetingEndToEnd') {
+            Write-Error "TestChromeMeetingEndToEnd did not run and pass on windows-latest (skipped or no tests to run); a Chromium-based browser must be resolvable"
+            exit 1
+          }
+      - name: Test
+        run: go test -race ./...
+
   # DISABLED: requires go.mod and a `make docs-lint` target that don't exist yet.
   # Re-enable once the Go module and Makefile are scaffolded.
   # docs-lint:

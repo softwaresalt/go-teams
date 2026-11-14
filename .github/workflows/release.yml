@@ -36,6 +36,39 @@ jobs:
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
 
+  test-windows:
+    name: Quality Gates (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          go-version-file: go.mod
+      - name: Install dependencies
+        run: go mod download
+      - name: Vet
+        run: go vet ./...
+      - name: Vet (integration harness)
+        run: go vet -tags=integration ./...
+      - name: Verify Windows browser E2E does not skip
+        shell: pwsh
+        run: |
+          $output = go test -v ./internal/browser -run "^TestChromeMeetingEndToEnd$" 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          if ($exitCode -ne 0) {
+            Write-Error "TestChromeMeetingEndToEnd failed (exit code $exitCode)"
+            exit 1
+          }
+          if ($output -match '--- SKIP:' -or $output -notmatch '--- PASS: TestChromeMeetingEndToEnd') {
+            Write-Error "TestChromeMeetingEndToEnd did not run and pass on windows-latest (skipped or no tests to run); a Chromium-based browser must be resolvable"
+            exit 1
+          }
+      - name: Test
+        run: go test -race ./...
+
   changelog:
     name: Generate Changelog
     runs-on: ubuntu-latest
@@ -71,12 +104,13 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build Windows binaries
-    needs: test
+    name: Build release binaries
+    needs: [test, test-windows]
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        goos: [windows]
+        goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -85,12 +119,17 @@ jobs:
       - uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
         with:
           go-version-file: go.mod
-      - name: Build Windows executable
+      - name: Build release executable
         shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
         run: |
+          # Asset names must match updater.AssetName(goos, goarch):
+          # teams-cli-<goos>-<goarch>, with an .exe suffix only on Windows.
+          EXT=""
+          if [ "${GOOS}" = "windows" ]; then EXT=".exe"; fi
           VERSION="${GITHUB_REF_NAME#v}"
           COMMIT="${GITHUB_SHA::7}"
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -98,7 +137,7 @@ jobs:
             -X github.com/softwaresalt/go-teams/internal/version.Version=${VERSION} \
             -X github.com/softwaresalt/go-teams/internal/version.Commit=${COMMIT} \
             -X github.com/softwaresalt/go-teams/internal/version.BuildDate=${BUILD_DATE}" \
-            -o dist/teams-cli-${{ matrix.goos }}-${{ matrix.goarch }}.exe \
+            -o "dist/teams-cli-${GOOS}-${GOARCH}${EXT}" \
             ./cmd/teams-cli
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -215,6 +254,21 @@ jobs:
         run: |
           cd artifacts
           find . -maxdepth 1 -type f -name 'teams-cli-*' -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+          # Every updater.AssetName(goos, goarch) asset must be listed, matching
+          # the optional "*" and "./" prefixes that updater.parseChecksums strips.
+          for expected in \
+            teams-cli-linux-amd64 \
+            teams-cli-linux-arm64 \
+            teams-cli-darwin-amd64 \
+            teams-cli-darwin-arm64 \
+            teams-cli-windows-amd64.exe \
+            teams-cli-windows-arm64.exe; do
+            pattern="${expected//./\\.}"
+            if ! grep -Eq "^[0-9a-f]{64}[[:space:]]+\*?(\./)?${pattern}$" SHA256SUMS; then
+              echo "ERROR: SHA256SUMS is missing an entry for ${expected}" >&2
+              exit 1
+            fi
+          done
 
       - name: Publish release
         uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1

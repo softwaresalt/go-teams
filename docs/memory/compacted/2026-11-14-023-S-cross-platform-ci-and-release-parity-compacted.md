@@ -40,8 +40,12 @@ deliberation `012-DL` archived via `backlogit archive 012-DL`.
   comments. `autoharness gate copilot-review` returned `SATISFIED`.
 * Both CI jobs passed on run `43629074778`; the Windows E2E logged
   `--- PASS: TestChromeMeetingEndToEnd`.
-* The topology gate rejected the `chore/close-023-S` branch name
-  (`BRANCH_MISMATCH`); run the `lifecycle` gate from `main` first. See
+* The topology gate rejected the operator-mandated `chore/close-023-S` branch
+  name (`BRANCH_MISMATCH`); the `lifecycle` gate passed only when run on `main`
+  immediately before the close, so the cascade ran without a gate verdict on the
+  closure branch (recorded deviation). Future closures should create an eligible
+  `post-merge/{feature_slug}` branch and run the gate there immediately before
+  the cascade. See
   `docs/compound/workflow-issues/topology-gate-closure-branch-naming.md`.
 * The cascade engine retained `012-DL`; Ship archived it explicitly after
   confirming zero live references.

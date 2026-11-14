@@ -99,7 +99,7 @@ Blocking findings: `P0=0, P1=0`. Outcome: `READY`.
 | `parent_id` preservation | `023.001-T`..`023.003-T` all retained `parent_id: 023-F` |
 | Final records | `023-S`: `archived_status: shipped`; `023-F` and `023.001-T`..`023.003-T`: `archived_status: done` |
 | Archive integrity (P-007) | No archive file reported as deleted |
-| Topology gate | `lifecycle` passed on `main` before the close (see `docs/compound/workflow-issues/topology-gate-closure-branch-naming.md` for the `chore/close-*` branch-name rejection) |
+| Topology gate | The operator-mandated closure branch `chore/close-023-S` is rejected by the gate (`BRANCH_MISMATCH`), so the `lifecycle` gate passed only when run on `main` immediately before the close; no gate verdict exists for the closure branch itself. This is a recorded deviation from the `post-merge/*` branch rule; closure PR #59 carries the same exposure. Future closures should use an eligible `post-merge/{feature_slug}` branch and run the gate there immediately before the cascade (see `docs/compound/workflow-issues/topology-gate-closure-branch-naming.md`) |
 
 ### Source artifact cleanup
 
@@ -148,14 +148,14 @@ six existing learnings and added
 | Failure signal | READY | A failing `test-windows` job, a missing `SHA256SUMS` entry (`ERROR: SHA256SUMS is missing an entry for ...`), or a skipped Windows E2E step |
 | Monitoring plan | READY | Watch the `release` workflow on the next version tag for six `teams-cli-*` assets plus `SHA256SUMS`; confirm `teams-cli update --check` resolves the matching asset per platform |
 | Rollback trigger | READY | A release fails to publish or ships an unusable binary for a supported platform |
-| Rollback procedure | READY | Revert merge commit `121271ac016d2f1d1257534e423cc8f859ff27be` on `main`; no runtime code changed |
+| Rollback procedure | READY | Source: revert merge commit `121271ac016d2f1d1257534e423cc8f859ff27be` with `git revert -m 1 121271ac016d2f1d1257534e423cc8f859ff27be` (mainline 1 is the `main` parent) through a reviewed PR so future workflow runs use the previous matrix; no runtime code changed. Published assets: a source revert does not unpublish a release, and the updater discovers assets through `/releases/latest` or `/releases/tags/<tag>` (`internal/updater/updater.go`). With maintainer approval, (1) contain the faulty release by marking it as a pre-release or deleting it so it is no longer `latest`, (2) publish a verified replacement tag whose `SHA256SUMS` lists all six assets, and (3) tell clients that already installed the faulty binary to reinstall with `teams-cli update --version <replacement-tag> --force`, or to download the replacement asset manually if the installed binary cannot start. No release has used the expanded matrix yet, so this applies from the first tagged release onward |
 | Owner | READY | Repository maintainer cutting the next release |
 | Validation window | READY | The next tagged release (the first run of the expanded matrix) |
 
 ## Dark Mode Execution Summary (P-017)
 
 * **Gates passed**:
-  * `pipeline-topology` (`pre_claim`, `post_claim`, `lifecycle`) - exit 0 (the closure-phase gate was run from `main`)
+  * `pipeline-topology` (`pre_claim`, `post_claim`, `lifecycle`) - exit 0 (the closure-phase gate passed on `main` only; see the Topology gate row above)
   * Local Review Readiness (`P-014`) - `LOCAL_REVIEW_READY` for HEAD `c2cdfb8058ef10fd9855a972a148c9861409eb36` (`READY`, `0 P0, 0 P1`)
   * Copilot Review Completion Gate (`P-018`) - `SATISFIED` (exit 0), re-run at the last mile
   * Merge Strategy (`P-009`) - merge commit `121271ac016d2f1d1257534e423cc8f859ff27be`; the repository allows only merge commits; `gh pr merge 58 --merge` succeeded without admin fallback (`DARK_MODE_MERGE_AUTHORIZED`)

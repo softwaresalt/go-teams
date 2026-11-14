@@ -70,3 +70,41 @@ func TestContainsTextJS(t *testing.T) {
 	assert.Contains(t, js, "document.body")
 	assert.Contains(t, js, "Someone will let you in shortly")
 }
+
+func TestRedactAccountIdentifier(t *testing.T) {
+	tests := []struct {
+		name    string
+		account string
+		want    string
+	}{
+		{"empty", "", ""},
+		{"whitespace only", "   \t  ", ""},
+		{"standard upn", "alice@contoso.com", "a***@contoso.com"},
+		{"trimmed upn", "  Bob.Smith@contoso.com  ", "B***@contoso.com"},
+		{"single char local part", "a@contoso.com", "a***@contoso.com"},
+		{"display name", "Alice Smith", "A***"},
+		{"single char display name", "X", "X***"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactAccountIdentifier(tc.account)
+			assert.Equal(t, tc.want, got)
+			if tc.want != "" && len(tc.account) > 3 {
+				assert.NotContains(t, got, "alice")
+				assert.NotContains(t, got, "Smith")
+			}
+		})
+	}
+}
+
+func TestSelectEntraAccountJS(t *testing.T) {
+	assert.Equal(t, "false", selectEntraAccountJS(""))
+	assert.Equal(t, "false", selectEntraAccountJS("   \t "))
+
+	js := selectEntraAccountJS(`Alice.O'Connor"test@\contoso.com`)
+	assert.Contains(t, js, `#tilesHolder`)
+	assert.Contains(t, js, `otherTile`)
+	assert.Contains(t, js, `teamsCliAutoSelected`)
+	assert.Contains(t, js, `3000`)
+	assert.Contains(t, js, `alice.o'connor\"test@\\contoso.com`)
+}

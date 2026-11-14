@@ -375,3 +375,119 @@ func TestRecapAudioFlagAndQueueForwarding(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultAccountFlagAndQueueForwarding(t *testing.T) {
+	const (
+		meetingURL = "https://teams.microsoft.com/meet/123"
+		cfgAcct    = "config-user@contoso.com"
+		flagAcct   = "flag-user@contoso.com"
+	)
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{"root", []string{meetingURL}},
+		{"join", []string{"join", meetingURL}},
+		{"captions", []string{"captions", meetingURL}},
+		{"auth", []string{"auth"}},
+		{"schedule", []string{"schedule"}},
+	}
+	for _, cmdCase := range commands {
+		t.Run(cmdCase.name+"/flag overrides config", func(t *testing.T) {
+			loaded := validConfig()
+			loaded.DefaultAccount = cfgAcct
+			loaded.Meetings = []config.MeetingSchedule{{Name: "m", URL: meetingURL, Cron: "@every 1s"}}
+			probe := newBrowserPathProbe()
+			args := append(append([]string{}, cmdCase.args...), "--account", "  "+flagAcct+"  ")
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- runCmd(ctx, probe.deps(loaded), args...) }()
+
+			var got config.Config
+			finished := false
+			select {
+			case got = <-probe.cfgs:
+			case err := <-done:
+				finished = true
+				require.NoError(t, err)
+				select {
+				case got = <-probe.cfgs:
+				default:
+					t.Fatal("command finished without reaching the browser layer")
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("timed out waiting for the browser layer")
+			}
+			cancel()
+			if !finished {
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Fatal("command did not stop after cancel")
+				}
+			}
+
+			assert.Equal(t, flagAcct, got.DefaultAccount)
+			opts := browserOptions(got)
+			assert.Equal(t, flagAcct, opts.DefaultAccount)
+		})
+
+		t.Run(cmdCase.name+"/empty flag clears config default_account", func(t *testing.T) {
+			loaded := validConfig()
+			loaded.DefaultAccount = cfgAcct
+			loaded.Meetings = []config.MeetingSchedule{{Name: "m", URL: meetingURL, Cron: "@every 1s"}}
+			probe := newBrowserPathProbe()
+			args := append(append([]string{}, cmdCase.args...), "--account=")
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- runCmd(ctx, probe.deps(loaded), args...) }()
+
+			var got config.Config
+			finished := false
+			select {
+			case got = <-probe.cfgs:
+			case err := <-done:
+				finished = true
+				require.NoError(t, err)
+				select {
+				case got = <-probe.cfgs:
+				default:
+					t.Fatal("command finished without reaching the browser layer")
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("timed out waiting for the browser layer")
+			}
+			cancel()
+			if !finished {
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Fatal("command did not stop after cancel")
+				}
+			}
+
+			assert.Empty(t, got.DefaultAccount)
+			opts := browserOptions(got)
+			assert.Empty(t, opts.DefaultAccount)
+		})
+	}
+
+	t.Run("inheritedQueueFlags forwards --account and preserves empty --account=", func(t *testing.T) {
+		var f captureFlags
+		testCmd := &cobra.Command{Use: "root"}
+		bindCaptureFlags(testCmd, &f)
+		require.NoError(t, testCmd.Flags().Parse([]string{"--account", "queue-user@contoso.com"}))
+		got := inheritedQueueFlags(testCmd, "", f)
+		assert.Equal(t, []string{"--account", "queue-user@contoso.com"}, got)
+
+		var emptyFlags captureFlags
+		emptyCmd := &cobra.Command{Use: "root"}
+		bindCaptureFlags(emptyCmd, &emptyFlags)
+		require.NoError(t, emptyCmd.Flags().Parse([]string{"--account="}))
+		assert.Equal(t, []string{"--account="}, inheritedQueueFlags(emptyCmd, "", emptyFlags))
+	})
+}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -23,6 +24,9 @@ type MeetingOptions struct {
 	MeetingURL string
 	// BotName is the display name injected on the pre-join screen.
 	BotName string
+	// DefaultAccount is the optional Microsoft Entra account (UPN/email or
+	// display name) to auto-select on the Entra account picker interstitial.
+	DefaultAccount string
 }
 
 // Meeting drives in-meeting capture against a live Teams meeting: the pre-join
@@ -60,6 +64,9 @@ func NewMeeting(opts MeetingOptions) Meeting {
 // headless mode once the profile is authenticated. The caller MUST invoke
 // cleanup when the meeting is done, on success, failure, and cancellation.
 func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Meeting, context.Context, func(), error) {
+	if strings.TrimSpace(mopts.DefaultAccount) == "" && strings.TrimSpace(opts.DefaultAccount) != "" {
+		mopts.DefaultAccount = strings.TrimSpace(opts.DefaultAccount)
+	}
 	cm := newChromeMeeting(mopts)
 	if !opts.Headless {
 		optsCopy := opts

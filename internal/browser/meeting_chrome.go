@@ -53,6 +53,16 @@ func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 	return &chromeMeeting{opts: opts}
 }
 
+func (m *chromeMeeting) defaultAccount() string {
+	if acct := strings.TrimSpace(m.opts.DefaultAccount); acct != "" {
+		return acct
+	}
+	if m.headedOpts != nil {
+		return strings.TrimSpace(m.headedOpts.DefaultAccount)
+	}
+	return ""
+}
+
 // AISummary implements AISummaryProvider.
 func (m *chromeMeeting) AISummary() string {
 	return m.aiSummary
@@ -346,6 +356,13 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 					slog.Info("browser: waiting for user authentication in browser window")
 					loggedWaiting = true
 				}
+				if acct := m.defaultAccount(); acct != "" {
+					if clickedRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, selectEntraAccountJS(acct)); evalErr == nil && strings.TrimSpace(clickedRaw) == "true" {
+						slog.Info("browser: selected default Entra account", "account", redactAccountIdentifier(acct))
+						authTracker.settledPolls = 0
+						authTracker.rapidAuthBounces = 0
+					}
+				}
 				if navURL := authTracker.onAuthRedirect(mainPage.URL); navURL != "" {
 					clickedLauncher = false
 					slog.Info("browser: detected rapid auth redirect bounce loop; navigating to break loop", "attempt", authTracker.reNavigateAttempts)
@@ -460,6 +477,13 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 							tCtx, _ := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(mainPage.ID)))
 							m.attachedCtx = tCtx
 							return m.awaitPreJoinOrAdmission(tCtx)
+						}
+						if acct := m.defaultAccount(); acct != "" {
+							if clickedRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, selectEntraAccountJS(acct)); evalErr == nil && strings.TrimSpace(clickedRaw) == "true" {
+								slog.Info("browser: selected default Entra account", "account", redactAccountIdentifier(acct))
+								authTracker.settledPolls = 0
+								authTracker.rapidAuthBounces = 0
+							}
 						}
 						if navURL := authTracker.onNonAuthPage(st); navURL != "" {
 							slog.Info("browser: Teams session ready; navigating to target meeting URL", "attempt", authTracker.reNavigateAttempts)
@@ -623,6 +647,13 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 			}
 		case PreJoinWaitingForUser:
 			clickedLauncher = false
+			if acct := m.defaultAccount(); acct != "" {
+				var clickedAccount bool
+				if err := chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS(acct), &clickedAccount)); err == nil && clickedAccount {
+					slog.Info("browser: selected default Entra account", "account", redactAccountIdentifier(acct))
+					coldRecapPolls = 0
+				}
+			}
 			if reNavigateAttempts < 1 && hasSpecificMeetingOrRecapTarget(m.opts.MeetingURL) {
 				var stalledOffTargetAfterAuth bool
 				_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => {

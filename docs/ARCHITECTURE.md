@@ -94,17 +94,24 @@ Rules the layout enforces:
 ### Interactive auth
 
 `teams-cli auth` opens a visible browser with a persistent profile directory
-(`--profile-dir` or the configured `profile_dir`). You sign in manually and the
-session cookies stay in that profile. Headless runs later reuse the profile;
-they cannot complete login, MFA, or lobby admission themselves.
+(`--profile-dir` or the configured `profile_dir`). When `default_account` (or
+`--account`) is set, `ChromeRunner` polls for the Microsoft Entra "Pick an
+account" interstitial (`#tilesHolder`) and clicks the single unambiguously
+matching account tile automatically. You complete any password or MFA prompts
+manually and the session cookies stay in that profile. Headless runs later
+reuse the profile; they can auto-select a cached account tile when
+`default_account` / `--account` is configured, but cannot complete password
+entry, MFA, or lobby admission themselves.
 
 ### Live join and captions
 
 1. `internal/cli` loads the config, applies flag overrides, validates the URL
    with `teams.ValidateMeetingURL`, and mutates it with `teams.MutateJoinURL`.
 2. `internal/browser` allocates Chromium and walks the pre-join state machine:
-   it dismisses the launcher interstitial, mutes the microphone, injects the
-   bot name for guests, and waits through lobby admission.
+   when `DefaultAccount` is configured and an Entra account picker appears, it
+   clicks the matching account tile (`selectEntraAccountJS`), then dismisses
+   the launcher interstitial, mutes the microphone, injects the bot name for
+   guests, and waits through lobby admission.
 3. A `MutationObserver` in the page reports caption rows. A `payloadPump`
    forwards them to the Go side, where `transcript.Deduplicator` collapses
    rolling updates into settled caption events.
@@ -139,8 +146,9 @@ transcript instead of listening live:
 2. Each remaining line becomes its own root command invocation built with
    `executeQueueLine`, with `inheritedQueueFlags` prepended. Those flags
    forward the outer capture flags (config path, output settings, template,
-   profile, bot name, category, browser path, headless, audio) but never the
-   outer `--url` or `--queue`. Nested `--queue` flags are rejected.
+   profile, bot name, category, browser path, default account, headless,
+   audio) but never the outer `--url` or `--queue`. Nested `--queue` flags are
+   rejected.
 3. After a line succeeds it is commented out by prepending `::`.
    `writeQueueLines` (`internal/cli/queue.go:200`) writes the new content to a
    temporary file in the queue directory and renames it over the queue file;
@@ -191,7 +199,12 @@ The protocol details are in the
   are not intercepted.
 * **Redaction.** `teams.RedactURL` and `teams.RedactArgs` reduce URLs to
   `scheme://host/path` in navigation errors, logs, and queue output so
-  passcodes, userinfo, and fragments never reach logs.
+  passcodes, userinfo, and fragments never reach logs. When Microsoft Entra
+  account auto-selection (`default_account` / `--account`) logs a tile
+  selection, `redactAccountIdentifier` masks the configured UPN or display
+  name (`a***@contoso.com` or `A***`) so raw account identifiers never appear
+  in logs, and `selectEntraAccountJS` serializes the target string with
+  `json.Marshal` to prevent DOM/script injection.
 * **Participant text.** `transcript.Writer` defuses Markdown and bare-URL
   autolink syntax in captions and metadata fields so remote participants cannot
   inject live links or structure into the transcript file.

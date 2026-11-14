@@ -60,7 +60,7 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			applyBrowserFlags(&cfg, flags)
+			applyBrowserFlags(cmd, &cfg, flags)
 			entries := make([]scheduler.Entry, 0, len(cfg.Meetings))
 			for _, m := range cfg.Meetings {
 				entries = append(entries, scheduler.Entry{Name: m.Name, URL: m.URL, Cron: m.Cron})

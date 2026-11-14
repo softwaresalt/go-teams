@@ -23,6 +23,9 @@ type Options struct {
 	Headless    bool
 	UserAgent   string
 	ExecPath    string
+	// DefaultAccount is the optional Microsoft Entra account (UPN/email or
+	// display name) to auto-select on the Entra account picker interstitial.
+	DefaultAccount string
 	// DisableSandbox opts in to launching Chromium with --no-sandbox and
 	// --disable-setuid-sandbox. It is off by default so the browser sandbox
 	// stays enabled; the TEAMS_DISABLE_SANDBOX environment variable ("1" or

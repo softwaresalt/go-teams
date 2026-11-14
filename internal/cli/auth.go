@@ -17,7 +17,7 @@ func newAuthCommand(d *deps, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			applyBrowserFlags(&cfg, flags)
+			applyBrowserFlags(cmd, &cfg, flags)
 			return d.newRunner(cfg).Authenticate(cmd.Context())
 		},
 	}

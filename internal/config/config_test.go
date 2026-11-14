@@ -173,3 +173,194 @@ profile_dir: "%USERPROFILE%\\AppData\\Local\\teams-cli\\profile"
 	assert.Equal(t, filepath.Join(home, "Documents", "Transcripts"), got.OutputDir)
 	assert.Equal(t, filepath.Join(home, "AppData", "Local", "teams-cli", "profile"), got.ProfileDir)
 }
+
+func TestLoadDefaultAccountAndAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "default_account primary key trimmed",
+			yaml: "default_account: \"  alice@contoso.com  \"\n",
+			want: "alice@contoso.com",
+		},
+		{
+			name: "entra_account alias trimmed",
+			yaml: "entra_account: \"  bob@contoso.com\\t\"\n",
+			want: "bob@contoso.com",
+		},
+		{
+			name: "account alias trimmed",
+			yaml: "account: \"  carol@contoso.com \"\n",
+			want: "carol@contoso.com",
+		},
+		{
+			name: "default_account wins over entra_account and account",
+			yaml: "default_account: primary@contoso.com\nentra_account: secondary@contoso.com\naccount: tertiary@contoso.com\n",
+			want: "primary@contoso.com",
+		},
+		{
+			name: "entra_account wins over account when default_account empty",
+			yaml: "default_account: \"   \"\nentra_account: secondary@contoso.com\naccount: tertiary@contoso.com\n",
+			want: "secondary@contoso.com",
+		},
+		{
+			name: "omitted leaves DefaultAccount empty",
+			yaml: "bot_name: Bot\n",
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.yaml), 0o600))
+			got, err := Load(path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.DefaultAccount)
+		})
+	}
+
+	t.Run("Save and Load round-trip preserves DefaultAccount", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "roundtrip.yaml")
+		want := Config{
+			OutputDir:        filepath.Join(dir, "out"),
+			FilenameTemplate: DefaultFilenameTemplate,
+			ProfileDir:       filepath.Join(dir, "prof"),
+			BotName:          "Bot",
+			DefaultAccount:   "alice@contoso.com",
+		}
+		require.NoError(t, Save(path, want))
+		got, err := Load(path)
+		require.NoError(t, err)
+		assert.Equal(t, "alice@contoso.com", got.DefaultAccount)
+	})
+}
+
+func TestLoadAliasAndOutputPrecedence(t *testing.T) {
+	tests := []struct {
+		name  string
+		yaml  string
+		check func(t *testing.T, got Config)
+	}{
+		{
+			name: "output ending in .md sets OutputFile and overrides output_file",
+			yaml: "output_file: C:\\old\\ignored.md\noutput: C:\\new\\chosen.md\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, filepath.FromSlash("C:/new/chosen.md"), got.OutputFile)
+			},
+		},
+		{
+			name: "output ending in .markdown sets OutputFile",
+			yaml: "output: C:\\new\\chosen.markdown\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, filepath.FromSlash("C:/new/chosen.markdown"), got.OutputFile)
+			},
+		},
+		{
+			name: "output directory overrides output_folder and default_path",
+			yaml: "default_path: C:\\one\noutput_folder: C:\\two\noutput: C:\\three\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, filepath.FromSlash("C:/three"), got.OutputDir)
+			},
+		},
+		{
+			name: "output_folder overrides default_path and output_dir",
+			yaml: "output_dir: C:\\one\ndefault_path: C:\\two\noutput_folder: C:\\three\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, filepath.FromSlash("C:/three"), got.OutputDir)
+			},
+		},
+		{
+			name: "default_path overrides output_dir when output_folder omitted",
+			yaml: "output_dir: C:\\one\ndefault_path: C:\\two\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, filepath.FromSlash("C:/two"), got.OutputDir)
+			},
+		},
+		{
+			name: "headed true forces Headless false even when headless true is set",
+			yaml: "headless: true\nheaded: true\n",
+			check: func(t *testing.T, got Config) {
+				assert.False(t, got.Headless)
+			},
+		},
+		{
+			name: "headless false sets Headless false",
+			yaml: "headless: false\n",
+			check: func(t *testing.T, got Config) {
+				assert.False(t, got.Headless)
+			},
+		},
+		{
+			name: "omitting both headless and headed defaults Headless to false in Load",
+			yaml: "bot_name: Bot\n",
+			check: func(t *testing.T, got Config) {
+				assert.False(t, got.Headless)
+			},
+		},
+		{
+			name: "audio true overrides capture_audio false",
+			yaml: "capture_audio: false\naudio: true\n",
+			check: func(t *testing.T, got Config) {
+				assert.True(t, got.CaptureAudio)
+			},
+		},
+		{
+			name: "audio false overrides capture_audio true",
+			yaml: "capture_audio: true\naudio: false\n",
+			check: func(t *testing.T, got Config) {
+				assert.False(t, got.CaptureAudio)
+			},
+		},
+		{
+			name: "explicit filename_template wins over name_template",
+			yaml: "filename_template: \"custom-<YYYYMMDD>.md\"\nname_template: \"ignored-<YYYYMMDD>.md\"\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, "custom-<YYYYMMDD>.md", got.FilenameTemplate)
+			},
+		},
+		{
+			name: "explicit empty filename_template restores DefaultFilenameTemplate",
+			yaml: "filename_template: \"\"\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, DefaultFilenameTemplate, got.FilenameTemplate)
+			},
+		},
+		{
+			name: "explicit meeting_url wins over url alias",
+			yaml: "meeting_url: https://teams.microsoft.com/meet/primary\nurl: https://teams.microsoft.com/meet/secondary\n",
+			check: func(t *testing.T, got Config) {
+				assert.Equal(t, "https://teams.microsoft.com/meet/primary", got.MeetingURL)
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.yaml), 0o600))
+			got, err := Load(path)
+			require.NoError(t, err)
+			tc.check(t, got)
+		})
+	}
+}
+
+func TestExpandUserPathAndDefaultProfileDir(t *testing.T) {
+	assert.Equal(t, "", expandUserPath(""))
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "transcripts"), expandUserPath("~/transcripts"))
+
+	t.Setenv("CUSTOM_TEAMS_DIR", `C:\CustomTeams`)
+	assert.Equal(t, filepath.FromSlash("C:/CustomTeams/out"), expandUserPath(`%CUSTOM_TEAMS_DIR%\out`))
+
+	assert.Contains(t, expandUserPath(`%UNSET_TEAMS_VAR_XYZ%\out`), "%UNSET_TEAMS_VAR_XYZ%")
+
+	t.Setenv("LOCALAPPDATA", "")
+	assert.Equal(t, filepath.Join(`C:\AppDir`, "profile"), defaultProfileDir(`C:\AppDir`))
+}

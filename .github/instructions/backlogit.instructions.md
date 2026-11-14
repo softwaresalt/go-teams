@@ -230,22 +230,20 @@ Orchestrator's owner-exclusive routing in its own template). It reuses the exist
 backlogit checkpoint API and the existing context-efficiency / P-020 compaction substrate —
 it does not introduce a new checkpoint-schema field or a new runtime engine.
 
-**Applicability — engram-pack-conditioned, not a backlogit-only blocker**: this
-prune-on-restore step applies only when the `agent-engram` capability pack is
-installed/active in this workspace (there is a bound context substrate to prune). When
-`agent-engram` is NOT installed, prune-on-restore is a supported, non-degraded no-op:
-skip directly from restore to resume (restore → resume, no prune/gate step) — a
-backlogit-only installation is never forced to halt at pruning, because a package with
-no engram pack has no engram-bound state to summarize in the first place. This static
-configuration fact (`agent-engram` not installed) is distinct from the runtime-failure
-case in point 4 below (`agent-engram` IS installed but unreachable at the moment of
-restore), which fails closed to operator handoff.
+**Applicability — engram-pack-conditioned, never an engram-reachability blocker**: this
+prune-on-restore step uses `agent-engram` as an optional context source when the
+`agent-engram` capability pack is installed and reachable, while `backlogit`'s own
+`state_dump` (and `docs/memory/`) is the authoritative checkpoint substrate. When
+`agent-engram` is NOT installed, or when `agent-engram` is installed in config but
+unreachable at the moment of restore (`ENGRAM_DEGRADED` / `TOOL_DEGRADED: agent-engram`),
+prune-on-restore summarizes the restored `state_dump` (and any relevant `docs/memory/`
+checkpoint) directly and proceeds from restore to resume without halting on `engram`.
 
 1. **Bounded read-select-summarize on restore**: the owner sequence is
    restore → prune/gate → resume, never restore → resume → prune. After the operator
    explicitly confirms and the checkpoint's `state_dump` is loaded (restore), but BEFORE
-   execution resumes, read the restored `state_dump` and any bound engram state, then
-   produce a bounded summary of that state rather than replaying the full
+   execution resumes, read the restored `state_dump` (and any reachable bound engram state),
+   then produce a bounded summary of that state rather than replaying the full
    action-observation history verbatim. Prune-on-restore drops ONLY superseded
    action-observation history — turns and tool traces that have already been synthesized
    into the recorded state and are no longer needed to continue the work. Only after this
@@ -262,17 +260,16 @@ restore), which fails closed to operator handoff.
    restore-time application of the same context-efficiency discipline used elsewhere in the
    harness (session memory checkpoints, `compact-context`, P-020 compaction). It does not
    invent a separate pruning engine, schema, or storage surface.
-4. **Degraded fallback — `agent-engram` installed but unreachable at restore**: when the
-   `agent-engram` capability pack IS installed/active, and the bound engram substrate is
-   unreachable when attempting to read state for pruning, FAIL CLOSED to OPERATOR HANDOFF —
-   NO prune and NO resume. This is a single, unambiguous behavior: a bounded file-based prune
-   degradation is NOT used, because it was never proven safe and explicitly non-resuming.
-   Whenever a required, installed substrate (backlogit OR an installed `agent-engram`) is
-   unavailable, the crash-resumption protocol fails closed to operator handoff rather than
-   attempting a speculative degraded prune or a speculative resume. This mirrors the
-   Tool-Availability-Gate (P-012) and `ENGRAM_DEGRADED` fallback patterns used elsewhere in
-   the harness, and it is distinct from the supported backlogit-only no-prune path in the
-   Applicability note above, which is never a degraded or fail-closed condition.
+4. **Degraded fallback — `agent-engram` unreachable vs. `backlogit` unreachable at restore**:
+   because the checkpoint `state_dump` lives in `backlogit` (not `engram`) and normal
+   execution already treats an unreachable `agent-engram` daemon as a non-blocking degradation
+   (`TOOL_DEGRADED: agent-engram`), an unreachable `agent-engram` substrate at restore time
+   MUST NOT block checkpoint recovery: log `ENGRAM_DEGRADED` (or `TOOL_DEGRADED: agent-engram`),
+   perform the bounded read-select-summarize step over the restored `backlogit` `state_dump`
+   and `docs/memory/` checkpoint directly (preserving the Prune allowlist in point 2), and
+   proceed to resume. Only when **`backlogit` itself** (the checkpoint substrate) is
+   unreachable or the checkpoint `state_dump` is unreadable/malformed does the crash-resumption
+   protocol fail closed to operator handoff.
 5. **No unresolved placeholders**: any workspace-specific customization point in this section
    resolves fully at install time — installed output must never retain an unresolved template
    variable placeholder — and the protocol stays technology-agnostic (no provider or binary

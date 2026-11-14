@@ -312,22 +312,23 @@ it halts and requests that Stage be run first.
 
 ### Step 2: Harness Generation (P-002 / P-004)
 
-Ensure every task in the target feature or chore has a passing test harness before any implementation begins. This step runs once, up front — not in a loop.
+Ensure every executable task in the target feature, chore, or shipment manifest has a compiling, failing test harness (or documented verification boundary for docs/config-only tasks) before any implementation begins. This step runs once, up front — not in a loop.
 
 When the `agent-intercom` capability pack is installed, broadcast `[SHIP] Invoking harness-architect skill` before invoking the skill.
 
-1. List all tasks for the target feature or chore that are in `queued` status.
+1. Assemble the target task set:
+   * When operating under a claimed shipment, include all manifest tasks in `queued` or `active` status (matching Step 3 item 1's executable-set derivation, since `shipment claim` transitions manifest tasks from `queued` to `active`).
+   * Otherwise, list all tasks for the target feature or chore in `queued` or `active` status.
+   * Intra-feature / intra-shipment `blocks` dependencies between tasks in this target set (`Task B` depends on `Task A` within the same feature/shipment) order **Step 3 / Step 4 implementation execution** — they do NOT exclude `Task B` from up-front Step 2 harness scaffolding, because Step 2 scaffolds structural stubs for `Task A` that allow `Task B`'s harness to compile in the red phase.
 2. Partition the task list:
    * **Already harnessed**: tasks carrying the `harness-ready` label — skip these.
-   * **Needs harness**: tasks without the `harness-ready` label — scaffold these.
-3. If any tasks need harnesses, invoke the **harness-architect** skill for the batch.
-   * Require compilable but failing harnesses, structural stubs, and successful `go vet ./...` verification after scaffolding.
-   * Keep harness commands associated with the affected backlog items so the build loop has a strict boundary.
-4. After scaffolding completes, confirm every queued task now carries the `harness-ready` label. If any task still lacks it, halt and report the gap rather than proceeding with a partial set.
+   * **Needs harness**: tasks without the `harness-ready` label — scaffold these in topological dependency order (upstream tasks' structural stubs first, then downstream tasks' test harnesses).
+3. If any tasks need harnesses, invoke the **harness-architect** skill for the full target batch (`tasks` set to all tasks needing a harness in topological order).
+   * Require compilable but failing harnesses, structural stubs, and successful `go vet ./...` verification after scaffolding. For docs-only or config-only tasks that modify only Markdown or static configuration files, `harness-architect` either scaffolds a failing content/contract assertion test (`go test`) that checks for the new documented sections/keys (failing in the red phase until the docs/config edits are applied in Step 4.2), or records a docs/config verification boundary that Step 4.2 executes only **after** applying every acceptance-criteria file edit in the task.
+   * Keep a task-scoped `harness_cmd` (e.g., `go test ./internal/config/... -run TestDefaultAccount`) associated with each backlog item so intermediate per-task verification in Step 4.2 and Step 4.3 tests only the current task's target while downstream tasks' red harnesses remain pending, and the unfiltered full-suite `go test ./...` runs once all tasks in the shipment are implemented.
+4. After scaffolding completes, confirm every task in the target task set (`queued` or `active`) now carries the `harness-ready` label. If any task still lacks it, halt and report the gap rather than proceeding with a partial set.
 
-When the `backlogit` capability pack is installed and queue-aware operations are supported, prefer
-the queue operation to assemble the task set. When dependency operations are supported, verify the
-dependency graph before proceeding rather than assuming the backlog ordering is already valid.
+When the `backlogit` capability pack is installed and dependency operations are supported, use the dependency graph to order stub and harness scaffolding (upstream stubs before downstream test harnesses) and to order Step 3 / Step 4 task execution, rather than excluding intra-shipment dependent tasks from Step 2.
 
 ### Step 3: Build Ready Queue
 
@@ -422,10 +423,10 @@ autoharness telemetry event --context-ref {context_ref} --from-json {event_paylo
 
 When the `agent-intercom` capability pack is installed, broadcast `[SHIP] Invoking build-feature for {item_id}` before delegating.
 
-Invoke the **build-feature** skill with:
-
-* `task_id`: The current task ID
-* `harness_cmd`: The test command from the task's harness-ready metadata (e.g., `go test ./... --test {feature}_test`)
+* For docs-only or config-only tasks that use a non-red verification boundary (`Red Phase: N/A`), apply every acceptance-criteria documentation/configuration edit specified by the task **first**, verify the diff is non-empty and satisfies every acceptance criterion of the task, and then run the recorded `harness_cmd` and Step 4.3 gates — never treat a pre-existing passing verification command as task completion before the task's file edits are applied.
+* Otherwise, invoke the **build-feature** skill with:
+  * `task_id`: The current task ID
+  * `harness_cmd`: The test command from the task's harness-ready metadata (e.g., `go test ./... --test {feature}_test`)
 
 The skill runs a 5-attempt harness loop: execute tests, capture errors, fix, repeat.
 
@@ -435,7 +436,7 @@ After the build-feature skill reports success:
 
 1. **Lint**: `golangci-lint run`
 2. **Format**: `test -z "$(gofmt -l .)"`
-3. **Full Test Suite**: `go test ./...`
+3. **Test Suite**: Run the current task's `harness_cmd` (plus any already-completed upstream tasks' tests) during intermediate tasks while downstream tasks' up-front red harnesses are still pending; once the final task in the feature/shipment completes, run the unfiltered full-suite `go test ./...` and require it to pass before Step 4.4 / Step 5.
 
 If any gate fails, return to the build-feature skill for a fix iteration.
 
@@ -1019,7 +1020,7 @@ is prohibited (P-001 role separation).
 **OWNER-EXCLUSIVE, OPERATOR-CONFIRMED RESTORE (no automatic resume)**
 1. After a valid unique selection and ownership match, present the checkpoint's `resume_hint` and recorded state to the operator and REQUIRE EXPLICIT OPERATOR CONFIRMATION before any restore or prune. There is no automatic resume under any condition, and no dead-session auto-recovery — checkpoint schema V1 exposes no heartbeat/session-lock/lease (only `created_at`/`updated_at`), so age alone can never prove a prior session dead.
 2. Only on explicit operator confirmation, load the selected checkpoint with `backlogit_get_checkpoint` and restore the recorded phase, shipment or feature context, task IDs, branch state, and next-step intent.
-3. Apply bounded prune-on-restore per the backlogit-pack overlay instruction's Checkpoint-Recovery / Prune-on-Restore Protocol (read-select-summarize; never prune the active cursor, the unresolved-checkpoint pointer, or gate verdicts). If engram is unreachable while attempting this, FAIL CLOSED to operator handoff — no prune, no resume.
+3. Apply bounded prune-on-restore per the backlogit-pack overlay instruction's Checkpoint-Recovery / Prune-on-Restore Protocol (read-select-summarize; never prune the active cursor, the unresolved-checkpoint pointer, or gate verdicts). If engram is unreachable while attempting this, log `ENGRAM_DEGRADED` (or `TOOL_DEGRADED: agent-engram`) and perform bounded prune-on-restore over the restored checkpoint `state_dump` and `docs/memory/` directly — do not block checkpoint restore or resume on engram reachability.
 4. Resume from the recorded phase instead of restarting execution from scratch. Single-active preserved: pick up the same single-active cursor; no parallel resume, no new worktree (P-001/P-016).
 
 **OWNER-SCOPED RESOLUTION (only after confirmed successful resume)**

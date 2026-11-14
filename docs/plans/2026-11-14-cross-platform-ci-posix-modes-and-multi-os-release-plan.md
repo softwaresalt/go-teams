@@ -132,7 +132,9 @@ Following the accepted deliberation in
          4. `name: Build Windows executable` -> `run: go build -o bin/teams-cli.exe ./cmd/teams-cli`
          5. `name: Vet` -> `run: go vet ./...`
          6. `name: Vet (integration harness)` -> `run: go vet -tags=integration ./...`
-         7. `name: Test` -> `run: go test -race ./...`
+         7. `name: Verify Windows browser E2E does not skip` -> run
+            `go test -v ./internal/browser -run "^TestChromeMeetingEndToEnd$"` and fail if the output contains `--- SKIP:` (confirming `ResolveExecPath("")` locates a pre-installed Chromium/Edge browser on `windows-latest` and `TestChromeMeetingEndToEnd` executes rather than skipping)
+         8. `name: Test` -> `run: go test -race ./...`
   2. In `.github/workflows/release.yml`:
      * Add job `test-windows` (`name: Quality Gates (Windows)`,
        `runs-on: windows-latest`) after `test` (`Quality Gates`), running
@@ -140,8 +142,9 @@ Following the accepted deliberation in
        with `persist-credentials: false`, SHA-pinned
        `actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0`
        with `go-version-file: go.mod`, `go mod download`, `go vet ./...`,
-       `go vet -tags=integration ./...`, and `go test -race ./...` so tagged
-       releases are also gated on native Windows verification without
+       `go vet -tags=integration ./...`, the non-skipped
+       `TestChromeMeetingEndToEnd` preflight check, and `go test -race ./...` so
+       tagged releases are also gated on native Windows verification without
        duplicating `golangci-lint` compilation.
      * In job `build`:
        - Change `name: Build Windows binaries` to `name: Build release binaries`
@@ -194,13 +197,18 @@ Following the accepted deliberation in
      * In `### Tier 1: unit and concurrency suite` and
        `### Tier 2: synthetic browser and compiled-binary end to end`, note that
        CI runs `go test -race ./...` on both `ubuntu-latest` and
-       `windows-latest` (`test-windows`), so `TestChromeMeetingEndToEnd` and
-       Windows updater tests execute in CI, while noting that
+       `windows-latest` (`test-windows`), keep the Windows + Chromium-based
+       browser prerequisite (`ResolveExecPath("")`) explicit for
+       `TestChromeMeetingEndToEnd`, and state that `test-windows` enforces a
+       non-skipped pass of `TestChromeMeetingEndToEnd` alongside the Windows
+       updater tests in CI, while noting that
        `TestCompiledBinaryCapturesRecapToExplicitOutput` remains gated on
        `GO_TEAMS_BINARY`.
      * In `## Live-verification gaps`, remove the two closed rows (`CI runs on ubuntu-latest only...`
-       and `No test asserts the 0o700 directory and 0o600 file modes...`),
-       leaving only the three real-tenant `010-S` rows.
+       and `No test asserts the 0o700 directory and 0o600 file modes...`) only
+       after verifying the non-skipped `TestChromeMeetingEndToEnd` preflight step
+       is wired in `test-windows`, leaving only the three real-tenant `010-S`
+       rows.
      * In `## Improvement roadmap`, mark items 3 and 4 as completed in `023-S`
        with strikethrough (`~~...~~ Completed in 023-S (...)`), matching item 2's
        format.
@@ -380,8 +388,10 @@ and `workflows.instructions.md`).
 * **Operational closure**:
   * **Healthy signal**: Both `Build, vet, lint & test` (`ubuntu-latest`, running
     `output_unix_test.go`) and `Build, vet & test (Windows)` (`windows-latest`,
-    running `TestChromeMeetingEndToEnd` and Windows `updater` tests) pass on the
-    PR in GitHub Actions.
+    verifying a non-skipped `TestChromeMeetingEndToEnd` pass with a detected
+    Chromium/Edge browser via `ResolveExecPath("")` plus Windows `updater`
+    tests) pass on the PR in GitHub Actions before the Windows CI gap is
+    recorded as closed.
   * **Failure signal**: Non-zero exit in `test` or `test-windows` CI jobs, or
     missing platform binary in `release.yml` `build` matrix.
   * **Rollback trigger**: Flaky or failing `test-windows` runner job in CI or

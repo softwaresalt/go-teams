@@ -176,4 +176,26 @@ func TestSelectEntraAccountJSDOM(t *testing.T) {
 	setBody(`<div id="tilesHolder"><input type="password" style="width:120px;height:32px;display:block" /><div class="table" role="button" data-test-id="alice@contoso.com" onclick="window.__clicked='pwd-page'">Alice@Contoso.com</div></div>`)
 	assert.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS("alice@contoso.com"), &clicked)))
 	assert.False(t, clicked, "visible password input must prevent clicking account tiles")
+
+	// 7. Visible MFA one-time-code challenge input returns false without clicking.
+	setBody(`<div id="tilesHolder"><input name="otc" autocomplete="one-time-code" style="width:120px;height:32px;display:block" /><div class="table" role="button" data-test-id="alice@contoso.com" onclick="window.__clicked='mfa-page'">Alice@Contoso.com</div></div>`)
+	assert.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS("alice@contoso.com"), &clicked)))
+	assert.False(t, clicked, "visible MFA challenge input must prevent clicking account tiles")
+
+	// 8. Tile beneath a display:none ancestor is ignored (neither clicked nor treated as an ambiguous duplicate).
+	setBody(`<div id="tilesHolder">
+		<div style="display:none">
+			<div class="table" role="button" data-test-id="alice@contoso.com" onclick="window.__clicked='hidden-tile'">Alice@Contoso.com</div>
+		</div>
+		<div class="table" role="button" data-test-id="alice@contoso.com" onclick="window.__clicked='visible-tile'">Alice@Contoso.com</div>
+	</div>`)
+	assert.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS("alice@contoso.com"), &clicked)))
+	assert.True(t, clicked, "visible tile should be clicked while hidden-ancestor duplicate is ignored")
+	assert.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(`window.__clicked || ""`, &clickedID)))
+	assert.Equal(t, "visible-tile", clickedID)
+
+	// 9. Page without a Microsoft account-picker container does not click generic buttons matching account text.
+	setBody(`<div class="table" role="button" onclick="window.__clicked='unrelated-btn'"><div class="table-cell">Alice Smith</div></div>`)
+	assert.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS("Alice Smith"), &clicked)))
+	assert.False(t, clicked, "generic button outside an account-picker surface must not be clicked")
 }

@@ -131,6 +131,12 @@ func containsTextJS(substr string) string {
 	return fmt.Sprintf(`document.body !== null && document.body.innerText.includes(%q)`, substr)
 }
 
+// RedactAccountIdentifier masks a configured Microsoft Entra UPN/email or
+// display name before logging so raw account identifiers never appear in logs.
+func RedactAccountIdentifier(account string) string {
+	return redactAccountIdentifier(account)
+}
+
 // redactAccountIdentifier masks a configured Microsoft Entra UPN/email or
 // display name before logging so raw account identifiers never appear in logs.
 func redactAccountIdentifier(account string) string {
@@ -151,8 +157,8 @@ func redactAccountIdentifier(account string) string {
 // selectEntraAccountJS returns a JavaScript expression that detects a Microsoft
 // Entra / Microsoft account picker surface and clicks the single tile matching
 // account case-insensitively. It fails closed when zero or multiple tiles match,
-// skips #otherTile ("Use another account"), avoids password-entry screens, and
-// enforces a 3000ms per-tile click cooldown.
+// skips #otherTile ("Use another account"), avoids password-entry and MFA
+// screens, and enforces a 3000ms per-tile click cooldown.
 func selectEntraAccountJS(account string) string {
 	target := strings.ToLower(strings.TrimSpace(account))
 	if target == "" {
@@ -168,21 +174,61 @@ func selectEntraAccountJS(account string) string {
 		if (!target || target === "othertile" || target === "use another account") {
 			return false;
 		}
-		const selector = '#tilesHolder [data-test-id], div.table[role="button"][data-test-id], div.table[role="button"], div[data-bind*="acctTile"], [data-testid="accountTile"], div[role="listitem"] button[data-test-id]';
+		const proto = (location.protocol || '').toLowerCase();
+		const host = (location.hostname || '').toLowerCase();
+		const isLoopbackOrBlank = proto === 'about:' || host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+		const isTrustedAuthOrigin = proto === 'https:' && (
+			host === 'login.microsoftonline.com' ||
+			host.endsWith('.microsoftonline.com') ||
+			host === 'login.live.com' ||
+			host.endsWith('.live.com') ||
+			host === 'login.microsoft.com' ||
+			host.endsWith('.login.microsoft.com') ||
+			host === 'login.windows.net' ||
+			host.endsWith('.windows.net') ||
+			host === 'login.microsoftonline.us' ||
+			host.endsWith('.microsoftonline.us') ||
+			host === 'login.partner.microsoftonline.cn' ||
+			host.endsWith('.microsoftonline.cn')
+		);
+		if (!isLoopbackOrBlank && !isTrustedAuthOrigin) {
+			return false;
+		}
+		const isVisible = (node) => {
+			if (!node || typeof node.getBoundingClientRect !== 'function') {
+				return false;
+			}
+			const rect = node.getBoundingClientRect();
+			if (!rect || rect.width <= 0 || rect.height <= 0) {
+				return false;
+			}
+			let cur = node;
+			while (cur && cur.nodeType === 1) {
+				if (cur.hidden || cur.getAttribute('aria-hidden') === 'true') {
+					return false;
+				}
+				const st = window.getComputedStyle(cur);
+				if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) {
+					return false;
+				}
+				cur = cur.parentElement;
+			}
+			return true;
+		};
+		const pickerSurfaceSelectors = '#tilesHolder, div[data-bind*="acctTile"], [data-testid="accountTile"], #otherTile, [data-test-id="otherTile"], [data-bind*="otherTile"]';
+		const pickerSurfaces = Array.from(document.querySelectorAll(pickerSurfaceSelectors));
+		if (!pickerSurfaces.some(isVisible)) {
+			return false;
+		}
+		const challengeSelector = 'input[type="password"]:not([aria-hidden="true"]), input[name="otc"]:not([aria-hidden="true"]), input[autocomplete="one-time-code"]:not([aria-hidden="true"]), #idTxtBx_SAOTCC_OTC, #idDiv_SAOTCS_Proofs, #idRichContext_DisplaySign, [data-testid="displaySign"]';
+		const challengeInputs = Array.from(document.querySelectorAll(challengeSelector));
+		if (challengeInputs.some(isVisible)) {
+			return false;
+		}
+		const selector = '#tilesHolder [data-test-id], #tilesHolder div.table[role="button"], div.table[role="button"][data-test-id], div[data-bind*="acctTile"], [data-testid="accountTile"], #tilesHolder div[role="listitem"] button[data-test-id]';
 		const rawNodes = Array.from(document.querySelectorAll(selector));
 		if (rawNodes.length === 0) {
 			return false;
-		}
-		const pwdInputs = Array.from(document.querySelectorAll('input[type="password"]:not([aria-hidden="true"])'));
-		for (const pwd of pwdInputs) {
-			const style = window.getComputedStyle(pwd);
-			if (style && (style.display === 'none' || style.visibility === 'hidden')) {
-				continue;
-			}
-			const rect = pwd.getBoundingClientRect();
-			if (rect && rect.width > 0 && rect.height > 0) {
-				return false;
-			}
 		}
 		const seen = new Set();
 		const tiles = [];
@@ -195,8 +241,7 @@ func selectEntraAccountJS(account string) string {
 		}
 		const matches = [];
 		for (const el of tiles) {
-			const style = window.getComputedStyle(el);
-			if (style && (style.display === 'none' || style.visibility === 'hidden')) {
+			if (!isVisible(el)) {
 				continue;
 			}
 			const rawId = (el.getAttribute('id') || '').trim();
@@ -215,6 +260,9 @@ func selectEntraAccountJS(account string) string {
 			if (!matched) {
 				const subNodes = [el, ...Array.from(el.querySelectorAll('[data-test-id], .table-cell, small, div, span'))];
 				for (const sub of subNodes) {
+					if (!isVisible(sub)) {
+						continue;
+					}
 					const subTestId = (sub.getAttribute && sub.getAttribute('data-test-id') || '').trim().toLowerCase();
 					if (subTestId === 'othertile') {
 						matched = false;

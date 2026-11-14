@@ -249,35 +249,35 @@ func TestLoadAliasAndOutputPrecedence(t *testing.T) {
 			name: "output ending in .md sets OutputFile and overrides output_file",
 			yaml: "output_file: C:\\old\\ignored.md\noutput: C:\\new\\chosen.md\n",
 			check: func(t *testing.T, got Config) {
-				assert.Equal(t, filepath.Clean(`C:\new\chosen.md`), got.OutputFile)
+				assert.Equal(t, filepath.FromSlash("C:/new/chosen.md"), got.OutputFile)
 			},
 		},
 		{
 			name: "output ending in .markdown sets OutputFile",
 			yaml: "output: C:\\new\\chosen.markdown\n",
 			check: func(t *testing.T, got Config) {
-				assert.Equal(t, filepath.Clean(`C:\new\chosen.markdown`), got.OutputFile)
+				assert.Equal(t, filepath.FromSlash("C:/new/chosen.markdown"), got.OutputFile)
 			},
 		},
 		{
 			name: "output directory overrides output_folder and default_path",
 			yaml: "default_path: C:\\one\noutput_folder: C:\\two\noutput: C:\\three\n",
 			check: func(t *testing.T, got Config) {
-				assert.Equal(t, filepath.Clean(`C:\three`), got.OutputDir)
+				assert.Equal(t, filepath.FromSlash("C:/three"), got.OutputDir)
 			},
 		},
 		{
 			name: "output_folder overrides default_path and output_dir",
 			yaml: "output_dir: C:\\one\ndefault_path: C:\\two\noutput_folder: C:\\three\n",
 			check: func(t *testing.T, got Config) {
-				assert.Equal(t, filepath.Clean(`C:\three`), got.OutputDir)
+				assert.Equal(t, filepath.FromSlash("C:/three"), got.OutputDir)
 			},
 		},
 		{
 			name: "default_path overrides output_dir when output_folder omitted",
 			yaml: "output_dir: C:\\one\ndefault_path: C:\\two\n",
 			check: func(t *testing.T, got Config) {
-				assert.Equal(t, filepath.Clean(`C:\two`), got.OutputDir)
+				assert.Equal(t, filepath.FromSlash("C:/two"), got.OutputDir)
 			},
 		},
 		{
@@ -357,7 +357,7 @@ func TestExpandUserPathAndDefaultProfileDir(t *testing.T) {
 	assert.Equal(t, filepath.Join(home, "transcripts"), expandUserPath("~/transcripts"))
 
 	t.Setenv("CUSTOM_TEAMS_DIR", `C:\CustomTeams`)
-	assert.Equal(t, filepath.Join(`C:\CustomTeams`, "out"), expandUserPath(`%CUSTOM_TEAMS_DIR%\out`))
+	assert.Equal(t, filepath.FromSlash("C:/CustomTeams/out"), expandUserPath(`%CUSTOM_TEAMS_DIR%\out`))
 
 	assert.Contains(t, expandUserPath(`%UNSET_TEAMS_VAR_XYZ%\out`), "%UNSET_TEAMS_VAR_XYZ%")
 

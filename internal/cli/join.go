@@ -106,7 +106,7 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if f.browserPath != "" {
 		cfg.BrowserPath = f.browserPath
 	}
-	if strings.TrimSpace(f.account) != "" {
+	if cmd.Flags().Changed("account") || strings.TrimSpace(f.account) != "" {
 		cfg.DefaultAccount = strings.TrimSpace(f.account)
 	}
 	if cmd.Flags().Changed("headless") {
@@ -154,7 +154,13 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 	if f.browserPath != "" {
 		out = append(out, "--browser-path", f.browserPath)
 	}
-	if strings.TrimSpace(f.account) != "" {
+	if cmd.Flags().Changed("account") {
+		if trimmed := strings.TrimSpace(f.account); trimmed != "" {
+			out = append(out, "--account", trimmed)
+		} else {
+			out = append(out, "--account=")
+		}
+	} else if strings.TrimSpace(f.account) != "" {
 		out = append(out, "--account", strings.TrimSpace(f.account))
 	}
 	if cmd.Flags().Changed("headless") {

@@ -198,6 +198,16 @@ func TestSanitizeQueueArgsForLogRedactsURLSecrets(t *testing.T) {
 	}
 }
 
+func TestSanitizeQueueArgsForLogRedactsAccountFlag(t *testing.T) {
+	gotSeparate := sanitizeQueueArgsForLog([]string{"-u", "https://teams.microsoft.com/meet/1", "--account", "alice@contoso.com"})
+	assert.Equal(t, "-u https://teams.microsoft.com/meet/1 --account a***@contoso.com", gotSeparate)
+	assert.NotContains(t, gotSeparate, "alice@contoso.com")
+
+	gotEquals := sanitizeQueueArgsForLog([]string{"-u", "https://teams.microsoft.com/meet/1", "--account=Bob Smith"})
+	assert.Equal(t, "-u https://teams.microsoft.com/meet/1 --account=B***", gotEquals)
+	assert.NotContains(t, gotEquals, "Bob Smith")
+}
+
 func TestQueueFileHonorsPerEntryAudioAliasOverrides(t *testing.T) {
 	dir := t.TempDir()
 	queuePath := filepath.Join(dir, "transcript-queue.txt")

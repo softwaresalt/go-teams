@@ -91,14 +91,14 @@ func bindBrowserFlags(cmd *cobra.Command, f *browserFlags) {
 }
 
 // applyBrowserFlags overrides cfg with any browser flag the operator supplied.
-func applyBrowserFlags(cfg *config.Config, f browserFlags) {
+func applyBrowserFlags(cmd *cobra.Command, cfg *config.Config, f browserFlags) {
 	if f.browserPath != "" {
 		cfg.BrowserPath = f.browserPath
 	}
 	if f.profileDir != "" {
 		cfg.ProfileDir = f.profileDir
 	}
-	if strings.TrimSpace(f.account) != "" {
+	if (cmd != nil && cmd.Flags().Changed("account")) || strings.TrimSpace(f.account) != "" {
 		cfg.DefaultAccount = strings.TrimSpace(f.account)
 	}
 }

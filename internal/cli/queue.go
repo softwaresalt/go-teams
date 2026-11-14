@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
@@ -97,10 +98,25 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 type queueExecKey struct{}
 
 // sanitizeQueueArgsForLog renders queue line arguments for logging with every
-// URL reduced to scheme://host/path so passcodes, userinfo, and fragments are
-// never written to logs.
+// URL reduced to scheme://host/path and any --account identifier redacted so
+// passcodes, userinfo, fragments, and raw account identifiers are never written
+// to logs.
 func sanitizeQueueArgsForLog(args []string) string {
-	return teams.RedactArgs(args)
+	masked := make([]string, len(args))
+	copy(masked, args)
+	for i := 0; i < len(masked); i++ {
+		arg := masked[i]
+		if arg == "--account" && i+1 < len(masked) {
+			masked[i+1] = browser.RedactAccountIdentifier(masked[i+1])
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--account=") {
+			val := strings.TrimPrefix(arg, "--account=")
+			masked[i] = "--account=" + browser.RedactAccountIdentifier(val)
+		}
+	}
+	return teams.RedactArgs(masked)
 }
 
 func executeQueueLine(ctx context.Context, d *deps, args []string) error {

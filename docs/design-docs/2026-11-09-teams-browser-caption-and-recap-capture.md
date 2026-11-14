@@ -286,10 +286,12 @@ scheduling, and the Idea 2C hybrid delayed AI Summary enrichment workflow:
     unless explicitly disabled via `capture_audio: false` / `--audio=false`)
     with zero post-call AI Summary wait (`AISummaryDelay = 0s`).
   * `live-with-summary`: real-time live caption and optional audio capture,
-    immediate browser teardown and profile-gate release when the call ends, a
-    crash-safe pending entry in `transcription_queue.txt` (`queue_file`), and a
-    delayed Recap enrichment pass (`ai_summary_delay`, default `30m`) that
-    appends `# AI Summary` via `capture.AppendAISummaryToFile`.
+    browser teardown and profile-gate release once the capture session
+    (`Session.Run`) shuts down (after `Duration` + `IdleTimeout` silence or
+    `RecordCallEnded` + `IdleTimeout` silence), a crash-safe pending entry in
+    `transcription_queue.txt` (`queue_file`), and a delayed Recap enrichment
+    pass (`ai_summary_delay`, default `30m`) that appends `# AI Summary` via
+    `capture.AppendAISummaryToFile`.
   * `past-recap`: finite post-meeting Recap extraction (`ForceRecap: true`,
     bounded by `lobby_timeout` or a 2-minute default timeout, resolving
     `/l/meetingrecap?threadId=...` when given a live join URL carrying a
@@ -316,9 +318,11 @@ scheduling, and the Idea 2C hybrid delayed AI Summary enrichment workflow:
     `3m`), and cancels `runCtx` cleanly once `Duration` (or `RecordCallEnded`)
     has elapsed and neither signal has occurred for `IdleTimeout`.
 * **Idea 2C hybrid delayed AI Summary enrichment.** When a `live-with-summary`
-  call finishes, `runCaptureWithHooks` closes Chromium immediately (`defer cleanup()`)
-  and invokes `onLiveCallFinished` (releasing the `schedule` daemon's `busy`
-  gate) *before* starting the `ai_summary_delay` timer. It persists a recovery
+  capture session (`Session.Run`) completes and shuts down (after `Duration` +
+  `IdleTimeout` silence or `RecordCallEnded` + `IdleTimeout` silence),
+  `runCaptureWithHooks` closes Chromium (`defer cleanup()`) and invokes
+  `onLiveCallFinished` (releasing the `schedule` daemon's `busy` gate) *before*
+  starting the `ai_summary_delay` timer. It persists a recovery
   line (`"<url>" --append-ai-summary "<transcript.md>" --not-before <RFC3339>`
   plus `--config`, `--profile-dir`, `--browser-path`, `--account`,
   `--lobby-timeout`, and `--headless` formatted via `quoteQueueArg`) under an

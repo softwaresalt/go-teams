@@ -5,7 +5,7 @@ feature: 022-F
 shipment: 022-S
 branch: feat/022-s-scheduled-and-protocol-driven-live-call-capture-r1-r15
 status: closed
-closure_status: READY
+closure_status: READY_WITH_CONDITIONS
 compaction_status: done
 merge_commit: 7b6c31d98ab00f1aaea759e87f5c073936a53dbc
 pull_request: 55
@@ -129,9 +129,14 @@ Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
 
 ## Follow-ups
 
-No new follow-up stash items were generated during `022-S`. Previously stashed
-low-priority items (`70ABBB2C`, `D3A9CBD0`, `EC6D1CAF`) and queued live
-verification shipment `010-S` remain untouched.
+* Stashed follow-up **`3EB89E2D`** (`task`, `low`): Live-tenant validation of
+  scheduled meeting join, overtime continuation (`PCMRMS` voice activity and
+  interim caption heartbeats), in-browser call-end silence shutdown, and Idea 2C
+  delayed AI summary Recap enrichment (`--ai-summary-delay` timer and
+  `--append-ai-summary --not-before` queue replay) against an authorized
+  Microsoft Teams tenant.
+* Previously stashed low-priority items (`70ABBB2C`, `D3A9CBD0`, `EC6D1CAF`) and
+  queued live verification shipment `010-S` remain untouched.
 
 ## Post-merge closure
 
@@ -175,7 +180,7 @@ and `docs/archive/memory/2026-11-13/stage-021-S-022-S-memory.md`.
 | Secret hygiene | `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` | PASS |
 | Full test suite & coverage | `go test -race -cover ./...` (local Windows + GitHub Actions `ubuntu-latest` run `43571245461`): `version` 97.8%, `teams` 93.8%, `scheduler` 93.5%, `transcript` 91.2%, `audio` 87.5%, `config` 86.9%, `capture` 84.8%, `updater` 84.5%, `cli` 80.0%, `browser` 71.6% | PASS |
 | Backlog integrity | `backlogit sync` and `backlogit doctor` ("No issues found.") | PASS |
-| Manual checkpoint (`scheduled-meeting-join` & `teams-auth-mfa`) | Live Microsoft Teams scheduled meeting join, overtime continuation, and post-call Recap AI summary enrichment against a real tenant require an active scheduled meeting and authenticated profile (`010-S` tracks live tenant verification). Hermetic unit and synthetic Chromium tests verify the watchdog, RMS voice detector, interim caption heartbeats, one-shot `at` triggers, and Idea 2C timer + queue fallback | PENDING (operator live-tenant observation window; tracked by `010-S`) |
+| Manual checkpoint (`scheduled-meeting-join` & `teams-auth-mfa`) | Live Microsoft Teams scheduled meeting join, overtime continuation, in-browser call-end silence shutdown, and post-call Recap AI summary enrichment against a real tenant require an active scheduled meeting and authenticated profile. Hermetic unit and synthetic Chromium tests verify the watchdog, RMS voice detector, interim caption heartbeats, one-shot `at` triggers, and Idea 2C timer + queue fallback | PENDING (operator live-tenant observation window; tracked by dedicated follow-up stash `3EB89E2D` alongside `010-S`) |
 
 ## Strict-safety action record
 

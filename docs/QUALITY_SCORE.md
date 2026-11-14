@@ -34,7 +34,7 @@ signal, not a target; CI reports its own figure with
 | `internal/updater` | A | 84.5% | Fail-closed lock protocol, identity guards, checksum verification, and rollback are tested with injected clocks, process liveness, and rename failures. The Windows rename window is exercised only on Windows hosts (see gaps) |
 | `internal/capture` | B | 81.7% | Output path resolution, filename templates, and collision handling are covered, and the `0o700` / `0o600` creation modes are set by the `dirPerm` and `filePerm` constants. No test asserts the resulting mode bits, so the owner-only guarantee rests on code review rather than a regression test |
 | `internal/cli` | A | 82.0% | Flag binding, output precedence, queue parsing, in-place completion marking, and flag inheritance are covered through the injected `deps`; the compiled-binary harness adds an end-to-end check |
-| `internal/config` | B | 69.7% | Load, alias handling, and validation are tested and the tracked-file secret scan lives here. Coverage is the lowest of the leaf packages, and the alias interplay (`output` versus `output_file`, `headless` default) is subtle enough that it deserves more table cases |
+| `internal/config` | A | 83.3% | Load, `default_account` (`entra_account` / `account`) and output alias precedence (`output` versus `output_file` versus `output_folder` versus `default_path`), `headless` / `headed` and `audio` pointer combinations, `expandUserPath`, `defaultProfileDir`, atomic `Save`, and validation are table-tested, and the tracked-file secret scan lives here |
 | `internal/browser` | B | 72.9% | Synthetic-page tests cover the pre-join machine, caption observation, recap export, and sandbox flags. The Teams DOM changes without notice, and no automated test runs against a real tenant (queued in `010-S`) |
 | `cmd/teams-cli` | B | none | Thin `main` with signal wiring and no tests of its own; exercised only through the compiled-binary harness |
 
@@ -115,8 +115,9 @@ These gaps are known and unresolved. Tiers 1 to 4 cannot close them.
 
 1. Complete `010-S` to qualify live capture, recap, and audio against an
    authorized tenant, then upgrade `internal/browser` toward A.
-2. Add table cases to `internal/config` for alias and precedence interactions
-   and raise its coverage above 80%.
+2. ~~Add table cases to `internal/config` for alias and precedence interactions
+   and raise its coverage above 80%.~~ Completed in `021-S` (83.3% statement
+   coverage, Grade A).
 3. Add a POSIX-only test that asserts the `0o700` and `0o600` modes created by
    `internal/capture`, which would lift that package to A.
 4. Add a Windows runner to CI so the Windows-only tests stop depending on

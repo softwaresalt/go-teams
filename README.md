@@ -83,6 +83,7 @@ Flags for the root command, `captions`, and `join`:
 * `--profile-dir`: browser user-data directory to persist login state across runs
 * `--bot-name`: display name injected when joining as an unauthenticated guest
 * `--browser-path`: explicit Chrome, Edge, or Brave executable path (also reads `TEAMS_BROWSER_PATH`)
+* `--account`: default Microsoft Entra account (UPN/email or display name) to auto-select on the Entra account picker interstitial
 * `--headed` / `--headless`: control whether the browser window is visible
 * `--audio`: also capture meeting or recap audio to an `.mp3` file alongside the `.md` transcript
 * `--recap-audio`: also capture Meeting Recap audio to an `.mp3` file alongside the `.md` transcript
@@ -94,8 +95,9 @@ extracted from the recording that belongs to the requested Recap. Recap audio
 is rejected rather than captured when its recording identity cannot be verified
 or when it exceeds the supported size or duration limits.
 
-`--browser-path` and `--profile-dir` are also accepted by `auth` and `schedule`,
-and `browser_path` in the config file applies to every command.
+`--browser-path`, `--profile-dir`, and `--account` are also accepted by `auth`
+and `schedule`, and `browser_path` and `default_account` in the config file
+apply to every command.
 
 Parent output directories are created automatically. Explicit file destinations
 are replaced on each successful capture admission; use unique paths if you
@@ -185,10 +187,11 @@ teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=sy
 * Capture flags on the outer command are forwarded to every line
   (`inheritedQueueFlags`): `--config`, `--output-folder`, `--output-dir`,
   `--output`, `--output-file`, `--filename-template` / `--name-template`,
-  `--profile-dir`, `--bot-name`, `--category`, `--browser-path`, `--headless`,
-  `--headed`, and `--audio` / `--recap-audio`. The outer `--url` and `--queue`
-  are never forwarded. Flags written on a line come after the inherited ones,
-  so repeating the same flag on a line overrides the inherited value.
+  `--profile-dir`, `--bot-name`, `--category`, `--browser-path`, `--account`,
+  `--headless`, `--headed`, and `--audio` / `--recap-audio`. The outer `--url`
+  and `--queue` are never forwarded. Flags written on a line come after the
+  inherited ones, so repeating the same flag on a line overrides the inherited
+  value.
 * [Output target precedence](#output-target-precedence) still applies after the
   outer and per-line flags are merged. An inherited outer `--output-file`
   therefore outranks a per-line `--output` or `--output-dir`; only a per-line
@@ -378,6 +381,7 @@ filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 category: standup
 profile_dir: /home/user/.config/teams-cli/profile
 browser_path: /usr/bin/google-chrome
+default_account: alice@contoso.com
 bot_name: Transcription Agent
 headless: true
 capture_audio: false # true also writes an .mp3 for live meetings and Meeting Recaps
@@ -398,6 +402,7 @@ meetings:
 | `category` | | Category for the transcript header and filename |
 | `profile_dir` | | Browser user-data directory |
 | `browser_path` | | Chrome, Edge, or Brave executable |
+| `default_account` | `entra_account`, `account` | Microsoft Entra account (UPN/email or display name) to auto-select on the account picker interstitial (`default_account` > `entra_account` > `account`) |
 | `bot_name` | | Display name for guest joins |
 | `headless` | `headed` | Browser visibility; `headed: true` forces a visible window |
 | `capture_audio` | `audio` | Also write an `.mp3` next to the transcript |

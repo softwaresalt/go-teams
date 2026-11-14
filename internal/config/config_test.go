@@ -364,3 +364,101 @@ func TestExpandUserPathAndDefaultProfileDir(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", "")
 	assert.Equal(t, filepath.Join(`C:\AppDir`, "profile"), defaultProfileDir(`C:\AppDir`))
 }
+
+func TestCaptureModeValidationAndAliases(t *testing.T) {
+	for _, m := range []string{
+		CaptureModeAuto,
+		CaptureModeEphemeralLive,
+		CaptureModeLiveWithSummary,
+		CaptureModePastRecap,
+	} {
+		assert.True(t, IsValidCaptureMode(m), "expected %q to be valid", m)
+	}
+	assert.False(t, IsValidCaptureMode("bogus-mode"))
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yamlContent := `
+mode: live-with-summary
+duration: 45m
+idle_timeout: 3m
+ai_summary_delay: 30m
+lobby_timeout: 5m
+queue_file: "~/queue.txt"
+meetings:
+  - name: "One-shot"
+    url: "https://teams.microsoft.com/meet/123"
+    at: "2026-11-15T14:00:00Z"
+    capture_mode: ephemeral-live
+    duration: 30m
+    idle_timeout: 2m
+    ai_summary_delay: 0s
+    lobby_timeout: 4m
+    category: "ENG"
+    audio: true
+    output_dir: "~/eng-out"
+`
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0o600))
+	got, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, CaptureModeLiveWithSummary, got.CaptureMode)
+	assert.Equal(t, "45m", got.Duration)
+	assert.Equal(t, "3m", got.IdleTimeout)
+	assert.Equal(t, "30m", got.AISummaryDelay)
+	assert.Equal(t, "5m", got.LobbyTimeout)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "queue.txt"), got.QueueFile)
+	require.Len(t, got.Meetings, 1)
+	assert.Equal(t, "2026-11-15T14:00:00Z", got.Meetings[0].At)
+	assert.Equal(t, CaptureModeEphemeralLive, got.Meetings[0].Mode)
+	assert.Equal(t, "30m", got.Meetings[0].Duration)
+	assert.Equal(t, "2m", got.Meetings[0].IdleTimeout)
+	assert.Equal(t, "0s", got.Meetings[0].AISummaryDelay)
+	assert.Equal(t, "4m", got.Meetings[0].LobbyTimeout)
+	assert.Equal(t, "ENG", got.Meetings[0].Category)
+	require.NotNil(t, got.Meetings[0].CaptureAudio)
+	assert.True(t, *got.Meetings[0].CaptureAudio)
+	assert.Nil(t, got.Meetings[0].Audio)
+	assert.Equal(t, filepath.Join(home, "eng-out"), got.Meetings[0].OutputDir)
+
+	base := func() Config {
+		return Config{OutputDir: "out", ProfileDir: "prof", BotName: "bot"}
+	}
+	errCases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr error
+	}{
+		{"invalid top-level capture_mode", func(c *Config) { c.CaptureMode = "invalid" }, ErrInvalidCaptureMode},
+		{"invalid top-level duration", func(c *Config) { c.Duration = "0s" }, ErrInvalidDuration},
+		{"invalid top-level idle_timeout", func(c *Config) { c.IdleTimeout = "-1m" }, ErrInvalidDuration},
+		{"invalid top-level ai_summary_delay", func(c *Config) { c.AISummaryDelay = "-5m" }, ErrInvalidDuration},
+		{"invalid top-level lobby_timeout", func(c *Config) { c.LobbyTimeout = "not-a-duration" }, ErrInvalidDuration},
+		{"meeting both cron and at", func(c *Config) {
+			c.Meetings = []MeetingSchedule{{URL: "https://x", Cron: "* * * * *", At: "2026-11-15T14:00:00Z"}}
+		}, ErrMeetingScheduleConflict},
+		{"meeting invalid mode", func(c *Config) {
+			c.Meetings = []MeetingSchedule{{URL: "https://x", Cron: "* * * * *", Mode: "bad"}}
+		}, ErrInvalidCaptureMode},
+		{"meeting invalid duration", func(c *Config) {
+			c.Meetings = []MeetingSchedule{{URL: "https://x", Cron: "* * * * *", Duration: "0s"}}
+		}, ErrInvalidDuration},
+		{"meeting invalid idle_timeout", func(c *Config) {
+			c.Meetings = []MeetingSchedule{{URL: "https://x", Cron: "* * * * *", IdleTimeout: "0s"}}
+		}, ErrInvalidDuration},
+		{"meeting invalid ai_summary_delay", func(c *Config) {
+			c.Meetings = []MeetingSchedule{{URL: "https://x", Cron: "* * * * *", AISummaryDelay: "-1s"}}
+		}, ErrInvalidDuration},
+		{"meeting invalid lobby_timeout", func(c *Config) {
+			c.Meetings = []MeetingSchedule{{URL: "https://x", Cron: "* * * * *", LobbyTimeout: "bad"}}
+		}, ErrInvalidDuration},
+	}
+	for _, tc := range errCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base()
+			tc.mutate(&cfg)
+			assert.ErrorIs(t, cfg.Validate(), tc.wantErr)
+		})
+	}
+}

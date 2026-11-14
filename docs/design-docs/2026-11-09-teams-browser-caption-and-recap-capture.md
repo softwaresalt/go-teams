@@ -1,10 +1,10 @@
 ---
 title: Teams browser caption and recap capture
-date: 2026-11-09
+date: 2026-11-13
 status: implemented
-feature: 011-F, 013-F, 015-F, 017-F
-shipment: 011-S, 013-S, 015-S, 017-S
-deliberation: 002-DL, 006-DL
+feature: 011-F, 013-F, 015-F, 017-F, 021-F
+shipment: 011-S, 013-S, 015-S, 017-S, 021-S
+deliberation: 002-DL, 006-DL, 010-DL
 ---
 
 ## Architecture and dependency direction
@@ -111,6 +111,58 @@ explicit opt-out.
 from drifting apart, and a default-on sandbox means a workstation never loses a
 security boundary without someone asking for it.
 
+## Microsoft Entra account-picker auto-selection
+
+Decision `010-DL` (shipment `021-S`) adds opt-in automatic selection of a
+configured Microsoft Entra or Microsoft account tile when a browser profile
+contains multiple cached sessions and redirects through the "Pick an account"
+interstitial (`#tilesHolder`).
+
+* **Configuration and CLI surface.** `Config.DefaultAccount` reads
+  `default_account` with YAML aliases `entra_account` and `account` in
+  deterministic precedence (`default_account` > `entra_account` > `account`),
+  trimmed with `strings.TrimSpace`. The `--account` CLI flag overrides the
+  configured value across the root command, `join`, `captions`, `auth`, and
+  `schedule`, and is forwarded by `inheritedQueueFlags` in batch queue runs. An
+  explicit empty `--account=` clears a configured `default_account` (`cmd.Flags().Changed("account")`).
+* **In-browser DOM selection (`selectEntraAccountJS`).** When `DefaultAccount`
+  is non-empty, `ChromeRunner.run`, `chromeMeeting.joinHeaded`, and
+  `chromeMeeting.awaitPreJoinOrAdmission` (`PreJoinWaitingForUser`) evaluate
+  `selectEntraAccountJS(account)`:
+  * The normalized lowercase target string is serialized with `json.Marshal` so
+    arbitrary characters in `config.yaml` or `--account` cannot break JavaScript
+    syntax or inject script statements.
+  * Execution requires a trusted Microsoft authentication origin (`https:` on
+    `login.microsoftonline.com`, `login.microsoft.com`, `login.live.com`,
+    `account.live.com`, `login.windows.net`, `login.microsoftonline.us`,
+    `login.partner.microsoftonline.cn`, or their dot-delimited subdomains; plus
+    `about:` and loopback hosts for synthetic tests) and a positively
+    identified visible picker surface (`#tilesHolder`, `div[data-bind*="acctTile"]`,
+    `[data-testid="accountTile"]`, or `otherTile`).
+  * It returns `false` immediately if any visible password input
+    (`input[type="password"]`) or MFA challenge control (`input[name="otc"]`,
+    `input[autocomplete="one-time-code"]`, `#idTxtBx_SAOTCC_OTC`,
+    `#idDiv_SAOTCS_Proofs`, `#idRichContext_DisplaySign`,
+    `[data-testid="displaySign"]`) is active.
+  * Candidate tiles (`#tilesHolder [data-test-id]`,
+    `#tilesHolder div.table[role="button"]`,
+    `div.table[role="button"][data-test-id]`, `div[data-bind*="acctTile"]`,
+    `[data-testid="accountTile"]`,
+    `#tilesHolder div[role="listitem"] button[data-test-id]`) must have a
+    nonzero rendered bounding box and no hidden/collapsed ancestor
+    (`isVisible`), and `#otherTile` ("Use another account") is always excluded.
+  * Matching is case-insensitive and exact (never arbitrary substring
+    containment): a tile matches only when its `data-test-id` attribute or a
+    trimmed text line equals the configured UPN/email or display name. The
+    script collects all matching visible tiles first and fails closed
+    (`matches.length !== 1`) when zero or multiple tiles match, and enforces a
+    3000 ms per-tile click cooldown (`dataset.teamsCliAutoSelected`).
+* **Identifier redaction (`RedactAccountIdentifier`).** Whenever a tile
+  selection is logged or a queue line containing `--account` / `--account=` is
+  logged via `sanitizeQueueArgsForLog`, `RedactAccountIdentifier` masks the
+  local part or display name (`a***@contoso.com` or `A***`) so raw account
+  identifiers never appear in logs.
+
 ## Live caption path
 
 The join flow handles browser launcher pages, pre-join controls, lobby
@@ -187,6 +239,7 @@ Tenant policy, localization, and UI changes can prevent summary extraction.
 | `--output-folder` | Default directory for generated names; lowest flag precedence |
 | `-c/--category` | Category for the transcript header and filename |
 | `--filename-template`, `--name-template` | Filename pattern for directory output |
+| `--account` | Default Microsoft Entra account (UPN/email or display name) to auto-select on the account picker interstitial |
 | `--headless` | Headless clean-browser launch |
 | `--audio` | Also capture meeting or Recap audio to a same-basename `.mp3` |
 | `--recap-audio` | Also capture Meeting Recap audio to a same-basename `.mp3` |

@@ -400,3 +400,52 @@ func sanitizeFilenameToken(raw string) string {
 	cleaned = multiHyphenRe.ReplaceAllString(cleaned, "-")
 	return strings.Trim(cleaned, "-_.")
 }
+
+// AppendAISummaryToFile appends the formatted AI Summary section to an
+// existing Markdown transcript file without overwriting preceding content. It
+// is idempotent when the file already contains an AI Summary heading.
+func AppendAISummaryToFile(transcriptPath, summary string) error {
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return errors.New("capture: ai summary is empty")
+	}
+	if strings.TrimSpace(transcriptPath) == "" {
+		return errors.New("capture: transcript path must not be empty")
+	}
+	absPath, err := filepath.Abs(transcriptPath)
+	if err != nil {
+		return fmt.Errorf("capture: resolve transcript path %s: %w", transcriptPath, err)
+	}
+	existingBytes, err := os.ReadFile(absPath)
+	if err != nil {
+		return fmt.Errorf("capture: read transcript %s: %w", absPath, err)
+	}
+	existing := strings.ReplaceAll(string(existingBytes), "\r\n", "\n")
+	if strings.Contains(existing, "\n# AI Summary\n") ||
+		strings.Contains(existing, "\n## AI Summary\n") ||
+		strings.HasPrefix(existing, "# AI Summary\n") ||
+		strings.HasPrefix(existing, "## AI Summary\n") {
+		return nil
+	}
+	f, err := os.OpenFile(absPath, os.O_WRONLY|os.O_APPEND, filePerm)
+	if err != nil {
+		return fmt.Errorf("capture: open transcript %s for append: %w", absPath, err)
+	}
+	w := transcript.NewWriter(f)
+	if err := w.WriteAISummary(trimmed); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("capture: write ai summary to %s: %w", absPath, err)
+	}
+	if err := w.Flush(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("capture: flush ai summary to %s: %w", absPath, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("capture: sync transcript %s: %w", absPath, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("capture: close transcript %s: %w", absPath, err)
+	}
+	return nil
+}

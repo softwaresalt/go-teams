@@ -31,12 +31,16 @@ type deps struct {
 	newSession func(cfg config.Config, meetingURL string) meetingSession
 	// runUpdate checks for or installs a teams-cli release.
 	runUpdate func(ctx context.Context, opts updateOptions) (updater.Result, error)
+	// writeTemplate writes the commented configuration template to path,
+	// replacing an existing file only when force is true.
+	writeTemplate func(path string, force bool) error
 }
 
 func defaultDeps() *deps {
 	return &deps{
-		loadConfig: config.Load,
-		runUpdate:  defaultRunUpdate,
+		loadConfig:    config.Load,
+		runUpdate:     defaultRunUpdate,
+		writeTemplate: config.WriteTemplate,
 		newRunner: func(c config.Config) browser.Runner {
 			return browser.NewChromeRunner(browserOptions(c))
 		},
@@ -187,6 +191,7 @@ func newRootCommand(d *deps) *cobra.Command {
 		newCaptionsCommand(d, &configPath),
 		newScheduleCommand(d, &configPath),
 		newUpdateCommand(d),
+		newGenerateConfigCommand(d),
 	)
 	return root
 }

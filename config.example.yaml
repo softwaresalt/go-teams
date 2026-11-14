@@ -1,76 +1,128 @@
-# Example customer YAML configuration for teams-cli.
-# Copy this file to config.yaml (in the current directory or next to teams-cli.exe)
-# or pass a per-customer file via:
-#   teams-cli.exe --config wsp.yaml "https://teams.cloud.microsoft/l/meetingrecap?..."
+# teams-cli configuration file
+#
+# Every setting below is turned off (commented out), so this file is valid as
+# generated and teams-cli falls back to its built-in defaults. To change a
+# setting, remove the leading "# " from its line and edit the value. Lines that
+# start with "#   Alias:" or "#   Alternative:" are notes, not settings.
+#
+# Where teams-cli looks for this file (first match wins):
+#   1. the path given with --config / -f
+#   2. config.yaml in the current directory
+#   3. config.yaml next to the teams-cli executable
+#   4. the per-user default location (for example
+#      %APPDATA%\teams-cli\config.yaml on Windows)
+#
+# Paths accept %LOCALAPPDATA%-style variables, $ENV_VAR variables, and a
+# leading ~ for your home folder. In double-quoted YAML text, write a backslash
+# as two backslashes (\\).
+#
+# Defaults when nothing below is changed:
+#   * transcripts are saved under your per-user teams-cli\transcripts folder
+#   * a visible browser window opens (set headless: true to run in the background)
+#   * the bot name is "Transcription Agent"
 
-# Customer or project category used in the "# Meeting Attendees" header
-# (**Category:**) and in the <category> filename placeholder.
-category: "WSP"
+# ---------------------------------------------------------------------------
+# Where transcripts are saved
+# ---------------------------------------------------------------------------
 
-# Default output folder where all transcripts for this config are written
-# when no explicit .md file path is specified.
-output_folder: "C:\\Transcripts\\WSP"
+# Folder where transcripts are written when you do not give an explicit .md
+# file on the command line.
+#   Alias: output_folder, default_path
+# output_dir: "C:\\Transcripts\\Team"
 
-# Naming convention template used when writing to output_folder.
-# Supported placeholders:
-#   <category>            - value of category (omitted cleanly if empty)
-#   <concat-meeting-name> - meeting title with articles/filler words removed and words concatenated
-#   <meeting-name>        - hyphen-separated meeting title
-#   <meeting-id>          - sanitized Teams meeting identifier
-#   <YYYYMMDD>            - meeting date as 20261109
-#   <YYYY-MM-DD>          - meeting date as 2026-11-09
-#   <HHMMSS>              - meeting start time as 080000
-filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
+# Alternative to output_dir: one fixed Markdown file path instead of a folder
+# plus a naming template. Do not use it together with output_dir.
+#   Alternative: output_file: "C:\\Transcripts\\Team\\meeting.md"
+#   Alias: output (a path ending in .md or .markdown is treated as output_file,
+#   anything else as output_dir)
 
-# Optional explicit output file path (overrides output_folder + filename_template
-# when you want a fixed file path instead of the folder naming template).
-# output_file: "C:\\Transcripts\\WSP\\custom-output.md"
+# Naming pattern for files written into output_dir. Placeholders:
+#   <category>            your category value (dropped cleanly when empty)
+#   <concat-meeting-name> meeting title with filler words removed, words joined
+#   <meeting-name>        meeting title with words joined by hyphens
+#   <meeting-id>          cleaned-up Teams meeting identifier
+#   <YYYYMMDD>            capture date, for example 20261109
+#   <YYYY-MM-DD>          capture date, for example 2026-11-09
+#   <HHMMSS>              capture time, for example 080000
+#   <timestamp>           capture timestamp
+#   Alias: name_template
+# filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 
-# Optional default meeting or recap URL (can be overridden on the command line).
-# meeting_url: "https://teams.cloud.microsoft/l/meetingrecap?..."
+# Label for a customer, project, or team. It appears in the transcript header
+# and fills the <category> placeholder.
+# category: "TEAM"
 
-# Optional path to Microsoft Edge or Google Chrome executable.
-# When omitted on Windows, Microsoft Edge (msedge.exe) is discovered automatically.
-# browser_path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+# ---------------------------------------------------------------------------
+# What to capture
+# ---------------------------------------------------------------------------
 
-# Browser profile directory for persisting Microsoft 365 authentication cookies/tokens.
-# Defaults to "%LOCALAPPDATA%\\teams-cli\\profile" (e.g. C:\Users\<you>\AppData\Local\teams-cli\profile)
-# when omitted.
-# profile_dir: "%LOCALAPPDATA%\\teams-cli\\profile"
+# Default meeting or Meeting Recap URL, used when you do not pass one on the
+# command line.
+#   Alias: url
+# meeting_url: "https://teams.microsoft.com/meet/synthetic-meeting"
 
-# Run the browser in headless mode (true for background automation after initial sign-in,
-# false to open a visible browser window for interactive login).
-headless: true
-
-# Display name used only when joining an unauthenticated guest pre-join screen.
-bot_name: "Transcription Agent"
-
-# Whether to capture live meeting or Meeting Recap audio to an MP3 file.
-capture_audio: false
-
-# Optional default Microsoft Entra account (UPN/email or display name) to auto-select
-# on the Entra account picker interstitial (aliases: entra_account, account).
-# default_account: "alice@contoso.com"
-
-# Optional capture protocol (alias: mode):
-#   auto              - past-recap for Recap URLs, live capture otherwise (default)
-#   ephemeral-live    - real-time captions + MP3 audio with no post-call AI Summary wait
-#   live-with-summary - real-time capture + delayed post-call AI Summary append
-#   past-recap        - finite post-meeting Recap export (transcript + AI Summary + optional MP3)
+# Capture protocol:
+#   auto              Meeting Recap links are exported, live links are captured
+#                     as they happen (default)
+#   ephemeral-live    live captions and MP3 audio with no AI Summary wait
+#   live-with-summary live capture plus the AI Summary fetched after ai_summary_delay
+#   past-recap        finite export of a finished meeting's transcript and summary
+#   Alias: mode
 # capture_mode: "auto"
 
-# Optional nominal live capture duration before post-duration inactivity monitoring begins,
-# plus silence/inactivity timeout, post-call AI Summary fetch delay, and lobby timeout.
+# Record the meeting audio to an MP3 file next to the transcript.
+#   Alias: audio
+# capture_audio: false
+
+# Timing. Durations use Go syntax such as 90s, 5m, or 1h30m.
+#   duration          planned live capture length before inactivity checks begin
+#   idle_timeout      stop after this long without captions or audio
+#   ai_summary_delay  wait before fetching the post-call AI Summary (0s is allowed)
+#   lobby_timeout     give up if you are not admitted from the lobby in this time
 # duration: "1h"
 # idle_timeout: "3m"
 # ai_summary_delay: "30m"
 # lobby_timeout: "5m"
 
-# Optional batch queue file used for --queue catch-up and crash-safe deferred
-# --append-ai-summary --not-before entries.
-# queue_file: "C:\\Transcripts\\WSP\\transcription_queue.txt"
+# Queue file where deferred --append-ai-summary entries are written. "teams-cli
+# schedule" sweeps it at startup. Defaults to transcription_queue.txt.
+# queue_file: "C:\\Transcripts\\Team\\transcription_queue.txt"
 
-# Optional scheduled meetings for `teams-cli schedule` (use either `cron` or one-shot `at`):
+# ---------------------------------------------------------------------------
+# Browser and sign-in
+# ---------------------------------------------------------------------------
+
+# Browser profile folder that keeps your Microsoft 365 sign-in between runs.
+# Treat it like a password: never share or commit it.
+# profile_dir: "%LOCALAPPDATA%\\teams-cli\\profile"
+
+# Path to Microsoft Edge or Google Chrome. Edge is found automatically on
+# Windows when this is not set.
+# browser_path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+
+# Microsoft Entra account (email or display name) to pick automatically on the
+# account chooser screen.
+#   Alias: entra_account, account
+# default_account: "alice@contoso.com"
+
+# Name shown only when joining as an unauthenticated guest.
+# bot_name: "Transcription Agent"
+
+# true runs the browser in the background (use after your first interactive
+# sign-in with teams-cli auth); false shows the browser window.
+#   Alias: headed (headed: true forces a visible window)
+# headless: true
+
+# ---------------------------------------------------------------------------
+# Scheduled meetings for "teams-cli schedule"
+# ---------------------------------------------------------------------------
+
+# Each meeting needs a url and exactly one trigger: cron (repeats) or at (once).
+#   cron  five-field cron expression, for example "0 9 * * 1-5" (09:00 weekdays)
+#   at    one-time local time "2026-11-15 14:00" or an RFC 3339 timestamp
+# Optional per-meeting settings: mode (alias: capture_mode), duration,
+# idle_timeout, ai_summary_delay, lobby_timeout, category, capture_audio
+# (alias: audio), and output_dir. They override the global settings above.
 # meetings:
 #   - name: "Daily Standup"
 #     url: "https://teams.microsoft.com/meet/synthetic-standup"
@@ -80,7 +132,7 @@ capture_audio: false
 #     idle_timeout: "3m"
 #     ai_summary_delay: "30m"
 #     lobby_timeout: "5m"
-#     category: "WSP"
+#     category: "TEAM"
 #     capture_audio: false
 #   - name: "Architecture Review"
 #     url: "https://teams.microsoft.com/meet/synthetic-review"
@@ -90,4 +142,4 @@ capture_audio: false
 #     idle_timeout: "3m"
 #     category: "ARCH"
 #     capture_audio: true
-
+#     output_dir: "C:\\Transcripts\\Architecture"

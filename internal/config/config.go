@@ -162,6 +162,9 @@ func expandUserPath(raw string) string {
 		return m
 	})
 	expanded = os.ExpandEnv(expanded)
+	if expanded == "~" && home != "" {
+		expanded = home
+	}
 	if strings.HasPrefix(expanded, "~"+string(filepath.Separator)) || strings.HasPrefix(expanded, "~/") {
 		if home != "" {
 			expanded = filepath.Join(home, expanded[2:])

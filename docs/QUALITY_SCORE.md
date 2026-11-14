@@ -1,7 +1,7 @@
 ---
 title: Quality Grades by Domain
 description: Honest quality grades, test coverage tiers, and live-verification gaps for each go-teams package
-date: 2026-11-11
+date: 2026-11-14
 ---
 
 ## How to read this document
@@ -18,7 +18,8 @@ repository, not the effort spent.
 | C | Known weaknesses in tests, documentation, or design; flagged for improvement |
 
 Statement coverage in the table below was measured with `go test -cover` on a
-Windows development host on 2026-11-12. Treat the numbers as a point-in-time
+Windows development host on 2026-11-12; the `internal/cli` and `internal/config` rows
+were re-measured on 2026-11-14 after `024-S`. Treat the numbers as a point-in-time
 signal, not a target; CI reports its own figure with
 `go test -race -coverprofile=coverage.out ./...`.
 
@@ -33,15 +34,16 @@ signal, not a target; CI reports its own figure with
 | `internal/audio` | A | 87.5% | Encoder output is pinned by a golden digest, and sibling tests parse MPEG-1 Layer III frame headers to count frames. The grade covers the encoder only; real Teams audio fidelity is a browser-domain gap |
 | `internal/updater` | A | 84.5% | Fail-closed lock protocol, identity guards, checksum verification, and rollback are tested with injected clocks, process liveness, and rename failures. The Windows rename window is exercised on `windows-latest` in CI (`test-windows`) as well as on Windows development hosts |
 | `internal/capture` | A | 84.8% | Output path resolution, filename templates, activity-aware nominal duration/overtime/idle shutdown, call-end early stop, fallback `MeetingTitle`, and idempotent `AppendAISummaryToFile` are covered. `internal/capture/output_unix_test.go` asserts the `0o700` (`dirPerm`) directory and `0o600` (`filePerm`) file creation modes under `syscall.Umask(0)`, the preservation of a pre-existing directory's mode, and `AppendAISummaryToFile` mode preservation, so the owner-only guarantee has a POSIX regression test. The coverage figure was measured on a Windows host, where the `//go:build unix` tests do not run |
-| `internal/cli` | A | 80.0% | Flag binding, capture protocols, Idea 2C delayed AI summary timer + inter-process locked queue fallback, `--not-before` gating, schedule overrides, output precedence, and flag inheritance are covered through the injected `deps`; the compiled-binary harness adds an end-to-end check |
-| `internal/config` | A | 86.9% | Load, capture modes, lifecycle durations, per-meeting overrides (`cron` vs `at`), `default_account` (`entra_account` / `account`) and output alias precedence (`output` versus `output_file` versus `output_folder` versus `default_path`), `headless` / `headed` and `audio` pointer combinations, `expandUserPath`, `defaultProfileDir`, atomic `Save`, and validation are table-tested, and the tracked-file secret scan lives here |
+| `internal/cli` | A | 80.6% | Flag binding, the `generate-config` subcommand (aliases, positional file-versus-directory handling, `--force` collision, and invalid-name rejection, with the root `--config` flag proven unused), capture protocols, Idea 2C delayed AI summary timer + inter-process locked queue fallback, `--not-before` gating, schedule overrides, output precedence, and flag inheritance are covered through the injected `deps`; the compiled-binary harness adds an end-to-end check |
+| `internal/config` | A | 81.6% | Load, `TemplateYAML` / `ResolveTemplatePath` / `WriteTemplate` (template parses before and after uncommenting, filename traversal rejection, `O_EXCL` and atomic `--force` writes, owner-only modes, and `config.example.yaml` parity), capture modes, lifecycle durations, per-meeting overrides (`cron` vs `at`), `default_account` (`entra_account` / `account`) and output alias precedence (`output` versus `output_file` versus `output_folder` versus `default_path`), `headless` / `headed` and `audio` pointer combinations, `expandUserPath`, `defaultProfileDir`, atomic `Save`, and validation are table-tested, and the tracked-file secret scan lives here |
 | `internal/browser` | B | 71.6% | Synthetic-page and unit tests cover the pre-join machine, lobby timeout (`ErrLobbyTimeout`), `ForceRecap`, PCM RMS voice activity (`PCMRMS`/`HasVoiceActivity`), interim caption heartbeats, call-end probes (`shouldNotifyCallEnded`), recap export, and sandbox flags. The Teams DOM changes without notice, and no automated test runs against a real tenant (queued in `010-S`) |
 | `cmd/teams-cli` | B | none | Thin `main` with signal wiring and no tests of its own; exercised only through the compiled-binary harness |
 
-Documentation grade for the repository as a whole is B: the README,
-[ARCHITECTURE.md](ARCHITECTURE.md), and the graduated design docs describe the
-shipped behavior, but no per-package GoDoc audit has been done and
-`docs/product-specs/` still holds a single blueprint document.
+Documentation grade for the repository as a whole is B: the README cover page,
+the [user guide](USER_GUIDE.md), [ARCHITECTURE.md](ARCHITECTURE.md), and the
+graduated design docs describe the shipped behavior, but no per-package GoDoc audit has been done and
+`docs/product-specs/` holds two specification documents (the architecture
+blueprint and the scheduled live-call capture requirements).
 
 ## Test coverage tiers
 

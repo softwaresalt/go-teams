@@ -41,3 +41,10 @@ func TestAudioCaptureJSStructure(t *testing.T) {
 	assert.Contains(t, audioCaptureJS, "sendAudioToGo")
 	assert.Contains(t, audioCaptureJS, "getVideoTracks")
 }
+
+func TestPCMRMSAndHasVoiceActivity(t *testing.T) {
+	assert.Equal(t, 0.0, PCMRMS(nil))
+	assert.Equal(t, 0.0, PCMRMS([]int16{0, 0, 0, 0}))
+	assert.False(t, HasVoiceActivity([]int16{40, -40, 40, -40}, 0))
+	assert.True(t, HasVoiceActivity([]int16{2000, -2000, 2000, -2000}, 0))
+}

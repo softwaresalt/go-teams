@@ -2,9 +2,15 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/config"
@@ -91,4 +97,104 @@ func TestScheduleJobInvalidURLNotBusy(t *testing.T) {
 	if busy.Load() {
 		t.Fatal("busy must not be held after an invalid url is rejected")
 	}
+}
+
+func TestScheduleMeetingOverridesAndBusyGateReleaseBeforeSummaryDelay(t *testing.T) {
+	root := newRootCommand(defaultDeps())
+	sched, _, err := root.Find([]string{"schedule"})
+	require.NoError(t, err)
+	for _, flag := range []string{"duration", "idle-timeout", "mode", "ai-summary-delay", "no-ai-summary", "lobby-timeout", "audio", "headless", "headed"} {
+		require.NotNilf(t, sched.Flags().Lookup(flag), "schedule command missing --%s flag", flag)
+	}
+
+	// Verify buildScheduleEntryConfig applies defaults (1h duration, 3m idle timeout) and per-entry overrides.
+	base := validConfig()
+	defCfg := buildScheduleEntryConfig(base, scheduler.Entry{Name: "Daily Standup", URL: "https://teams.microsoft.com/meet/1"})
+	assert.Equal(t, "Daily Standup", defCfg.MeetingTitle)
+	assert.Equal(t, "1h0m0s", defCfg.Duration)
+	assert.Equal(t, "3m0s", defCfg.IdleTimeout)
+
+	audioTrue := true
+	delay5m := 5 * time.Minute
+	overCfg := buildScheduleEntryConfig(base, scheduler.Entry{
+		Name:           "Exec Sync",
+		URL:            "https://teams.microsoft.com/meet/2",
+		Mode:           config.CaptureModeLiveWithSummary,
+		Duration:       45 * time.Minute,
+		IdleTimeout:    2 * time.Minute,
+		AISummaryDelay: &delay5m,
+		LobbyTimeout:   4 * time.Minute,
+		Category:       "EXEC",
+		CaptureAudio:   &audioTrue,
+		OutputDir:      "custom-dir",
+	})
+	assert.Equal(t, "Exec Sync", overCfg.MeetingTitle)
+	assert.Equal(t, config.CaptureModeLiveWithSummary, overCfg.CaptureMode)
+	assert.Equal(t, "45m0s", overCfg.Duration)
+	assert.Equal(t, "2m0s", overCfg.IdleTimeout)
+	assert.Equal(t, "5m0s", overCfg.AISummaryDelay)
+	assert.Equal(t, "4m0s", overCfg.LobbyTimeout)
+	assert.Equal(t, "EXEC", overCfg.Category)
+	assert.True(t, overCfg.CaptureAudio)
+	assert.Equal(t, "custom-dir", overCfg.OutputDir)
+
+	// Verify busy gate releases immediately after live capture finishes (before ai_summary_delay)
+	// so a second scheduled meeting can run during the delay window.
+	dir := t.TempDir()
+	base.QueueFile = filepath.Join(dir, "transcription_queue.txt")
+	md1 := filepath.Join(dir, "m1.md")
+	require.NoError(t, os.WriteFile(md1, []byte("# Meeting Transcript\n\n> **Alice:** First meeting.\n"), 0o600))
+
+	var (
+		mu       sync.Mutex
+		captured []string
+	)
+	d := &deps{
+		newMeeting: func(ctx context.Context, c config.Config, url string) (browser.Meeting, context.Context, func(), error) {
+			mu.Lock()
+			captured = append(captured, c.MeetingTitle+":"+c.CaptureMode)
+			mu.Unlock()
+			return &fakeSummaryMeeting{summary: "Summary:\nM1 summary."}, ctx, func() {}, nil
+		},
+		newSession: func(c config.Config, _ string) meetingSession {
+			if c.MeetingTitle == "m1" {
+				return &fakeSession{transcriptPath: md1, wasRecap: false}
+			}
+			return &fakeSession{wasRecap: false}
+		},
+	}
+
+	var (
+		busy      atomic.Bool
+		summaryWG sync.WaitGroup
+	)
+	job := scheduleJobWithSummaryWG(context.Background(), d, base, &busy, &summaryWG)
+
+	delay80ms := 80 * time.Millisecond
+	job(scheduler.Entry{
+		Name:           "m1",
+		URL:            "https://teams.microsoft.com/meet/one",
+		Mode:           config.CaptureModeLiveWithSummary,
+		AISummaryDelay: &delay80ms,
+	})
+	// Immediately after job(m1) returns, busy must be false even while the 80ms AI summary timer is pending!
+	assert.False(t, busy.Load(), "busy gate must be released before ai_summary_delay elapses")
+
+	// A second meeting m2 triggered during m1's delay window must succeed rather than being skipped.
+	job(scheduler.Entry{
+		Name: "m2",
+		URL:  "https://teams.microsoft.com/meet/two",
+		Mode: config.CaptureModeEphemeralLive,
+	})
+
+	summaryWG.Wait()
+
+	mu.Lock()
+	gotCaptured := append([]string(nil), captured...)
+	mu.Unlock()
+	assert.Equal(t, []string{
+		"m1:live-with-summary",
+		"m2:ephemeral-live",
+		"m1:past-recap",
+	}, gotCaptured)
 }

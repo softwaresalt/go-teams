@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,7 +19,30 @@ const (
 	// DefaultFilenameTemplate is the default transcript filename pattern used
 	// when only an output directory is specified.
 	DefaultFilenameTemplate = "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
+
+	// CaptureModeAuto selects past-recap for Recap URLs and live-with-summary
+	// (or ephemeral-live when delayed AI summary is disabled) for live URLs.
+	CaptureModeAuto = "auto"
+	// CaptureModeEphemeralLive captures live captions and audio in real time
+	// with no post-call AI Summary wait.
+	CaptureModeEphemeralLive = "ephemeral-live"
+	// CaptureModeLiveWithSummary captures live captions and optional audio and
+	// fetches the post-call AI Summary after ai_summary_delay.
+	CaptureModeLiveWithSummary = "live-with-summary"
+	// CaptureModePastRecap exports a finite post-meeting Recap transcript, AI
+	// Summary, and optional audio.
+	CaptureModePastRecap = "past-recap"
 )
+
+// IsValidCaptureMode reports whether mode is a supported capture protocol.
+func IsValidCaptureMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case CaptureModeAuto, CaptureModeEphemeralLive, CaptureModeLiveWithSummary, CaptureModePastRecap:
+		return true
+	default:
+		return false
+	}
+}
 
 var winEnvVarRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%`)
 
@@ -32,33 +56,62 @@ var (
 	ErrEmptyBotName = errors.New("config: bot_name must not be empty")
 	// ErrMeetingMissingURL indicates a scheduled meeting has no URL.
 	ErrMeetingMissingURL = errors.New("config: meeting url must not be empty")
-	// ErrMeetingMissingCron indicates a scheduled meeting has no cron
-	// expression.
+	// ErrMeetingMissingCron indicates a scheduled meeting has no cron or at
+	// trigger.
 	ErrMeetingMissingCron = errors.New("config: meeting cron must not be empty")
+	// ErrMeetingScheduleConflict indicates a scheduled meeting specifies both
+	// cron and at triggers.
+	ErrMeetingScheduleConflict = errors.New("config: meeting must specify either cron or at, not both")
+	// ErrInvalidCaptureMode indicates an unsupported capture_mode / mode value.
+	ErrInvalidCaptureMode = errors.New("config: invalid capture mode")
+	// ErrInvalidDuration indicates an invalid duration string.
+	ErrInvalidDuration = errors.New("config: invalid duration")
 )
 
-// MeetingSchedule maps a Teams meeting URL to a cron expression consumed by
-// the scheduler daemon.
+// MeetingSchedule maps a Teams meeting URL to a cron expression or one-shot
+// timestamp consumed by the scheduler daemon, along with optional per-meeting
+// capture overrides.
 type MeetingSchedule struct {
-	Name string `yaml:"name"`
-	URL  string `yaml:"url"`
-	Cron string `yaml:"cron"`
+	Name           string `yaml:"name"`
+	URL            string `yaml:"url"`
+	Cron           string `yaml:"cron,omitempty"`
+	At             string `yaml:"at,omitempty"`
+	Mode           string `yaml:"mode,omitempty"`
+	Duration       string `yaml:"duration,omitempty"`
+	IdleTimeout    string `yaml:"idle_timeout,omitempty"`
+	AISummaryDelay string `yaml:"ai_summary_delay,omitempty"`
+	LobbyTimeout   string `yaml:"lobby_timeout,omitempty"`
+	Category       string `yaml:"category,omitempty"`
+	CaptureAudio   *bool  `yaml:"capture_audio,omitempty"`
+	Audio          *bool  `yaml:"audio,omitempty"`
+	OutputDir      string `yaml:"output_dir,omitempty"`
 }
 
 // Config is the top-level go-teams CLI configuration.
 type Config struct {
-	OutputDir        string            `yaml:"output_dir"`
-	OutputFile       string            `yaml:"output_file,omitempty"`
-	FilenameTemplate string            `yaml:"filename_template,omitempty"`
-	MeetingURL       string            `yaml:"meeting_url,omitempty"`
-	ProfileDir       string            `yaml:"profile_dir"`
-	BotName          string            `yaml:"bot_name"`
-	Category         string            `yaml:"category,omitempty"`
-	Headless         bool              `yaml:"headless"`
-	CaptureAudio     bool              `yaml:"capture_audio,omitempty"`
-	BrowserPath      string            `yaml:"browser_path,omitempty"`
-	DefaultAccount   string            `yaml:"default_account,omitempty"`
-	Meetings         []MeetingSchedule `yaml:"meetings"`
+	OutputDir            string            `yaml:"output_dir"`
+	OutputFile           string            `yaml:"output_file,omitempty"`
+	FilenameTemplate     string            `yaml:"filename_template,omitempty"`
+	MeetingURL           string            `yaml:"meeting_url,omitempty"`
+	ProfileDir           string            `yaml:"profile_dir"`
+	BotName              string            `yaml:"bot_name"`
+	Category             string            `yaml:"category,omitempty"`
+	Headless             bool              `yaml:"headless"`
+	CaptureAudio         bool              `yaml:"capture_audio,omitempty"`
+	BrowserPath          string            `yaml:"browser_path,omitempty"`
+	DefaultAccount       string            `yaml:"default_account,omitempty"`
+	CaptureMode          string            `yaml:"capture_mode,omitempty"`
+	Duration             string            `yaml:"duration,omitempty"`
+	IdleTimeout          string            `yaml:"idle_timeout,omitempty"`
+	AISummaryDelay       string            `yaml:"ai_summary_delay,omitempty"`
+	LobbyTimeout         string            `yaml:"lobby_timeout,omitempty"`
+	QueueFile            string            `yaml:"queue_file,omitempty"`
+	ConfigPath           string            `yaml:"-"`
+	MeetingTitle         string            `yaml:"-"`
+	AppendAISummary      string            `yaml:"-"`
+	NotBefore            string            `yaml:"-"`
+	ExplicitCaptureAudio bool              `yaml:"-"`
+	Meetings             []MeetingSchedule `yaml:"meetings"`
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default
@@ -137,6 +190,30 @@ func appConfigDir() (string, error) {
 	return filepath.Join(base, appDirName), nil
 }
 
+func validatePositiveDuration(raw, field string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(trimmed)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("config: %s %q: %w", field, raw, ErrInvalidDuration)
+	}
+	return nil
+}
+
+func validateNonNegativeDuration(raw, field string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(trimmed)
+	if err != nil || d < 0 {
+		return fmt.Errorf("config: %s %q: %w", field, raw, ErrInvalidDuration)
+	}
+	return nil
+}
+
 // Validate reports whether the configuration is internally consistent.
 func (c Config) Validate() error {
 	switch {
@@ -147,12 +224,47 @@ func (c Config) Validate() error {
 	case c.BotName == "":
 		return ErrEmptyBotName
 	}
+	if strings.TrimSpace(c.CaptureMode) != "" && !IsValidCaptureMode(c.CaptureMode) {
+		return fmt.Errorf("config: capture_mode %q: %w", c.CaptureMode, ErrInvalidCaptureMode)
+	}
+	if err := validatePositiveDuration(c.Duration, "duration"); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration(c.IdleTimeout, "idle_timeout"); err != nil {
+		return err
+	}
+	if err := validateNonNegativeDuration(c.AISummaryDelay, "ai_summary_delay"); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration(c.LobbyTimeout, "lobby_timeout"); err != nil {
+		return err
+	}
 	for i, m := range c.Meetings {
-		if m.URL == "" {
+		if strings.TrimSpace(m.URL) == "" {
 			return fmt.Errorf("config: meeting %d: %w", i, ErrMeetingMissingURL)
 		}
-		if m.Cron == "" {
+		hasCron := strings.TrimSpace(m.Cron) != ""
+		hasAt := strings.TrimSpace(m.At) != ""
+		if !hasCron && !hasAt {
 			return fmt.Errorf("config: meeting %d: %w", i, ErrMeetingMissingCron)
+		}
+		if hasCron && hasAt {
+			return fmt.Errorf("config: meeting %d: %w", i, ErrMeetingScheduleConflict)
+		}
+		if strings.TrimSpace(m.Mode) != "" && !IsValidCaptureMode(m.Mode) {
+			return fmt.Errorf("config: meeting %d mode %q: %w", i, m.Mode, ErrInvalidCaptureMode)
+		}
+		if err := validatePositiveDuration(m.Duration, fmt.Sprintf("meeting %d duration", i)); err != nil {
+			return err
+		}
+		if err := validatePositiveDuration(m.IdleTimeout, fmt.Sprintf("meeting %d idle_timeout", i)); err != nil {
+			return err
+		}
+		if err := validateNonNegativeDuration(m.AISummaryDelay, fmt.Sprintf("meeting %d ai_summary_delay", i)); err != nil {
+			return err
+		}
+		if err := validatePositiveDuration(m.LobbyTimeout, fmt.Sprintf("meeting %d lobby_timeout", i)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -181,9 +293,14 @@ func Load(path string) (Config, error) {
 		URL          string `yaml:"url"`
 		EntraAccount string `yaml:"entra_account"`
 		Account      string `yaml:"account"`
+		Mode         string `yaml:"mode"`
 		Headless     *bool  `yaml:"headless"`
 		Headed       *bool  `yaml:"headed"`
+		CaptureAudio *bool  `yaml:"capture_audio"`
 		Audio        *bool  `yaml:"audio"`
+		Meetings     []struct {
+			CaptureMode string `yaml:"capture_mode"`
+		} `yaml:"meetings"`
 	}
 	if err := yaml.Unmarshal(data, &aliases); err == nil {
 		if aliases.DefaultPath != "" {
@@ -213,6 +330,10 @@ func Load(path string) (Config, error) {
 		if cfg.DefaultAccount == "" {
 			cfg.DefaultAccount = strings.TrimSpace(aliases.Account)
 		}
+		cfg.CaptureMode = strings.ToLower(strings.TrimSpace(cfg.CaptureMode))
+		if cfg.CaptureMode == "" && strings.TrimSpace(aliases.Mode) != "" {
+			cfg.CaptureMode = strings.ToLower(strings.TrimSpace(aliases.Mode))
+		}
 		switch {
 		case aliases.Headed != nil && *aliases.Headed:
 			cfg.Headless = false
@@ -221,8 +342,33 @@ func Load(path string) (Config, error) {
 		default:
 			cfg.Headless = false
 		}
+		if aliases.CaptureAudio != nil || aliases.Audio != nil {
+			cfg.ExplicitCaptureAudio = true
+		}
 		if aliases.Audio != nil {
 			cfg.CaptureAudio = *aliases.Audio
+		}
+		if strings.EqualFold(cfg.CaptureMode, CaptureModeEphemeralLive) {
+			if strings.TrimSpace(cfg.AISummaryDelay) == "" {
+				cfg.AISummaryDelay = "0s"
+			}
+			if !cfg.ExplicitCaptureAudio {
+				cfg.CaptureAudio = true
+			}
+		}
+		for i := range cfg.Meetings {
+			cfg.Meetings[i].Mode = strings.ToLower(strings.TrimSpace(cfg.Meetings[i].Mode))
+			if cfg.Meetings[i].Mode == "" && i < len(aliases.Meetings) && strings.TrimSpace(aliases.Meetings[i].CaptureMode) != "" {
+				cfg.Meetings[i].Mode = strings.ToLower(strings.TrimSpace(aliases.Meetings[i].CaptureMode))
+			}
+			if cfg.Meetings[i].CaptureAudio == nil && cfg.Meetings[i].Audio != nil {
+				val := *cfg.Meetings[i].Audio
+				cfg.Meetings[i].CaptureAudio = &val
+			}
+			cfg.Meetings[i].Audio = nil
+			if cfg.Meetings[i].OutputDir != "" {
+				cfg.Meetings[i].OutputDir = expandUserPath(cfg.Meetings[i].OutputDir)
+			}
 		}
 	}
 	if cfg.FilenameTemplate == "" {
@@ -232,6 +378,7 @@ func Load(path string) (Config, error) {
 	cfg.OutputFile = expandUserPath(cfg.OutputFile)
 	cfg.ProfileDir = expandUserPath(cfg.ProfileDir)
 	cfg.BrowserPath = expandUserPath(cfg.BrowserPath)
+	cfg.QueueFile = expandUserPath(cfg.QueueFile)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}

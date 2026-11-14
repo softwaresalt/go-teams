@@ -3,9 +3,11 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +24,11 @@ import (
 // admissionPollInterval controls how often pre-join and admission loops
 // re-check the DOM.
 const (
-	admissionPollInterval = 1 * time.Second
-	captionMenuStepWait   = 5 * time.Second
-	captionMenuPoll       = 150 * time.Millisecond
+	admissionPollInterval    = 1 * time.Second
+	callEndedPollInterval    = 2 * time.Second
+	defaultForceRecapTimeout = 2 * time.Minute
+	captionMenuStepWait      = 5 * time.Second
+	captionMenuPoll          = 150 * time.Millisecond
 )
 
 // chromeMeeting is the chromedp-backed Meeting implementation. Its methods
@@ -47,10 +51,96 @@ type chromeMeeting struct {
 	// validation still binds to the recording that supplied the transcript.
 	recapAudioURL string
 	aiSummary     string
+
+	activityMu        sync.Mutex
+	onCaptionActivity func()
+	onAudioActivity   func()
+	onCallEnded       func()
+
+	pollInterval        time.Duration
+	callEndPoll         time.Duration
+	probePreJoinState   func(ctx context.Context) (toolbar, lobby, prejoin, launcher bool, err error)
+	probeAdmissionState func(ctx context.Context) (toolbar, lobby bool, err error)
 }
 
 func newChromeMeeting(opts MeetingOptions) *chromeMeeting {
 	return &chromeMeeting{opts: opts}
+}
+
+// SetActivityCallbacks implements ActivityMonitor.
+func (m *chromeMeeting) SetActivityCallbacks(onCaption, onAudio, onCallEnd func()) {
+	m.activityMu.Lock()
+	defer m.activityMu.Unlock()
+	m.onCaptionActivity = onCaption
+	m.onAudioActivity = onAudio
+	m.onCallEnded = onCallEnd
+}
+
+func (m *chromeMeeting) notifyCaptionActivity() {
+	m.activityMu.Lock()
+	cb := m.onCaptionActivity
+	if cb == nil {
+		cb = m.opts.OnCaptionActivity
+	}
+	m.activityMu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+func (m *chromeMeeting) notifyAudioActivity() {
+	m.activityMu.Lock()
+	cb := m.onAudioActivity
+	if cb == nil {
+		cb = m.opts.OnAudioActivity
+	}
+	m.activityMu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+func (m *chromeMeeting) notifyCallEnded() {
+	m.activityMu.Lock()
+	cb := m.onCallEnded
+	if cb == nil {
+		cb = m.opts.OnCallEnded
+	}
+	m.activityMu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+func (m *chromeMeeting) effectivePollInterval() time.Duration {
+	if m.pollInterval > 0 {
+		return m.pollInterval
+	}
+	return admissionPollInterval
+}
+
+func (m *chromeMeeting) lobbyDeadline() time.Time {
+	if m.opts.LobbyTimeout > 0 {
+		return time.Now().Add(m.opts.LobbyTimeout)
+	}
+	if m.opts.ForceRecap {
+		return time.Now().Add(defaultForceRecapTimeout)
+	}
+	return time.Time{}
+}
+
+func (m *chromeMeeting) withDeadlineContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	if deadline.IsZero() {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline)
+}
+
+func (m *chromeMeeting) isLobbyDeadlineExceeded(parentCtx context.Context, deadline time.Time, err error) bool {
+	if deadline.IsZero() || parentCtx.Err() != nil {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || !time.Now().Before(deadline)
 }
 
 func (m *chromeMeeting) defaultAccount() string {
@@ -103,24 +193,52 @@ func (m *chromeMeeting) stopHeadedBrowser() {
 	}
 }
 
+func deriveRecapURLFromMeetingURL(meetingURL string) string {
+	lower := strings.ToLower(strings.TrimSpace(meetingURL))
+	if strings.Contains(lower, "meetingrecap") {
+		return ""
+	}
+	id := ExtractMeetingIdentity(meetingURL)
+	if id.ThreadID == "" {
+		return ""
+	}
+	host := "teams.cloud.microsoft"
+	if hasHTTPSHostSuffix(meetingURL, "teams.microsoft.com") {
+		host = "teams.microsoft.com"
+	}
+	return fmt.Sprintf("https://%s/l/meetingrecap?threadId=%s", host, url.QueryEscape(id.ThreadID))
+}
+
 // Join implements Meeting. It validates the meeting URL, navigates to it, waits
 // for user authentication or launcher interstitial handling as needed, and
 // detects either a Teams Meeting Recap transcript (via xplatplugins.aspx /
 // .ms-List) or a live call pre-join / active call toolbar.
 func (m *chromeMeeting) Join(ctx context.Context) error {
-	if m.headedOpts == nil && chromedp.FromContext(ctx) == nil {
+	if m.headedOpts == nil && m.probePreJoinState == nil && chromedp.FromContext(ctx) == nil {
 		return fmt.Errorf("browser: join requires a chromedp browser context; create one with chromedp.NewContext")
 	}
 	if err := teams.ValidateMeetingURL(m.opts.MeetingURL); err != nil {
 		return fmt.Errorf("browser: invalid meeting url: %w", err)
 	}
+	deadline := m.lobbyDeadline()
 	if m.headedOpts != nil {
-		return m.joinHeaded(ctx)
+		return m.joinHeadedWithDeadline(ctx, deadline)
 	}
-	if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {
-		return fmt.Errorf("browser: navigate to meeting: %w", err)
+	if m.probePreJoinState == nil {
+		targetURL := m.opts.MeetingURL
+		if m.opts.ForceRecap {
+			if recapURL := deriveRecapURLFromMeetingURL(targetURL); recapURL != "" {
+				targetURL = recapURL
+			}
+		}
+		if err := chromedp.Run(ctx, chromedp.Navigate(targetURL)); err != nil {
+			if m.isLobbyDeadlineExceeded(ctx, deadline, err) {
+				return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+			}
+			return fmt.Errorf("browser: navigate to meeting: %w", err)
+		}
 	}
-	return m.awaitPreJoinOrAdmission(ctx)
+	return m.awaitPreJoinOrAdmissionWithDeadline(ctx, deadline)
 }
 
 const teamsV2BootstrapURL = "https://teams.cloud.microsoft/v2/"
@@ -302,9 +420,19 @@ func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 }
 
 func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
+	return m.joinHeadedWithDeadline(ctx, m.lobbyDeadline())
+}
+
+func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline time.Time) error {
 	coldProfile := !hasTeamsSessionInProfile(m.headedOpts.UserDataDir)
-	authTracker, initialURL := newHeadedAuthTracker(m.opts.MeetingURL, coldProfile)
-	if initialURL != m.opts.MeetingURL {
+	effectiveMeetingURL := m.opts.MeetingURL
+	if m.opts.ForceRecap {
+		if recapURL := deriveRecapURLFromMeetingURL(effectiveMeetingURL); recapURL != "" {
+			effectiveMeetingURL = recapURL
+		}
+	}
+	authTracker, initialURL := newHeadedAuthTracker(effectiveMeetingURL, coldProfile)
+	if initialURL != effectiveMeetingURL {
 		slog.Info("browser: new or unauthenticated profile detected; bootstrapping Teams session at /v2/ before opening meeting recap")
 	}
 	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, initialURL)
@@ -331,6 +459,9 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 	missingTargetPolls := 0
 
 	for {
+		if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
+			return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+		}
 		targets, err := listCDPTargets(port)
 		if err != nil {
 			consecutiveListFailures++
@@ -396,6 +527,14 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
 							return nil
 						}
+					}
+				}
+				if m.opts.ForceRecap && isOnTargetMeetingOrRecapURL(m.opts.MeetingURL, mainPage.URL, "", "") {
+					if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
+						m.aiSummary = summary
+						m.retainRecapAudioIdentity(mainPage.URL)
+						slog.Info("browser: copied AI summary from meeting recap")
+						return nil
 					}
 				}
 
@@ -472,11 +611,13 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 						}
 					} else {
 						clickedLauncher = false
-						if st.Toolbar || st.Lobby || st.Prejoin {
-							// Live meeting flow on the open page target.
+						if !m.opts.ForceRecap && (st.Toolbar || st.Lobby || st.Prejoin) {
+							// Live meeting flow on the open page target; keep allocCtx
+							// derived from the session-lifetime ctx so attachedCtx stays
+							// alive after Join returns.
 							tCtx, _ := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(mainPage.ID)))
 							m.attachedCtx = tCtx
-							return m.awaitPreJoinOrAdmission(tCtx)
+							return m.awaitPreJoinOrAdmissionWithDeadline(tCtx, deadline)
 						}
 						if acct := m.defaultAccount(); acct != "" {
 							if clickedRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, selectEntraAccountJS(acct)); evalErr == nil && strings.TrimSpace(clickedRaw) == "true" {
@@ -503,6 +644,9 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 		case <-ctx.Done():
 			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
 		case <-ticker.C:
+			if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
+				return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+			}
 		}
 	}
 }
@@ -592,54 +736,107 @@ func isTrustedSingleTabRebindURL(rawURL string) bool {
 	)
 }
 
-func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
-	ticker := time.NewTicker(admissionPollInterval)
+func (m *chromeMeeting) awaitPreJoinOrAdmissionWithDeadline(ctx context.Context, deadline time.Time) error {
+	ticker := time.NewTicker(m.effectivePollInterval())
 	defer ticker.Stop()
 	loggedWaiting := false
 	clickedLauncher := false
 	reNavigateAttempts := 0
 	coldRecapPolls := 0
+	recapNavAttempted := false
 
 	for {
+		if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
+			return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+		}
 		if m.cdpPort > 0 {
-			if ok := m.tryExtractRecapViaCDP(ctx, m.cdpPort); ok {
+			pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+			ok := m.tryExtractRecapViaCDP(pollCtx, m.cdpPort)
+			cancel()
+			if ok {
 				return nil
 			}
 		}
 
-		var toolbar, lobby, prejoin, launcher bool
-		if err := chromedp.Run(ctx,
-			chromedp.Evaluate(existsJS(meetingToolbarSel), &toolbar),
-			chromedp.Evaluate(containsTextJS(lobbyText), &lobby),
-			chromedp.Evaluate(existsJS(joinNowSel), &prejoin),
-			chromedp.Evaluate(existsJS(joinOnWebSel), &launcher),
-		); err != nil {
+		var (
+			toolbar, lobby, prejoin, launcher bool
+			err                               error
+		)
+		if m.probePreJoinState != nil {
+			pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+			toolbar, lobby, prejoin, launcher, err = m.probePreJoinState(pollCtx)
+			cancel()
+		} else {
+			pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+			err = chromedp.Run(pollCtx,
+				chromedp.Evaluate(existsJS(meetingToolbarSel), &toolbar),
+				chromedp.Evaluate(containsTextJS(lobbyText), &lobby),
+				chromedp.Evaluate(existsJS(joinNowSel), &prejoin),
+				chromedp.Evaluate(existsJS(joinOnWebSel), &launcher),
+			)
+			cancel()
+		}
+		if err != nil {
+			if m.isLobbyDeadlineExceeded(ctx, deadline, err) {
+				return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+			}
 			return fmt.Errorf("browser: pre-join not visible: %w", err)
 		}
 
-		switch classifyPreJoinState(toolbar, lobby, prejoin, launcher) {
+		state := classifyPreJoinState(toolbar, lobby, prejoin, launcher)
+		if m.opts.ForceRecap && (state == PreJoinAdmitted || state == PreJoinInLobby || state == PreJoinReady) {
+			// In ForceRecap mode, never enter the live pre-join click flow or
+			// treat a live call toolbar as Recap completion. If the meeting URL
+			// opened live pre-join and carries a threadId, navigate to its
+			// meetingrecap route once so Recap extraction can proceed.
+			if !recapNavAttempted && m.probePreJoinState == nil {
+				recapNavAttempted = true
+				if recapURL := deriveRecapURLFromMeetingURL(m.opts.MeetingURL); recapURL != "" {
+					navCtx, cancelNav := m.withDeadlineContext(ctx, deadline)
+					_ = chromedp.Run(navCtx, chromedp.Navigate(recapURL))
+					cancelNav()
+				}
+			}
+			state = PreJoinWaitingForUser
+		}
+
+		switch state {
 		case PreJoinAdmitted:
 			slog.Info("browser: admitted to meeting")
 			return nil
 		case PreJoinInLobby:
-			return m.awaitAdmission(ctx)
+			return m.awaitAdmissionWithDeadline(ctx, deadline)
 		case PreJoinReady:
-			if err := m.enforceMute(ctx); err != nil {
+			pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+			err := m.enforceMute(pollCtx)
+			if err == nil {
+				err = m.injectName(pollCtx)
+			}
+			if err == nil {
+				if clickErr := chromedp.Run(pollCtx, chromedp.Click(joinNowSel, chromedp.ByQuery)); clickErr != nil {
+					err = fmt.Errorf("browser: click join now: %w", clickErr)
+				}
+			}
+			cancel()
+			if err != nil {
+				if m.isLobbyDeadlineExceeded(ctx, deadline, err) {
+					return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+				}
 				return err
 			}
-			if err := m.injectName(ctx); err != nil {
-				return err
-			}
-			if err := chromedp.Run(ctx, chromedp.Click(joinNowSel, chromedp.ByQuery)); err != nil {
-				return fmt.Errorf("browser: click join now: %w", err)
-			}
-			return m.awaitAdmission(ctx)
+			return m.awaitAdmissionWithDeadline(ctx, deadline)
 		case PreJoinLauncher:
 			coldRecapPolls = 0
 			if !clickedLauncher {
 				slog.Info("browser: launcher interstitial detected; clicking join on web")
 				var clicked bool
-				if err := chromedp.Run(ctx, chromedp.Evaluate(clickJS(joinOnWebSel), &clicked)); err != nil {
+				pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+				err := chromedp.Run(pollCtx, chromedp.Evaluate(clickJS(joinOnWebSel), &clicked))
+				cancel()
+				if err != nil {
+					if m.isLobbyDeadlineExceeded(ctx, deadline, err) {
+						return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+					}
 					slog.Warn("browser: click join on web failed; retrying", "err", err)
 				} else if clicked {
 					clickedLauncher = true
@@ -647,45 +844,54 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 			}
 		case PreJoinWaitingForUser:
 			clickedLauncher = false
-			if acct := m.defaultAccount(); acct != "" {
-				var clickedAccount bool
-				if err := chromedp.Run(ctx, chromedp.Evaluate(selectEntraAccountJS(acct), &clickedAccount)); err == nil && clickedAccount {
-					slog.Info("browser: selected default Entra account", "account", redactAccountIdentifier(acct))
-					coldRecapPolls = 0
-				}
-			}
-			if reNavigateAttempts < 1 && hasSpecificMeetingOrRecapTarget(m.opts.MeetingURL) {
-				var stalledOffTargetAfterAuth bool
-				_ = chromedp.Run(ctx, chromedp.Evaluate(`(() => {
-					try {
-						if (!location.host.includes('teams.cloud.microsoft') && !location.host.includes('teams.microsoft.com')) return false;
-						if (document.readyState && document.readyState !== 'complete') return false;
-						const h = (location.hash || '') + '&' + (location.search || '');
-						if (/(?:^|[#?&])(code|id_token|access_token|session_state|client_info|error)=/i.test(h)) return false;
-						const route = (location.pathname + ' ' + location.hash).toLowerCase();
-						if (route.includes('meetingrecap') || route.includes('meetup-join') || route.includes('/meet/')) return false;
-						if (document.querySelector('[data-tid="intelligent-recap-header"]')) return false;
-						if (document.querySelector('iframe[src*="xplatplugins.aspx"], iframe[src*="streamembed.aspx"], iframe[src*="sharepoint.com"]')) return false;
-						const msal = Boolean(
-							localStorage.getItem('msal.2.account.keys') ||
-							localStorage.getItem('msal.account.keys') ||
-							Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
-						);
-						return msal && document.querySelectorAll('[data-tid]').length > 15;
-					} catch (_) {
-						return false;
-					}
-				})()`, &stalledOffTargetAfterAuth))
-				if stalledOffTargetAfterAuth {
-					coldRecapPolls++
-					if coldRecapPolls >= 5 {
-						reNavigateAttempts++
+			if m.probePreJoinState == nil {
+				if acct := m.defaultAccount(); acct != "" {
+					var clickedAccount bool
+					pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+					err := chromedp.Run(pollCtx, chromedp.Evaluate(selectEntraAccountJS(acct), &clickedAccount))
+					cancel()
+					if err == nil && clickedAccount {
+						slog.Info("browser: selected default Entra account", "account", redactAccountIdentifier(acct))
 						coldRecapPolls = 0
-						slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
-						_ = chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL))
 					}
-				} else {
-					coldRecapPolls = 0
+				}
+				if reNavigateAttempts < 1 && hasSpecificMeetingOrRecapTarget(m.opts.MeetingURL) {
+					var stalledOffTargetAfterAuth bool
+					pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+					_ = chromedp.Run(pollCtx, chromedp.Evaluate(`(() => {
+						try {
+							if (!location.host.includes('teams.cloud.microsoft') && !location.host.includes('teams.microsoft.com')) return false;
+							if (document.readyState && document.readyState !== 'complete') return false;
+							const h = (location.hash || '') + '&' + (location.search || '');
+							if (/(?:^|[#?&])(code|id_token|access_token|session_state|client_info|error)=/i.test(h)) return false;
+							const route = (location.pathname + ' ' + location.hash).toLowerCase();
+							if (route.includes('meetingrecap') || route.includes('meetup-join') || route.includes('/meet/')) return false;
+							if (document.querySelector('[data-tid="intelligent-recap-header"]')) return false;
+							if (document.querySelector('iframe[src*="xplatplugins.aspx"], iframe[src*="streamembed.aspx"], iframe[src*="sharepoint.com"]')) return false;
+							const msal = Boolean(
+								localStorage.getItem('msal.2.account.keys') ||
+								localStorage.getItem('msal.account.keys') ||
+								Object.keys(localStorage).some(k => k.includes('SKYPE-TOKEN') || k.includes('UserAuthState'))
+							);
+							return msal && document.querySelectorAll('[data-tid]').length > 15;
+						} catch (_) {
+							return false;
+						}
+					})()`, &stalledOffTargetAfterAuth))
+					cancel()
+					if stalledOffTargetAfterAuth {
+						coldRecapPolls++
+						if coldRecapPolls >= 5 {
+							reNavigateAttempts++
+							coldRecapPolls = 0
+							slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
+							navCtx, cancelNav := m.withDeadlineContext(ctx, deadline)
+							_ = chromedp.Run(navCtx, chromedp.Navigate(m.opts.MeetingURL))
+							cancelNav()
+						}
+					} else {
+						coldRecapPolls = 0
+					}
 				}
 			}
 			if !loggedWaiting {
@@ -698,6 +904,9 @@ func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
 		case <-ctx.Done():
 			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
 		case <-ticker.C:
+			if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
+				return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+			}
 		}
 	}
 }
@@ -741,6 +950,14 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
 				return true
 			}
+		}
+	}
+	if m.opts.ForceRecap && isOnTargetMeetingOrRecapURL(m.opts.MeetingURL, mainPageURL, "", "") {
+		if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
+			m.aiSummary = summary
+			m.retainRecapAudioIdentity(mainPageURL)
+			slog.Info("browser: copied AI summary from meeting recap")
+			return true
 		}
 	}
 	return false
@@ -808,18 +1025,36 @@ func (m *chromeMeeting) injectName(ctx context.Context) error {
 	return nil
 }
 
-// awaitAdmission polls the DOM for the meeting toolbar (admitted) or the lobby
-// prompt (waiting) until admitted or ctx is cancelled.
-func (m *chromeMeeting) awaitAdmission(ctx context.Context) error {
-	ticker := time.NewTicker(admissionPollInterval)
+// awaitAdmissionWithDeadline polls the DOM for the meeting toolbar (admitted)
+// or the lobby prompt (waiting) until admitted or ctx/deadline expires.
+func (m *chromeMeeting) awaitAdmissionWithDeadline(ctx context.Context, deadline time.Time) error {
+	ticker := time.NewTicker(m.effectivePollInterval())
 	defer ticker.Stop()
 	loggedLobby := false
 	for {
-		var toolbar, lobby bool
-		if err := chromedp.Run(ctx,
-			chromedp.Evaluate(existsJS(meetingToolbarSel), &toolbar),
-			chromedp.Evaluate(containsTextJS(lobbyText), &lobby),
-		); err != nil {
+		if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
+			return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+		}
+		var (
+			toolbar, lobby bool
+			err            error
+		)
+		if m.probeAdmissionState != nil {
+			pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+			toolbar, lobby, err = m.probeAdmissionState(pollCtx)
+			cancel()
+		} else {
+			pollCtx, cancel := m.withDeadlineContext(ctx, deadline)
+			err = chromedp.Run(pollCtx,
+				chromedp.Evaluate(existsJS(meetingToolbarSel), &toolbar),
+				chromedp.Evaluate(containsTextJS(lobbyText), &lobby),
+			)
+			cancel()
+		}
+		if err != nil {
+			if m.isLobbyDeadlineExceeded(ctx, deadline, err) {
+				return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+			}
 			return fmt.Errorf("browser: poll admission: %w", err)
 		}
 		switch classifyAdmission(toolbar, lobby) {
@@ -837,6 +1072,9 @@ func (m *chromeMeeting) awaitAdmission(ctx context.Context) error {
 		case <-ctx.Done():
 			return fmt.Errorf("browser: await admission: %w", ctx.Err())
 		case <-ticker.C:
+			if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
+				return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
+			}
 		}
 	}
 }
@@ -957,7 +1195,7 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 	workerCtx, cancel := context.WithCancel(targetCtx)
 	dedup := transcript.NewDeduplicator()
 	pump := newPayloadPump(captionQueueSize, func(raw string) {
-		if err := handleCaptionPayload(raw, dedup, sink); err != nil {
+		if err := handleCaptionPayloadWithActivity(raw, dedup, sink, m.notifyCaptionActivity); err != nil {
 			slog.Warn("browser: discarding malformed caption payload", "err", err)
 		}
 	})
@@ -987,8 +1225,36 @@ func (m *chromeMeeting) EnableCaptions(ctx context.Context, sink CaptionSink) er
 		slog.Warn("browser: caption renderer not yet present; observer not attached")
 	}
 
+	go m.pollCallEnded(workerCtx)
+
 	<-targetCtx.Done()
 	return nil
+}
+
+func (m *chromeMeeting) pollCallEnded(ctx context.Context) {
+	interval := m.callEndPoll
+	if interval <= 0 {
+		interval = callEndedPollInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	missingToolbarPolls := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		var raw string
+		if err := chromedp.Run(ctx, chromedp.Evaluate(callEndedProbeJS(), &raw)); err != nil {
+			continue
+		}
+		if shouldNotifyCallEnded(raw, &missingToolbarPolls) {
+			slog.Info("browser: detected in-browser call-end signal")
+			m.notifyCallEnded()
+			return
+		}
+	}
 }
 
 // activateCaptions clicks through the meeting menu to turn on live captions:
@@ -1150,6 +1416,9 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 		if decodeErr != nil {
 			slog.Warn("browser: discarding malformed audio chunk", "err", decodeErr)
 			return
+		}
+		if HasVoiceActivity(samples, m.opts.VoiceRMSThreshold) {
+			m.notifyAudioActivity()
 		}
 		if writeErr := enc.WritePCM(samples); writeErr != nil {
 			// A writer/encoder failure is fatal: record it and stop capture so

@@ -45,5 +45,49 @@ headless: true
 # Display name used only when joining an unauthenticated guest pre-join screen.
 bot_name: "Transcription Agent"
 
-# Whether to capture live meeting audio to an MP3 file (ignored for Meeting Recap exports).
+# Whether to capture live meeting or Meeting Recap audio to an MP3 file.
 capture_audio: false
+
+# Optional default Microsoft Entra account (UPN/email or display name) to auto-select
+# on the Entra account picker interstitial (aliases: entra_account, account).
+# default_account: "alice@contoso.com"
+
+# Optional capture protocol (alias: mode):
+#   auto              - past-recap for Recap URLs, live capture otherwise (default)
+#   ephemeral-live    - real-time captions + MP3 audio with no post-call AI Summary wait
+#   live-with-summary - real-time capture + delayed post-call AI Summary append
+#   past-recap        - finite post-meeting Recap export (transcript + AI Summary + optional MP3)
+# capture_mode: "auto"
+
+# Optional nominal live capture duration before post-duration inactivity monitoring begins,
+# plus silence/inactivity timeout, post-call AI Summary fetch delay, and lobby timeout.
+# duration: "1h"
+# idle_timeout: "3m"
+# ai_summary_delay: "30m"
+# lobby_timeout: "5m"
+
+# Optional batch queue file used for --queue catch-up and crash-safe deferred
+# --append-ai-summary --not-before entries.
+# queue_file: "C:\\Transcripts\\WSP\\transcription_queue.txt"
+
+# Optional scheduled meetings for `teams-cli schedule` (use either `cron` or one-shot `at`):
+# meetings:
+#   - name: "Daily Standup"
+#     url: "https://teams.microsoft.com/meet/synthetic-standup"
+#     cron: "0 9 * * 1-5"
+#     mode: "live-with-summary"
+#     duration: "30m"
+#     idle_timeout: "3m"
+#     ai_summary_delay: "30m"
+#     lobby_timeout: "5m"
+#     category: "WSP"
+#     capture_audio: false
+#   - name: "Architecture Review"
+#     url: "https://teams.microsoft.com/meet/synthetic-review"
+#     at: "2026-11-15 14:00"
+#     mode: "ephemeral-live"
+#     duration: "1h"
+#     idle_timeout: "3m"
+#     category: "ARCH"
+#     capture_audio: true
+

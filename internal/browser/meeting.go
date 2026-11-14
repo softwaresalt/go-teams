@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"path/filepath"
@@ -12,11 +13,22 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// ErrLobbyTimeout is returned when pre-join or lobby admission exceeds
+// MeetingOptions.LobbyTimeout.
+var ErrLobbyTimeout = errors.New("browser: lobby admission timed out")
+
 // CaptionSink receives finalized caption utterances (speaker and text) as the
 // in-meeting observer emits them. Implementations should return promptly; a
 // slow sink causes fragments to be dropped under backpressure rather than
 // blocking the browser event loop.
 type CaptionSink func(speaker, text string)
+
+// ActivityMonitor is an optional interface implemented by Meeting instances
+// that report live caption activity, PCM voice audio activity, and in-browser
+// call-end teardown signals.
+type ActivityMonitor interface {
+	SetActivityCallbacks(onCaption, onAudio, onCallEnd func())
+}
 
 // MeetingOptions configures a live meeting capture session.
 type MeetingOptions struct {
@@ -27,6 +39,22 @@ type MeetingOptions struct {
 	// DefaultAccount is the optional Microsoft Entra account (UPN/email or
 	// display name) to auto-select on the Entra account picker interstitial.
 	DefaultAccount string
+	// LobbyTimeout bounds how long Join waits in pre-join or the meeting lobby
+	// before aborting with ErrLobbyTimeout. Zero means no lobby timeout.
+	LobbyTimeout time.Duration
+	// ForceRecap forces Join to use the Meeting Recap discovery and extraction
+	// path and never enter the live pre-join click flow.
+	ForceRecap bool
+	// VoiceRMSThreshold overrides DefaultVoiceRMSThreshold when > 0.
+	VoiceRMSThreshold float64
+	// OnCaptionActivity is invoked when non-empty live caption DOM activity is
+	// observed.
+	OnCaptionActivity func()
+	// OnAudioActivity is invoked when a captured PCM audio chunk exceeds the
+	// voice-activity RMS threshold.
+	OnAudioActivity func()
+	// OnCallEnded is invoked when in-browser call-end teardown is detected.
+	OnCallEnded func()
 }
 
 // Meeting drives in-meeting capture against a live Teams meeting: the pre-join

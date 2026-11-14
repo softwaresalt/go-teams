@@ -57,6 +57,7 @@ type Config struct {
 	Headless         bool              `yaml:"headless"`
 	CaptureAudio     bool              `yaml:"capture_audio,omitempty"`
 	BrowserPath      string            `yaml:"browser_path,omitempty"`
+	DefaultAccount   string            `yaml:"default_account,omitempty"`
 	Meetings         []MeetingSchedule `yaml:"meetings"`
 }
 
@@ -178,6 +179,8 @@ func Load(path string) (Config, error) {
 		Output       string `yaml:"output"`
 		NameTemplate string `yaml:"name_template"`
 		URL          string `yaml:"url"`
+		EntraAccount string `yaml:"entra_account"`
+		Account      string `yaml:"account"`
 		Headless     *bool  `yaml:"headless"`
 		Headed       *bool  `yaml:"headed"`
 		Audio        *bool  `yaml:"audio"`
@@ -202,6 +205,13 @@ func Load(path string) (Config, error) {
 		}
 		if cfg.MeetingURL == "" && aliases.URL != "" {
 			cfg.MeetingURL = aliases.URL
+		}
+		cfg.DefaultAccount = strings.TrimSpace(cfg.DefaultAccount)
+		if cfg.DefaultAccount == "" {
+			cfg.DefaultAccount = strings.TrimSpace(aliases.EntraAccount)
+		}
+		if cfg.DefaultAccount == "" {
+			cfg.DefaultAccount = strings.TrimSpace(aliases.Account)
 		}
 		switch {
 		case aliases.Headed != nil && *aliases.Headed:

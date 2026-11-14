@@ -59,7 +59,10 @@ avoids a dependency for roughly a hundred lines of logic.
 * The updater queries the GitHub Releases API for `softwaresalt/go-teams`
   (`DefaultAPIBaseURL`) and selects the asset named
   `teams-cli-<goos>-<goarch>[.exe]`, matching what the release workflow
-  publishes.
+  publishes: `.github/workflows/release.yml` builds CGO-free binaries for
+  `linux`, `darwin`, and `windows` on `amd64` and `arm64`, all cross-compiled
+  on `ubuntu-latest` (including `darwin` and `linux/arm64`), and verifies that
+  `SHA256SUMS` lists all six assets before publishing.
 * Every request URL, and every redirect target, must be `https`, or `http` on a
   loopback host so `httptest` servers work. The HTTP client's `CheckRedirect`
   re-runs this validation on each hop and stops after 10 redirects.
@@ -256,6 +259,6 @@ for operators.
   unrelated program from modifying the executable.
 * The wait budget (15 seconds) can surface `ErrUpdateLocked` on a slow swap;
   retrying the command is safe.
-* Behavior on the Windows rename window is verified on Windows development hosts
-  only, because CI runs on Linux (see
+* Behavior on the Windows rename window is verified on `windows-latest` in CI
+  (the `test-windows` job, `023-S`) as well as on Windows development hosts (see
   [QUALITY_SCORE.md](../QUALITY_SCORE.md#live-verification-gaps)).

@@ -243,7 +243,9 @@ The protocol details are in the
 * **Output permissions.** `internal/capture` creates new directories with
   `0o700` and new transcript and MP3 files with `0o600`. Pre-existing
   directories and explicitly overwritten files keep their existing filesystem
-  permissions; the code does not tighten them.
+  permissions; the code does not tighten them. On POSIX platforms,
+  `internal/capture/output_unix_test.go` verifies these modes under
+  `syscall.Umask(0)`, including preservation of a pre-existing directory's mode.
 * **Recap identity isolation.** Recap export is bound to the requested recap's
   tab, frame, and recording identity. Audio whose identity cannot be verified
   is rejected rather than captured.

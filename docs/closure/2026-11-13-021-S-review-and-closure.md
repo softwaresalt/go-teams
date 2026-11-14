@@ -5,7 +5,7 @@ feature: 021-F
 shipment: 021-S
 branch: feat/021-s-default-microsoft-entra-account-auto-selection-and-internal-config-test-coverage-hardening
 status: closed
-closure_status: READY
+closure_status: READY_WITH_CONDITIONS
 compaction_status: done
 merge_commit: f1c9dd3807e8ff048e1b93005ec80b32af5ad115
 pull_request: 53
@@ -145,7 +145,7 @@ covers still-queued shipment `022-S`). `compaction_status` is `done`.
 | Secret hygiene | `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` | PASS |
 | Full test suite & coverage | `go test -race -p 1 -cover ./...` (local Windows + GitHub Actions `ubuntu-latest` run `43564415661`): `version` 97.8%, `teams` 93.8%, `scheduler` 93.3%, `transcript` 91.2%, `audio` 87.5%, `updater` 84.5%, `config` 83.3%, `cli` 82.4%, `capture` 81.7%, `browser` 72.3% | PASS |
 | Backlog integrity | `backlogit sync` and `backlogit doctor` ("No issues found.") | PASS |
-| Manual checkpoint (`teams-auth-mfa`) | Live Microsoft Entra interactive MFA against a real tenant remains tracked under `010-S`; synthetic Chromium DOM tests in `TestSelectEntraAccountJSDOM` verified tile selection, ambiguity fail-closed, `#otherTile` exclusion, password/MFA non-interference, and hidden-ancestor rejection | PASS_WITH_FOLLOW_UP (`010-S`) |
+| Manual checkpoint (`teams-auth-mfa`) | Live Microsoft Entra multi-account picker auto-selection and MFA non-interference against a real tenant have not been executed in this unattended session (`010-S` covers guest pre-join and treats login/MFA landings as blocked rather than testing `default_account` picker selection). Synthetic Chromium DOM tests in `TestSelectEntraAccountJSDOM` verified tile selection, ambiguity fail-closed, `#otherTile` exclusion, password/MFA non-interference, and hidden-ancestor rejection | PENDING (operator live-tenant verification; no dedicated follow-up task) |
 
 ## Strict-safety action record
 
@@ -159,12 +159,12 @@ covers still-queued shipment `022-S`). `compaction_status` is `done`.
 | Evidence | Status | Condition |
 |---|---|---|
 | Healthy signal | READY | `go build ./...` and `go test -race ./...` pass locally and in CI |
-| Failure signal | READY | Non-zero exit from CLI root or `schedule` daemon, or `selectEntraAccountJS` returning `false` (fail-closed) when 0 or >1 tiles match |
-| Monitoring plan | READY | `slog.Info("browser: selected default Entra account", "account", redacted)` with masked identifier, plus daemon liveness and cron fire logs |
-| Rollback trigger | READY | Unexpected account tile selection or regression in interactive/headless login flows |
+| Failure signal | READY_WITH_CONDITIONS | Non-zero exit from CLI root or `schedule` daemon, or context deadline expiration (`browser: pre-join not visible: context deadline exceeded`) when a session stalls on `PreJoinWaitingForUser`. `selectEntraAccountJS` returning `false` is not logged directly because `false` also occurs normally when no picker is present or when password/MFA challenges are active; a stuck or ambiguous picker is therefore surfaced only by the absence of `browser: selected default Entra account` followed by a bounded session timeout |
+| Monitoring plan | READY_WITH_CONDITIONS | Monitoring gap: callers log only successful clicks (`slog.Info("browser: selected default Entra account", "account", redacted)`), not unmatched/ambiguous picker polls. Operators must verify `browser: selected default Entra account` in logs during an initial supervised `auth` / `captions` run and enforce a bounded session/context timeout on unattended `schedule` runs to detect stalled authentication |
+| Rollback trigger | READY | Unexpected account tile selection or authentication stall in interactive/headless login flows |
 | Rollback procedure | READY | Omit `default_account` / pass `--account=`, or revert merge commit `f1c9dd3807e8ff048e1b93005ec80b32af5ad115` on `main` |
 | Owner | READY | Operator supervising scheduled/interactive Teams capture |
-| Validation window | READY | Next interactive `auth` / `captions` and scheduled `schedule` cycle |
+| Validation window | READY_WITH_CONDITIONS | First operator-supervised multi-account `auth` / `captions` session and one full scheduled-meeting cycle |
 
 ## Handoff
 

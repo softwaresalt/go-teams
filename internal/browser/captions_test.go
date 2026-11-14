@@ -57,3 +57,24 @@ func TestCaptionObserverJSStructure(t *testing.T) {
 	assert.Contains(t, captionObserverJS, "characterData")
 	assert.Contains(t, captionObserverJS, "pendingText")
 }
+
+func TestHandleCaptionPayloadWithActivityFiresOnInterimWithoutEmittingToSink(t *testing.T) {
+	dedup := transcript.NewDeduplicator()
+	var activityCalls int
+	var sinkCalls [][2]string
+	sink := func(speaker, text string) {
+		sinkCalls = append(sinkCalls, [2]string{speaker, text})
+	}
+	onActivity := func() {
+		activityCalls++
+	}
+
+	require.NoError(t, handleCaptionPayloadWithActivity(`{"speaker":"Alice","text":"Speaking in progress","interim":true}`, dedup, sink, onActivity))
+	assert.Equal(t, 1, activityCalls)
+	assert.Empty(t, sinkCalls)
+
+	require.NoError(t, handleCaptionPayloadWithActivity(`{"speaker":"Alice","text":"Speaking in progress."}`, dedup, sink, onActivity))
+	assert.Equal(t, 2, activityCalls)
+	require.Len(t, sinkCalls, 1)
+	assert.Equal(t, [2]string{"Alice", "Speaking in progress."}, sinkCalls[0])
+}

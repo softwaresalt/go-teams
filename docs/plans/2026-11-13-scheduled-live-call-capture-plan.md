@@ -452,13 +452,15 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
        `--queue`, `--append-ai-summary`, or `--not-before`.
   2. In `internal/cli/queue.go` (`R14`, `R15`):
      * Define sentinel error `errQueueEntryNotYetDue = errors.New("cli: queue entry not yet due")`.
-     * When `executeQueueLine` (or `runQueueFile` inspecting `--not-before`)
-       sees a `--not-before <RFC3339>` timestamp that is still in the future
-       (`now.Before(notBefore)`), return `errQueueEntryNotYetDue`.
-     * In `runQueueFile`: when `errors.Is(err, errQueueEntryNotYetDue)`, log
+     * Inspect `lineArgs` in `runQueueFile` for `--not-before <RFC3339>` before
+       dispatching (and also handle `errors.Is(err, errQueueEntryNotYetDue)`
+       returned by `executeQueueLine`): when the `--not-before` timestamp is
+       still in the future (`now.Before(notBefore)`), log
        `slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)`
        and leave the line uncommented (do NOT prepend `::` and do NOT append to
        `errs`) so a later `--queue` or `schedule` run executes it once due!
+       (End-to-end execution of due `--append-ai-summary` lines is wired in U9 /
+       `022.009-T` inside `runCapture` and verified in U10 / `022.010-T`.)
      * Export package helpers `appendDeferredAISummaryQueueLine(queuePath, meetingURL, transcriptPath string, notBefore time.Time) error`
        and `markDeferredAISummaryQueueLineDone(queuePath, transcriptPath string) error`
        protected by a package-level `queueFileMu sync.Mutex` that always
@@ -478,11 +480,15 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
      * Pass `LobbyTimeout` and `ForceRecap: c.CaptureMode == config.CaptureModePastRecap`
        in `defaultNewMeeting`, and pass `Mode`, `Duration`, `IdleTimeout`, and
        `MeetingTitle` in `defaultDeps().newSession`.
-     * When `--append-ai-summary` is passed on `root`, `join`, or `captions`,
-       route execution to `runAppendAISummary(cmd.Context(), d, cfg, mutated, flags.appendAISummary)`
-       (checking `--not-before` first when set and returning `errQueueEntryNotYetDue`
-       when still in the future).
   2. In `internal/cli/capture.go` (`R13`, `R14`):
+     * At the top of `runCapture` (which is called by `root`, `join`, and
+       `captions` `RunE` handlers alike): check `cfg.NotBefore` (returning
+       `errQueueEntryNotYetDue` when still in the future) and, when
+       `cfg.AppendAISummary != ""` is set, dispatch directly to
+       `runAppendAISummary(ctx, d, cfg, meetingURL, cfg.AppendAISummary)` so
+       root, `join --append-ai-summary`, `captions --append-ai-summary`, and
+       due `runQueueFile` entries all append the AI Summary instead of running
+       ordinary live capture!
      * Implement `resolveCaptureDurations(cfg config.Config)` and
        `effectiveAISummaryDelay(cfg config.Config, isRecap bool) time.Duration`
        (returning `0` for `past-recap`, `ephemeral-live`, or when

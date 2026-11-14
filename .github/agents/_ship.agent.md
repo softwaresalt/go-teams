@@ -324,7 +324,7 @@ When the `agent-intercom` capability pack is installed, broadcast `[SHIP] Invoki
    * **Already harnessed**: tasks carrying the `harness-ready` label — skip these.
    * **Needs harness**: tasks without the `harness-ready` label — scaffold these in topological dependency order (upstream tasks' structural stubs first, then downstream tasks' test harnesses).
 3. If any tasks need harnesses, invoke the **harness-architect** skill for the full target batch (`tasks` set to all tasks needing a harness in topological order).
-   * Require compilable but failing harnesses, structural stubs, and successful `go vet ./...` verification after scaffolding (for docs-only or config-only tasks that have no Go code/test surface, record the verification command and apply `harness-ready`).
+   * Require compilable but failing harnesses, structural stubs, and successful `go vet ./...` verification after scaffolding. For docs-only or config-only tasks that modify only Markdown or static configuration files, `harness-architect` either scaffolds a failing content/contract assertion test (`go test`) that checks for the new documented sections/keys (failing in the red phase until the docs/config edits are applied in Step 4.2), or records a docs/config verification boundary that Step 4.2 executes only **after** applying every acceptance-criteria file edit in the task.
    * Keep a task-scoped `harness_cmd` (e.g., `go test ./internal/config/... -run TestDefaultAccount`) associated with each backlog item so intermediate per-task verification in Step 4.2 and Step 4.3 tests only the current task's target while downstream tasks' red harnesses remain pending, and the unfiltered full-suite `go test ./...` runs once all tasks in the shipment are implemented.
 4. After scaffolding completes, confirm every task in the target task set (`queued` or `active`) now carries the `harness-ready` label. If any task still lacks it, halt and report the gap rather than proceeding with a partial set.
 
@@ -423,10 +423,10 @@ autoharness telemetry event --context-ref {context_ref} --from-json {event_paylo
 
 When the `agent-intercom` capability pack is installed, broadcast `[SHIP] Invoking build-feature for {item_id}` before delegating.
 
-Invoke the **build-feature** skill with:
-
-* `task_id`: The current task ID
-* `harness_cmd`: The test command from the task's harness-ready metadata (e.g., `go test ./... --test {feature}_test`)
+* For docs-only or config-only tasks that use a non-red verification boundary (`Red Phase: N/A`), apply every acceptance-criteria documentation/configuration edit specified by the task **first**, verify the diff is non-empty and satisfies every acceptance criterion of the task, and then run the recorded `harness_cmd` and Step 4.3 gates — never treat a pre-existing passing verification command as task completion before the task's file edits are applied.
+* Otherwise, invoke the **build-feature** skill with:
+  * `task_id`: The current task ID
+  * `harness_cmd`: The test command from the task's harness-ready metadata (e.g., `go test ./... --test {feature}_test`)
 
 The skill runs a 5-attempt harness loop: execute tests, capture errors, fix, repeat.
 

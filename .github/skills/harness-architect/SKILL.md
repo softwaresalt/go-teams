@@ -97,7 +97,7 @@ For each task, select the appropriate harness strategy:
    reason.
 4. Keep signatures, types, and module names aligned with the current
    codebase.
-5. **Docs-only or config-only verification boundary**: When a task modifies only documentation, markdown, or static configuration examples with no production Go code or test symbols to stub, do not invent artificial Go stubs; instead record the task's verification boundary (e.g., `go vet ./...` or tracked-file hygiene test) as its `harness_cmd`.
+5. **Docs-only or config-only verification boundary**: When a task modifies only documentation, markdown, or static configuration examples with no production Go code symbols to stub, prefer a failing content/contract assertion test (`go test`) that checks for the new documented sections/keys so the red-to-green loop applies directly; when no Go test file is in the task's allowed file set, record `Red Phase: N/A (docs/config-only verification boundary — Ship Step 4.2 must apply all acceptance-criteria file edits and verify a non-empty diff before running harness_cmd)`.
 
 ### File placement rules
 

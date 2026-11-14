@@ -238,7 +238,20 @@ func TestAppendDeferredAISummaryQueueHelpers(t *testing.T) {
 	dir := t.TempDir()
 	qPath := filepath.Join(dir, "transcription_queue.txt")
 	mdPath := filepath.Join(dir, "call.md")
-	require.NoError(t, appendDeferredAISummaryQueueLine(qPath, "https://teams.microsoft.com/meet/123", mdPath, time.Now().UTC()))
+	cfg := config.Config{
+		ProfileDir:     `C:\Profiles\Alice\`,
+		DefaultAccount: "alice@contoso.com",
+		Headless:       true,
+	}
+	require.NoError(t, appendDeferredAISummaryQueueLineWithConfig(qPath, "https://teams.microsoft.com/meet/123", mdPath, time.Now().UTC(), cfg))
+
+	rawBytes, err := os.ReadFile(qPath)
+	require.NoError(t, err)
+	parsedArgs, err := splitQueueArgs(strings.TrimSpace(string(rawBytes)))
+	require.NoError(t, err, "trailing backslash in Windows profile path must parse cleanly via splitQueueArgs")
+	assert.Equal(t, `C:\Profiles\Alice\`, extractQueueFlagValue(parsedArgs, "--profile-dir"))
+	assert.Equal(t, mdPath, extractQueueFlagValue(parsedArgs, "--append-ai-summary"))
+
 	require.NoError(t, markDeferredAISummaryQueueLineDone(qPath, mdPath))
 	b, err := os.ReadFile(qPath)
 	require.NoError(t, err)

@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"io"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -95,13 +96,20 @@ func TestSelectEntraAccountJSDOM(t *testing.T) {
 	if !assert.NotEmpty(t, js) || !assert.NotEqual(t, "false", js) {
 		return
 	}
-	if ResolveExecPath("") == "" {
+	execPath := ResolveExecPath("")
+	if runtime.GOOS != "windows" {
+		if _, err := os.Stat("/usr/bin/google-chrome"); err == nil {
+			execPath = "/usr/bin/google-chrome"
+		}
+	}
+	if execPath == "" {
 		t.Skip("no Chromium-based browser executable found on host")
 	}
 
 	opts := Options{
 		Headless:       true,
 		UserDataDir:    t.TempDir(),
+		ExecPath:       execPath,
 		DisableSandbox: runtime.GOOS != "windows",
 	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), cleanHeadlessAllocatorOptions(opts)...)

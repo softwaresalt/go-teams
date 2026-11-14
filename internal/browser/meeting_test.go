@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"io"
+	"runtime"
 	"testing"
 	"time"
 
@@ -99,8 +100,9 @@ func TestSelectEntraAccountJSDOM(t *testing.T) {
 	}
 
 	opts := Options{
-		Headless:    true,
-		UserDataDir: t.TempDir(),
+		Headless:       true,
+		UserDataDir:    t.TempDir(),
+		DisableSandbox: runtime.GOOS != "windows",
 	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), cleanHeadlessAllocatorOptions(opts)...)
 	defer cancelAlloc()

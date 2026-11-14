@@ -177,20 +177,16 @@ func selectEntraAccountJS(account string) string {
 		const proto = (location.protocol || '').toLowerCase();
 		const host = (location.hostname || '').toLowerCase();
 		const isLoopbackOrBlank = proto === 'about:' || host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
-		const isTrustedAuthOrigin = proto === 'https:' && (
-			host === 'login.microsoftonline.com' ||
-			host.endsWith('.microsoftonline.com') ||
-			host === 'login.live.com' ||
-			host.endsWith('.live.com') ||
-			host === 'login.microsoft.com' ||
-			host.endsWith('.login.microsoft.com') ||
-			host === 'login.windows.net' ||
-			host.endsWith('.windows.net') ||
-			host === 'login.microsoftonline.us' ||
-			host.endsWith('.microsoftonline.us') ||
-			host === 'login.partner.microsoftonline.cn' ||
-			host.endsWith('.microsoftonline.cn')
-		);
+		const authHosts = [
+			'login.microsoftonline.com',
+			'login.microsoft.com',
+			'login.live.com',
+			'account.live.com',
+			'login.windows.net',
+			'login.microsoftonline.us',
+			'login.partner.microsoftonline.cn'
+		];
+		const isTrustedAuthOrigin = proto === 'https:' && authHosts.some(h => host === h || host.endsWith('.' + h));
 		if (!isLoopbackOrBlank && !isTrustedAuthOrigin) {
 			return false;
 		}

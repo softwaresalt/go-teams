@@ -5,7 +5,7 @@ feature: 021-F
 shipment: 021-S
 branch: feat/021-s-default-microsoft-entra-account-auto-selection-and-internal-config-test-coverage-hardening
 status: closed
-closure_status: READY_WITH_CONDITIONS
+closure_status: READY
 compaction_status: done
 merge_commit: f1c9dd3807e8ff048e1b93005ec80b32af5ad115
 pull_request: 53

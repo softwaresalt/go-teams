@@ -87,6 +87,14 @@ Flags for the root command, `captions`, and `join`:
 * `--headed` / `--headless`: control whether the browser window is visible
 * `--audio`: also capture meeting or recap audio to an `.mp3` file alongside the `.md` transcript
 * `--recap-audio`: also capture Meeting Recap audio to an `.mp3` file alongside the `.md` transcript
+* `--mode`: meeting capture protocol (`auto`, `ephemeral-live`, `live-with-summary`, or `past-recap`)
+* `--duration`: nominal scheduled live capture window (for example `30m`, `1h`, `1h30m`) before post-duration inactivity monitoring begins
+* `--idle-timeout`: silence/inactivity grace period after `--duration` or in-browser call-end teardown before stopping live capture (default `3m`)
+* `--ai-summary-delay`: delay after a live call ends before reopening the meeting in Recap mode to fetch and append `# AI Summary` (default `30m` for `live-with-summary`)
+* `--no-ai-summary`: disable delayed post-call AI Summary capture (`--ai-summary-delay=0s`)
+* `--lobby-timeout`: maximum time to wait in pre-join or the meeting lobby before aborting
+* `--append-ai-summary`: existing Markdown transcript file to append the Meeting Recap AI Summary into without overwriting live captions
+* `--not-before`: RFC 3339 timestamp before which a queued `--append-ai-summary` entry is skipped and left uncommented
 
 Meeting Recap URLs write only the `.md` transcript by default. Enabling audio
 with `--audio`, `--recap-audio`, or `capture_audio: true` (alias `audio: true`)
@@ -96,8 +104,10 @@ is rejected rather than captured when its recording identity cannot be verified
 or when it exceeds the supported size or duration limits.
 
 `--browser-path`, `--profile-dir`, and `--account` are also accepted by `auth`
-and `schedule`, and `browser_path` and `default_account` in the config file
-apply to every command.
+and `schedule`, and `schedule` additionally binds `--audio` / `--recap-audio`,
+`--headless`, `--headed`, `--mode`, `--duration`, `--idle-timeout`,
+`--ai-summary-delay`, `--no-ai-summary`, and `--lobby-timeout`. `browser_path`
+and `default_account` in the config file apply to every command.
 
 Parent output directories are created automatically. Explicit file destinations
 are replaced on each successful capture admission; use unique paths if you
@@ -188,10 +198,18 @@ teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=sy
   (`inheritedQueueFlags`): `--config`, `--output-folder`, `--output-dir`,
   `--output`, `--output-file`, `--filename-template` / `--name-template`,
   `--profile-dir`, `--bot-name`, `--category`, `--browser-path`, `--account`,
-  `--headless`, `--headed`, and `--audio` / `--recap-audio`. The outer `--url`
-  and `--queue` are never forwarded. Flags written on a line come after the
+  `--headless`, `--headed`, `--audio` / `--recap-audio`, `--mode`,
+  `--duration`, `--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`, and
+  `--lobby-timeout`. The outer `--url`, `--queue`, `--append-ai-summary`, and
+  `--not-before` are never forwarded. Flags written on a line come after the
   inherited ones, so repeating the same flag on a line overrides the inherited
   value.
+* Deferred AI Summary enrichment lines (`"<url>" --append-ai-summary "<path.md>" --not-before <RFC3339>`)
+  whose `--not-before` timestamp is still in the future are skipped without
+  error and left uncommented so a later `--queue` or `schedule` run executes
+  them once due. When the timestamp has passed, `teams-cli` opens the meeting
+  in Recap mode, appends `# AI Summary` to `<path.md>`, and prefixes the line
+  with `::`.
 * [Output target precedence](#output-target-precedence) still applies after the
   outer and per-line flags are merged. An inherited outer `--output-file`
   therefore outranks a per-line `--output` or `--output-dir`; only a per-line
@@ -204,6 +222,107 @@ teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=sy
 
 Pointing every line at one explicit `--output-file` replaces that file on each
 capture, so use `--output-folder` or per-line destinations for batches.
+
+### Scheduled and protocol-driven capture
+
+`teams-cli` classifies every capture into one of four protocols (`--mode` /
+`capture_mode` / `meetings[].mode`):
+
+* `ephemeral-live`: real-time live caption and MP3 audio capture (`capture_audio`
+  defaults to `true` unless `--audio=false` is passed) with no post-call AI
+  Summary wait (`ai_summary_delay: 0s`), designed for meetings that leave no
+  post-call Recap or recording.
+* `live-with-summary`: real-time caption and optional audio capture during the
+  live call, immediate flush of `.md` and `.mp3` and browser teardown when the
+  call ends (releasing the Chromium `UserDataDir` profile immediately), a
+  crash-safe pending entry in `transcription_queue.txt` (`queue_file`), and an
+  in-process timer (`--ai-summary-delay`, default `30m`) that reopens the
+  meeting in Recap mode, appends `# AI Summary` to the saved Markdown file, and
+  marks the queue line `::`.
+* `past-recap`: finite post-meeting Recap export (transcript + immediate AI
+  Summary + optional MP3) with no live-call wait.
+* `auto` (default): selects `past-recap` for Recap views and live capture
+  otherwise.
+
+#### Activity-aware nominal duration, overtime, and idle shutdown
+
+`--duration` (or `duration` in `config.yaml`) defines the **nominal baseline
+window**, not a blind hard cutoff:
+
+1. If the browser detects in-browser call-end teardown (`#hangup-button` absent
+   and the Teams post-call screen visible, or toolbar loss for 3 consecutive
+   polls), capture stops as soon as caption and voice activity remain silent for
+   `--idle-timeout` (default `3m`).
+2. When a live call reaches `--duration` while conversation is still active,
+   `teams-cli` continues capturing in **overtime** as long as live caption DOM
+   mutations (including throttled 1000 ms interim heartbeats) or PCM voice audio
+   energy (`PCMRMS >= 300.0`) is observed.
+3. Once `--duration` has elapsed and neither caption nor voice activity occurs
+   for `--idle-timeout` (default `3m`), `teams-cli` shuts down cleanly and
+   flushes the `.md` and `.mp3` files.
+
+#### Built-in daemon scheduling (`teams-cli schedule`)
+
+Configure recurring 5-field `cron:` expressions or one-time `at:` timestamps
+(RFC 3339 or local `YYYY-MM-DD HH:MM`) in `config.yaml`:
+
+```yaml
+output_dir: C:\Transcripts\WSP
+profile_dir: "%LOCALAPPDATA%\\teams-cli\\profile"
+default_account: alice@contoso.com
+headless: true
+queue_file: C:\Transcripts\WSP\transcription_queue.txt
+meetings:
+  - name: "Daily Engineering Standup"
+    url: "https://teams.microsoft.com/meet/synthetic-standup"
+    cron: "0 9 * * 1-5"
+    mode: live-with-summary
+    duration: 30m
+    idle_timeout: 3m
+    ai_summary_delay: 30m
+    lobby_timeout: 5m
+    category: "ENG"
+    capture_audio: false
+  - name: "Vendor Architecture Review"
+    url: "https://teams.microsoft.com/meet/synthetic-vendor"
+    at: "2026-11-15 14:00"
+    mode: ephemeral-live
+    duration: 1h
+    idle_timeout: 3m
+    category: "ARCH"
+    capture_audio: true
+```
+
+Run the schedule daemon:
+
+```powershell
+.\bin\teams-cli.exe schedule --config .\config.yaml --headless
+```
+
+Every `meetings:` entry forwards `name` as the fallback meeting title for
+`<concat-meeting-name>` and the Markdown header when the live DOM does not
+supply a richer title. Past `at:` timestamps are logged and skipped on startup,
+and future `at:` timestamps fire once at the target time without repeating.
+
+#### Windows Task Scheduler one-shot recipes (`teams-cli join --duration`)
+
+You can also schedule one-shot captures directly with Windows Task Scheduler
+without running a persistent daemon:
+
+```powershell
+# PowerShell: register a one-time scheduled task for a 45-minute live call
+$action = New-ScheduledTaskAction -Execute "C:\Tools\teams-cli\teams-cli.exe" `
+  -Argument 'join "https://teams.microsoft.com/meet/synthetic" --mode ephemeral-live --duration 45m --idle-timeout 3m --lobby-timeout 5m --category ENG --audio --headless'
+$trigger = New-ScheduledTaskTrigger -Once -At "2026-11-15 14:00"
+Register-ScheduledTask -TaskName "TeamsCapture-ArchReview" -Action $action -Trigger $trigger
+```
+
+Or with `schtasks.exe`:
+
+```powershell
+schtasks /Create /SC ONCE /TN "TeamsCapture-ArchReview" /ST 14:00 /SD 11/15/2026 `
+  /TR "\"C:\Tools\teams-cli\teams-cli.exe\" join \"https://teams.microsoft.com/meet/synthetic\" --duration 45m --audio --headless"
+```
 
 ### Browser security posture
 
@@ -406,7 +525,13 @@ meetings:
 | `bot_name` | | Display name for guest joins |
 | `headless` | `headed` | Browser visibility; `headed: true` forces a visible window |
 | `capture_audio` | `audio` | Also write an `.mp3` next to the transcript |
-| `meetings` | | Scheduled meetings (`name`, `url`, `cron`) used by `schedule` |
+| `capture_mode` | `mode` | Capture protocol: `auto`, `ephemeral-live`, `live-with-summary`, or `past-recap` |
+| `duration` | | Nominal live capture window (for example `30m`, `1h`) before post-duration idle monitoring |
+| `idle_timeout` | | Post-duration or post-teardown silence window before stopping capture (default `3m`) |
+| `ai_summary_delay` | | Post-call delay before reopening Recap to append `# AI Summary` (default `30m` for `live-with-summary`) |
+| `lobby_timeout` | | Maximum pre-join / lobby wait window before aborting |
+| `queue_file` | | Path to `transcription_queue.txt` used to persist deferred `--append-ai-summary` entries |
+| `meetings` | | Scheduled meetings (`name`, `url`, `cron` or `at`, plus optional `mode`, `duration`, `idle_timeout`, `ai_summary_delay`, `lobby_timeout`, `category`, `capture_audio`/`audio`, `output_dir`) |
 
 `output_folder` and `default_path` only ever set the output directory. The
 separate `output` key accepts either a file or a directory. When `config.Load`

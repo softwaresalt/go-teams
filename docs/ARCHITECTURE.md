@@ -105,20 +105,40 @@ entry, MFA, or lobby admission themselves.
 
 ### Live join and captions
 
-1. `internal/cli` loads the config, applies flag overrides, validates the URL
-   with `teams.ValidateMeetingURL`, and mutates it with `teams.MutateJoinURL`.
-2. `internal/browser` allocates Chromium and walks the pre-join state machine:
+1. `internal/cli` loads the config, applies flag overrides (`--mode`,
+   `--duration`, `--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`,
+   `--lobby-timeout`), validates the URL with `teams.ValidateMeetingURL`, and
+   mutates it with `teams.MutateJoinURL`.
+2. `internal/browser` allocates Chromium and walks the pre-join state machine
+   within any configured `LobbyTimeout` (`ErrLobbyTimeout` on expiration):
    when `DefaultAccount` is configured and an Entra account picker appears, it
    clicks the matching account tile (`selectEntraAccountJS`), then dismisses
    the launcher interstitial, mutes the microphone, injects the bot name for
    guests, and waits through lobby admission.
-3. A `MutationObserver` in the page reports caption rows. A `payloadPump`
-   forwards them to the Go side, where `transcript.Deduplicator` collapses
-   rolling updates into settled caption events.
+3. A `MutationObserver` in the page reports caption rows (emitting both
+   throttled 1000 ms interim activity heartbeats and settled/punctuated
+   utterances). A `payloadPump` forwards them to the Go side, where
+   `transcript.Deduplicator` collapses rolling updates into settled caption
+   events and notifies `capture.Session` of caption activity. Meanwhile, a
+   background DOM poller checks `callEndedProbeJS()` every 2 seconds for
+   in-browser call-end teardown (`#hangup-button` loss or post-call banner).
 4. `capture.Session` writes each event through `transcript.Writer` to the
-   resolved Markdown file until the context is cancelled.
-5. With `--audio`, the page's `getDisplayMedia` stream delivers PCM that
-   `audio.Encoder` writes to an `.mp3` next to the transcript.
+   resolved Markdown file (using `SessionConfig.MeetingTitle` as the fallback
+   title when the DOM supplies none). When `Duration` is set, `capture.Session`
+   treats it as the nominal baseline window, extending into overtime while
+   caption mutations or PCM voice energy (`PCMRMS >= 300.0`) continue and
+   stopping cleanly once neither signal occurs for `IdleTimeout` (default `3m`).
+5. With `--audio` (or by default in `ephemeral-live` mode), the page's
+   `getDisplayMedia` stream delivers PCM that `browser.HasVoiceActivity`
+   measures for speech activity and `audio.Encoder` writes to an `.mp3` next to
+   the transcript.
+6. For `live-with-summary` captures, `internal/cli` closes Chromium immediately
+   when the live call ends (releasing the `UserDataDir` profile), appends a
+   crash-safe `"<url>" --append-ai-summary "<transcript.md>" --not-before <RFC3339>`
+   entry to `queue_file` / `transcription_queue.txt`, and runs an
+   `ai_summary_delay` timer (default `30m`) that reopens the meeting in Recap
+   mode (`ForceRecap: true`), appends `# AI Summary` via
+   `capture.AppendAISummaryToFile`, and marks the queue line `::`.
 
 ### Finite Meeting Recap export
 
@@ -142,15 +162,21 @@ transcript instead of listening live:
 `teams-cli --queue <file>` (`-q`) runs `runQueueFile` in `internal/cli`:
 
 1. The queue file is read once; blank lines and `::` lines are skipped, and an
-   optional leading `teams-cli` token is stripped.
-2. Each remaining line becomes its own root command invocation built with
+   optional leading `teams-cli` token is stripped. Lines carrying a future
+   `--not-before <RFC3339>` timestamp are skipped without error and left
+   uncommented until due.
+2. Each due line becomes its own root command invocation built with
    `executeQueueLine`, with `inheritedQueueFlags` prepended. Those flags
    forward the outer capture flags (config path, output settings, template,
    profile, bot name, category, browser path, default account, headless,
-   audio) but never the outer `--url` or `--queue`. Nested `--queue` flags are
-   rejected.
-3. After a line succeeds it is commented out by prepending `::`.
-   `writeQueueLines` (`internal/cli/queue.go:200`) writes the new content to a
+   audio, mode, duration, idle timeout, AI summary delay, lobby timeout) but
+   never the outer `--url`, `--queue`, `--append-ai-summary`, or `--not-before`.
+   When a due line carries `--append-ai-summary <transcript.md>`, `runCapture`
+   dispatches to `runAppendAISummary` (`ForceRecap: true`) and appends
+   `# AI Summary` in place via `capture.AppendAISummaryToFile`.
+3. After a line succeeds it is commented out by prepending `::` under
+   `queueFileMu` after re-reading the file on disk so concurrent deferred
+   appends are never clobbered. `writeQueueLines` writes the new content to a
    temporary file in the queue directory and renames it over the queue file;
    if creating the temporary file or the rename fails, it falls back to an
    in-place `os.WriteFile` with `0o600` permissions.
@@ -160,17 +186,23 @@ transcript instead of listening live:
 ### Cron schedule
 
 `teams-cli schedule` builds a `robfig/cron` instance from the `meetings`
-entries through `scheduler.Build`. Each job runs the same capture path as a
-manual `join`. It is meant to run as a long-lived daemon with an explicit
-`--profile-dir`.
+entries through `scheduler.Build` / `scheduler.BuildWithClock`, supporting both
+recurring 5-field `cron` expressions and one-shot `at` timestamps (RFC 3339 or
+local `YYYY-MM-DD HH:MM`, scheduled via a single-fire `cron.Schedule` adapter
+and skipped on startup when already in the past). Each job runs with a nominal
+duration (`meetings[].duration` -> `config.duration` -> default `1h`) and post-duration
+`idle_timeout` (default `3m`), forwarding `e.Name` as the fallback
+`MeetingTitle`.
 
 All configured meetings share one Chromium `UserDataDir` profile, so
-`scheduleJob` in `internal/cli/schedule.go` wraps `runCapture` (the same capture
-path as a manual `join`) in a single-flight `atomic.Bool` busy gate. If a prior live capture still
-holds the profile when another cron trigger fires, the overlapping trigger is
-logged as `schedule: skipped, profile busy` and skipped rather than queued or
-launched concurrently. `internal/scheduler` itself only builds the cron
-entries and does not enforce this gate.
+`scheduleJobWithSummaryWG` in `internal/cli/schedule.go` serializes active
+browser sessions with an `atomic.Bool` busy gate. As soon as a live call and
+its Chromium process finish, `onLiveCallFinished` releases the `busy` gate and
+detaches any post-call `ai_summary_delay` timer onto a daemon `sync.WaitGroup`
+so neither `busy` nor `cron.SkipIfStillRunning` blocks subsequent scheduled
+meetings during the 30-minute AI summary wait. On startup, `schedule` also runs
+a non-blocking sweep for due `--append-ai-summary` entries in `queue_file` /
+`transcription_queue.txt`.
 
 ### Self-update
 

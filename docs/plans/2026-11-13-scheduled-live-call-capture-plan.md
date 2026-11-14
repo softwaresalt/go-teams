@@ -105,6 +105,12 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
        - `LobbyTimeout string \`yaml:"lobby_timeout,omitempty"\``
        - `QueueFile string \`yaml:"queue_file,omitempty"\`` (expanded via
          `expandUserPath` when non-empty)
+       - `AppendAISummary string \`yaml:"-"\`` (transient runtime CLI carrier
+         field populated by `applyCaptureFlags` when `--append-ai-summary` is
+         set; omitted from YAML serialization)
+       - `NotBefore string \`yaml:"-"\`` (transient runtime CLI carrier field
+         populated by `applyCaptureFlags` when `--not-before` is set; omitted
+         from YAML serialization)
      * Extend `MeetingSchedule` with:
        - `At string \`yaml:"at,omitempty"\``
        - `Mode string \`yaml:"mode,omitempty"\`` (also accepting `capture_mode`

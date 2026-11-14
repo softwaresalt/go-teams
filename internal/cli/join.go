@@ -27,6 +27,7 @@ type captureFlags struct {
 	botName          string
 	category         string
 	browserPath      string
+	account          string
 	headless         bool
 	headed           bool
 	audio            bool
@@ -45,6 +46,7 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().StringVar(&f.botName, "bot-name", "", "display name injected on guest pre-join")
 	cmd.Flags().StringVarP(&f.category, "category", "c", "", "optional meeting category for the transcript header and filename")
 	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
+	cmd.Flags().StringVar(&f.account, "account", "", "default Microsoft Entra account (UPN/email or display name) to auto-select")
 	cmd.Flags().BoolVar(&f.headless, "headless", false, "run browser in headless mode")
 	cmd.Flags().BoolVar(&f.headed, "headed", false, "open a visible browser window for interactive authentication")
 	cmd.Flags().BoolVar(&f.audio, "audio", false, "also capture meeting or recap audio to an MP3 file")
@@ -104,6 +106,9 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if f.browserPath != "" {
 		cfg.BrowserPath = f.browserPath
 	}
+	if strings.TrimSpace(f.account) != "" {
+		cfg.DefaultAccount = strings.TrimSpace(f.account)
+	}
 	if cmd.Flags().Changed("headless") {
 		cfg.Headless = f.headless
 	}
@@ -148,6 +153,9 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 	}
 	if f.browserPath != "" {
 		out = append(out, "--browser-path", f.browserPath)
+	}
+	if strings.TrimSpace(f.account) != "" {
+		out = append(out, "--account", strings.TrimSpace(f.account))
 	}
 	if cmd.Flags().Changed("headless") {
 		if f.headless {

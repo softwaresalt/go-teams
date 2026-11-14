@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -67,9 +68,10 @@ func defaultRunUpdate(ctx context.Context, opts updateOptions) (updater.Result, 
 // so every command launches the same configured Chromium executable and profile.
 func browserOptions(c config.Config) browser.Options {
 	return browser.Options{
-		UserDataDir: c.ProfileDir,
-		Headless:    c.Headless,
-		ExecPath:    c.BrowserPath,
+		UserDataDir:    c.ProfileDir,
+		Headless:       c.Headless,
+		ExecPath:       c.BrowserPath,
+		DefaultAccount: c.DefaultAccount,
 	}
 }
 
@@ -78,12 +80,14 @@ func browserOptions(c config.Config) browser.Options {
 type browserFlags struct {
 	browserPath string
 	profileDir  string
+	account     string
 }
 
-// bindBrowserFlags registers --browser-path and --profile-dir on cmd.
+// bindBrowserFlags registers --browser-path, --profile-dir, and --account on cmd.
 func bindBrowserFlags(cmd *cobra.Command, f *browserFlags) {
 	cmd.Flags().StringVar(&f.browserPath, "browser-path", "", "path to Chrome/Edge/Chromium executable")
 	cmd.Flags().StringVar(&f.profileDir, "profile-dir", "", "browser user-data directory for session persistence")
+	cmd.Flags().StringVar(&f.account, "account", "", "default Microsoft Entra account (UPN/email or display name) to auto-select")
 }
 
 // applyBrowserFlags overrides cfg with any browser flag the operator supplied.
@@ -94,6 +98,9 @@ func applyBrowserFlags(cfg *config.Config, f browserFlags) {
 	if f.profileDir != "" {
 		cfg.ProfileDir = f.profileDir
 	}
+	if strings.TrimSpace(f.account) != "" {
+		cfg.DefaultAccount = strings.TrimSpace(f.account)
+	}
 }
 
 // defaultNewMeeting allocates a Chromium context for meeting capture and
@@ -102,7 +109,11 @@ func applyBrowserFlags(cfg *config.Config, f browserFlags) {
 func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
 	return browser.NewLiveMeeting(ctx,
 		browserOptions(c),
-		browser.MeetingOptions{MeetingURL: meetingURL, BotName: c.BotName})
+		browser.MeetingOptions{
+			MeetingURL:     meetingURL,
+			BotName:        c.BotName,
+			DefaultAccount: c.DefaultAccount,
+		})
 }
 
 // NewRootCommand builds the root command with all subcommands attached, using

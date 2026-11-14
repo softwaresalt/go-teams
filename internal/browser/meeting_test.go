@@ -106,16 +106,28 @@ func TestSelectEntraAccountJSDOM(t *testing.T) {
 		t.Skip("no Chromium-based browser executable found on host")
 	}
 
+	profileDir := t.TempDir()
+	t.Cleanup(func() {
+		for range 10 {
+			if os.RemoveAll(profileDir) == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
 	opts := Options{
 		Headless:       true,
-		UserDataDir:    t.TempDir(),
+		UserDataDir:    profileDir,
 		ExecPath:       execPath,
 		DisableSandbox: runtime.GOOS != "windows",
 	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), cleanHeadlessAllocatorOptions(opts)...)
-	defer cancelAlloc()
 	ctx, cancelCtx := chromedp.NewContext(allocCtx)
-	defer cancelCtx()
+	defer func() {
+		cancelCtx()
+		cancelAlloc()
+		time.Sleep(200 * time.Millisecond)
+	}()
 
 	const pickerHTML = `<!doctype html><html><body>
 		<div id="tilesHolder">

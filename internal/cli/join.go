@@ -135,23 +135,24 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	audioFlagChanged := cmd.Flags().Changed("audio") || cmd.Flags().Changed("recap-audio")
 	if audioFlagChanged {
 		cfg.CaptureAudio = f.audio
+		cfg.ExplicitCaptureAudio = true
 	}
 	if cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "" {
 		cfg.CaptureMode = strings.ToLower(strings.TrimSpace(f.mode))
 	}
-	if cmd.Flags().Changed("duration") || f.duration > 0 {
+	if cmd.Flags().Changed("duration") || f.duration != 0 {
 		cfg.Duration = f.duration.String()
 	}
-	if cmd.Flags().Changed("idle-timeout") || f.idleTimeout > 0 {
+	if cmd.Flags().Changed("idle-timeout") || f.idleTimeout != 0 {
 		cfg.IdleTimeout = f.idleTimeout.String()
 	}
-	if cmd.Flags().Changed("ai-summary-delay") {
+	if cmd.Flags().Changed("ai-summary-delay") || f.aiSummaryDelay != 0 {
 		cfg.AISummaryDelay = f.aiSummaryDelay.String()
 	}
 	if f.noAISummary {
 		cfg.AISummaryDelay = "0s"
 	}
-	if cmd.Flags().Changed("lobby-timeout") || f.lobbyTimeout > 0 {
+	if cmd.Flags().Changed("lobby-timeout") || f.lobbyTimeout != 0 {
 		cfg.LobbyTimeout = f.lobbyTimeout.String()
 	}
 	if cmd.Flags().Changed("append-ai-summary") || strings.TrimSpace(f.appendAISummary) != "" {
@@ -162,7 +163,7 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	}
 	if strings.EqualFold(strings.TrimSpace(cfg.CaptureMode), config.CaptureModeEphemeralLive) {
 		cfg.AISummaryDelay = "0s"
-		if !audioFlagChanged && (cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "") {
+		if !audioFlagChanged && !cfg.ExplicitCaptureAudio {
 			cfg.CaptureAudio = true
 		}
 	}

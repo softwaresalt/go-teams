@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
+	"github.com/softwaresalt/go-teams/internal/config"
 	"github.com/softwaresalt/go-teams/internal/teams"
 )
 
@@ -53,6 +54,10 @@ func parseQueueContent(data []byte) (lines []string, lineEnding string, hasTrail
 }
 
 func appendDeferredAISummaryQueueLine(queuePath, meetingURL, transcriptPath string, notBefore time.Time) error {
+	return appendDeferredAISummaryQueueLineWithConfig(queuePath, meetingURL, transcriptPath, notBefore, config.Config{})
+}
+
+func appendDeferredAISummaryQueueLineWithConfig(queuePath, meetingURL, transcriptPath string, notBefore time.Time, cfg config.Config) error {
 	if strings.TrimSpace(queuePath) == "" {
 		return nil
 	}
@@ -83,9 +88,28 @@ func appendDeferredAISummaryQueueLine(queuePath, meetingURL, transcriptPath stri
 		}
 	}
 
-	entry := fmt.Sprintf("%q --append-ai-summary %q --not-before %s",
+	var b strings.Builder
+	fmt.Fprintf(&b, "%q --append-ai-summary %q --not-before %s",
 		meetingURL, transcriptPath, notBefore.UTC().Format(time.RFC3339))
-	lines = append(lines, entry)
+	if cPath := strings.TrimSpace(cfg.ConfigPath); cPath != "" {
+		fmt.Fprintf(&b, " --config %q", cPath)
+	}
+	if pDir := strings.TrimSpace(cfg.ProfileDir); pDir != "" {
+		fmt.Fprintf(&b, " --profile-dir %q", pDir)
+	}
+	if bPath := strings.TrimSpace(cfg.BrowserPath); bPath != "" {
+		fmt.Fprintf(&b, " --browser-path %q", bPath)
+	}
+	if acct := strings.TrimSpace(cfg.DefaultAccount); acct != "" {
+		fmt.Fprintf(&b, " --account %q", acct)
+	}
+	if lTimeout := strings.TrimSpace(cfg.LobbyTimeout); lTimeout != "" {
+		fmt.Fprintf(&b, " --lobby-timeout %s", lTimeout)
+	}
+	if cfg.Headless {
+		b.WriteString(" --headless")
+	}
+	lines = append(lines, b.String())
 	return writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline)
 }
 

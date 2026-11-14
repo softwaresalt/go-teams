@@ -89,27 +89,29 @@ type MeetingSchedule struct {
 
 // Config is the top-level go-teams CLI configuration.
 type Config struct {
-	OutputDir        string            `yaml:"output_dir"`
-	OutputFile       string            `yaml:"output_file,omitempty"`
-	FilenameTemplate string            `yaml:"filename_template,omitempty"`
-	MeetingURL       string            `yaml:"meeting_url,omitempty"`
-	ProfileDir       string            `yaml:"profile_dir"`
-	BotName          string            `yaml:"bot_name"`
-	Category         string            `yaml:"category,omitempty"`
-	Headless         bool              `yaml:"headless"`
-	CaptureAudio     bool              `yaml:"capture_audio,omitempty"`
-	BrowserPath      string            `yaml:"browser_path,omitempty"`
-	DefaultAccount   string            `yaml:"default_account,omitempty"`
-	CaptureMode      string            `yaml:"capture_mode,omitempty"`
-	Duration         string            `yaml:"duration,omitempty"`
-	IdleTimeout      string            `yaml:"idle_timeout,omitempty"`
-	AISummaryDelay   string            `yaml:"ai_summary_delay,omitempty"`
-	LobbyTimeout     string            `yaml:"lobby_timeout,omitempty"`
-	QueueFile        string            `yaml:"queue_file,omitempty"`
-	MeetingTitle     string            `yaml:"-"`
-	AppendAISummary  string            `yaml:"-"`
-	NotBefore        string            `yaml:"-"`
-	Meetings         []MeetingSchedule `yaml:"meetings"`
+	OutputDir            string            `yaml:"output_dir"`
+	OutputFile           string            `yaml:"output_file,omitempty"`
+	FilenameTemplate     string            `yaml:"filename_template,omitempty"`
+	MeetingURL           string            `yaml:"meeting_url,omitempty"`
+	ProfileDir           string            `yaml:"profile_dir"`
+	BotName              string            `yaml:"bot_name"`
+	Category             string            `yaml:"category,omitempty"`
+	Headless             bool              `yaml:"headless"`
+	CaptureAudio         bool              `yaml:"capture_audio,omitempty"`
+	BrowserPath          string            `yaml:"browser_path,omitempty"`
+	DefaultAccount       string            `yaml:"default_account,omitempty"`
+	CaptureMode          string            `yaml:"capture_mode,omitempty"`
+	Duration             string            `yaml:"duration,omitempty"`
+	IdleTimeout          string            `yaml:"idle_timeout,omitempty"`
+	AISummaryDelay       string            `yaml:"ai_summary_delay,omitempty"`
+	LobbyTimeout         string            `yaml:"lobby_timeout,omitempty"`
+	QueueFile            string            `yaml:"queue_file,omitempty"`
+	ConfigPath           string            `yaml:"-"`
+	MeetingTitle         string            `yaml:"-"`
+	AppendAISummary      string            `yaml:"-"`
+	NotBefore            string            `yaml:"-"`
+	ExplicitCaptureAudio bool              `yaml:"-"`
+	Meetings             []MeetingSchedule `yaml:"meetings"`
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default
@@ -294,6 +296,7 @@ func Load(path string) (Config, error) {
 		Mode         string `yaml:"mode"`
 		Headless     *bool  `yaml:"headless"`
 		Headed       *bool  `yaml:"headed"`
+		CaptureAudio *bool  `yaml:"capture_audio"`
 		Audio        *bool  `yaml:"audio"`
 		Meetings     []struct {
 			CaptureMode string `yaml:"capture_mode"`
@@ -339,8 +342,19 @@ func Load(path string) (Config, error) {
 		default:
 			cfg.Headless = false
 		}
+		if aliases.CaptureAudio != nil || aliases.Audio != nil {
+			cfg.ExplicitCaptureAudio = true
+		}
 		if aliases.Audio != nil {
 			cfg.CaptureAudio = *aliases.Audio
+		}
+		if strings.EqualFold(cfg.CaptureMode, CaptureModeEphemeralLive) {
+			if strings.TrimSpace(cfg.AISummaryDelay) == "" {
+				cfg.AISummaryDelay = "0s"
+			}
+			if !cfg.ExplicitCaptureAudio {
+				cfg.CaptureAudio = true
+			}
 		}
 		for i := range cfg.Meetings {
 			cfg.Meetings[i].Mode = strings.ToLower(strings.TrimSpace(cfg.Meetings[i].Mode))

@@ -141,6 +141,7 @@ func TestScheduleMeetingOverridesAndBusyGateReleaseBeforeSummaryDelay(t *testing
 	// Verify busy gate releases immediately after live capture finishes (before ai_summary_delay)
 	// so a second scheduled meeting can run during the delay window.
 	dir := t.TempDir()
+	base.QueueFile = filepath.Join(dir, "transcription_queue.txt")
 	md1 := filepath.Join(dir, "m1.md")
 	require.NoError(t, os.WriteFile(md1, []byte("# Meeting Transcript\n\n> **Alice:** First meeting.\n"), 0o600))
 

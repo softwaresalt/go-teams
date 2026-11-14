@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -15,8 +14,9 @@ import (
 )
 
 const (
-	defaultAISummaryDelay = 30 * time.Minute
-	defaultQueueFileName  = "transcription_queue.txt"
+	defaultAISummaryDelay         = 30 * time.Minute
+	defaultRecapEnrichmentTimeout = 2 * time.Minute
+	defaultQueueFileName          = "transcription_queue.txt"
 )
 
 // meetingSession runs a capture session against a joined meeting. It is
@@ -44,6 +44,34 @@ func parseOptionalDuration(raw string) (time.Duration, error) {
 	return time.ParseDuration(trimmed)
 }
 
+func validateCaptureLifecycles(cfg config.Config) error {
+	if mode := strings.TrimSpace(cfg.CaptureMode); mode != "" && !config.IsValidCaptureMode(mode) {
+		return fmt.Errorf("cli: %w: %q", config.ErrInvalidCaptureMode, mode)
+	}
+	for _, item := range []struct {
+		name string
+		raw  string
+	}{
+		{"duration", cfg.Duration},
+		{"idle_timeout", cfg.IdleTimeout},
+		{"lobby_timeout", cfg.LobbyTimeout},
+	} {
+		if trimmed := strings.TrimSpace(item.raw); trimmed != "" {
+			d, err := time.ParseDuration(trimmed)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("cli: %s %q: %w", item.name, item.raw, config.ErrInvalidDuration)
+			}
+		}
+	}
+	if trimmed := strings.TrimSpace(cfg.AISummaryDelay); trimmed != "" {
+		d, err := time.ParseDuration(trimmed)
+		if err != nil || d < 0 {
+			return fmt.Errorf("cli: ai_summary_delay %q: %w", cfg.AISummaryDelay, config.ErrInvalidDuration)
+		}
+	}
+	return nil
+}
+
 func effectiveAISummaryDelay(cfg config.Config, isRecap bool) time.Duration {
 	if isRecap {
 		return 0
@@ -69,15 +97,15 @@ func resolveDeferredQueuePath(cfg config.Config) string {
 	if q := strings.TrimSpace(cfg.QueueFile); q != "" {
 		return q
 	}
-	if info, err := os.Stat(defaultQueueFileName); err == nil && !info.IsDir() {
-		return defaultQueueFileName
-	}
-	return ""
+	return defaultQueueFileName
 }
 
 func runAppendAISummary(ctx context.Context, d *deps, cfg config.Config, meetingURL, transcriptPath string) error {
 	recapCfg := cfg
 	recapCfg.CaptureMode = config.CaptureModePastRecap
+	if strings.TrimSpace(recapCfg.LobbyTimeout) == "" {
+		recapCfg.LobbyTimeout = defaultRecapEnrichmentTimeout.String()
+	}
 	meeting, browserCtx, cleanup, err := d.newMeeting(ctx, recapCfg, meetingURL)
 	if err != nil {
 		return fmt.Errorf("cli: create meeting for ai summary: %w", err)
@@ -118,14 +146,17 @@ func runCaptureWithHooks(ctx context.Context, d *deps, cfg config.Config, meetin
 			return errQueueEntryNotYetDue
 		}
 	}
+	if err := validateCaptureLifecycles(cfg); err != nil {
+		if hooks.onLiveCallFinished != nil {
+			hooks.onLiveCallFinished()
+		}
+		return err
+	}
 	if targetMD := strings.TrimSpace(cfg.AppendAISummary); targetMD != "" {
 		if hooks.onLiveCallFinished != nil {
 			defer hooks.onLiveCallFinished()
 		}
 		return runAppendAISummary(ctx, d, cfg, meetingURL, targetMD)
-	}
-	if mode := strings.TrimSpace(cfg.CaptureMode); mode != "" && !config.IsValidCaptureMode(mode) {
-		return fmt.Errorf("cli: %w: %q", config.ErrInvalidCaptureMode, mode)
 	}
 
 	var (
@@ -167,7 +198,7 @@ func runCaptureWithHooks(ctx context.Context, d *deps, cfg config.Config, meetin
 
 	queuePath := resolveDeferredQueuePath(cfg)
 	if queuePath != "" {
-		if qErr := appendDeferredAISummaryQueueLine(queuePath, meetingURL, transcriptPath, time.Now().Add(delay)); qErr != nil {
+		if qErr := appendDeferredAISummaryQueueLineWithConfig(queuePath, meetingURL, transcriptPath, time.Now().Add(delay), cfg); qErr != nil {
 			slog.Warn("cli: failed to persist deferred AI summary queue entry", "queue", queuePath, "err", qErr)
 		}
 	}

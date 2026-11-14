@@ -170,6 +170,7 @@ func TestRunCaptureLiveWithSummaryWritesQueueFallbackAndAppendsAfterDelay(t *tes
 		"--duration", "45m",
 		"--idle-timeout", "2m",
 		"--lobby-timeout", "3m",
+		"--account", "alice@contoso.com",
 		"--ai-summary-delay", "20ms",
 	))
 
@@ -185,20 +186,30 @@ func TestRunCaptureLiveWithSummaryWritesQueueFallbackAndAppendsAfterDelay(t *tes
 	qBytes, err := os.ReadFile(qPath)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(strings.TrimSpace(string(qBytes)), "::"), "completed deferred queue line must be marked ::, got:\n%s", string(qBytes))
+	assert.Contains(t, string(qBytes), "--profile-dir")
+	assert.Contains(t, string(qBytes), "--account")
 
-	// Also verify --mode ephemeral-live defaults CaptureAudio=true and AISummaryDelay=0s.
+	// Also verify --mode ephemeral-live defaults CaptureAudio=true and AISummaryDelay=0s,
+	// including when loaded from YAML config, and rejects negative CLI durations.
 	var gotEphemeral config.Config
 	dEph := &deps{
-		loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
-		newRunner:  func(config.Config) browser.Runner { return &fakeRunner{} },
+		loadConfig: func(string) (config.Config, error) {
+			c := validConfig()
+			c.CaptureMode = config.CaptureModeEphemeralLive
+			return c, nil
+		},
+		newRunner: func(config.Config) browser.Runner { return &fakeRunner{} },
 		newMeeting: func(ctx context.Context, c config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
 			gotEphemeral = c
 			return nil, ctx, func() {}, nil
 		},
 		newSession: func(config.Config, string) meetingSession { return &fakeSession{} },
 	}
-	require.NoError(t, runCmd(context.Background(), dEph, "join", "https://teams.microsoft.com/meet/123", "--mode", "ephemeral-live"))
+	require.NoError(t, runCmd(context.Background(), dEph, "join", "https://teams.microsoft.com/meet/123"))
 	assert.Equal(t, config.CaptureModeEphemeralLive, gotEphemeral.CaptureMode)
 	assert.True(t, gotEphemeral.CaptureAudio)
 	assert.Equal(t, "0s", gotEphemeral.AISummaryDelay)
+
+	err = runCmd(context.Background(), dEph, "join", "https://teams.microsoft.com/meet/123", "--duration=-1m")
+	require.ErrorIs(t, err, config.ErrInvalidDuration)
 }

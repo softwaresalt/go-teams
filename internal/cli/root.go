@@ -218,6 +218,9 @@ func loadConfigFrom(d *deps, configPath string) (config.Config, error) {
 		}
 		return config.Config{}, err
 	}
+	if configPath != "" {
+		cfg.ConfigPath = configPath
+	}
 	return cfg, nil
 }
 

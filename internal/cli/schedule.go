@@ -64,28 +64,29 @@ func applyScheduleFlags(cmd *cobra.Command, cfg *config.Config, f scheduleFlags)
 	audioChanged := cmd != nil && (cmd.Flags().Changed("audio") || cmd.Flags().Changed("recap-audio"))
 	if audioChanged {
 		cfg.CaptureAudio = f.audio
+		cfg.ExplicitCaptureAudio = true
 	}
 	if (cmd != nil && cmd.Flags().Changed("mode")) || strings.TrimSpace(f.mode) != "" {
 		cfg.CaptureMode = strings.ToLower(strings.TrimSpace(f.mode))
 	}
-	if (cmd != nil && cmd.Flags().Changed("duration")) || f.duration > 0 {
+	if (cmd != nil && cmd.Flags().Changed("duration")) || f.duration != 0 {
 		cfg.Duration = f.duration.String()
 	}
-	if (cmd != nil && cmd.Flags().Changed("idle-timeout")) || f.idleTimeout > 0 {
+	if (cmd != nil && cmd.Flags().Changed("idle-timeout")) || f.idleTimeout != 0 {
 		cfg.IdleTimeout = f.idleTimeout.String()
 	}
-	if cmd != nil && cmd.Flags().Changed("ai-summary-delay") {
+	if (cmd != nil && cmd.Flags().Changed("ai-summary-delay")) || f.aiSummaryDelay != 0 {
 		cfg.AISummaryDelay = f.aiSummaryDelay.String()
 	}
 	if f.noAISummary {
 		cfg.AISummaryDelay = "0s"
 	}
-	if (cmd != nil && cmd.Flags().Changed("lobby-timeout")) || f.lobbyTimeout > 0 {
+	if (cmd != nil && cmd.Flags().Changed("lobby-timeout")) || f.lobbyTimeout != 0 {
 		cfg.LobbyTimeout = f.lobbyTimeout.String()
 	}
 	if strings.EqualFold(strings.TrimSpace(cfg.CaptureMode), config.CaptureModeEphemeralLive) {
 		cfg.AISummaryDelay = "0s"
-		if !audioChanged && ((cmd != nil && cmd.Flags().Changed("mode")) || strings.TrimSpace(f.mode) != "") {
+		if !audioChanged && !cfg.ExplicitCaptureAudio {
 			cfg.CaptureAudio = true
 		}
 	}
@@ -104,6 +105,7 @@ func buildScheduleEntryConfig(base config.Config, e scheduler.Entry) config.Conf
 	}
 	if e.CaptureAudio != nil {
 		entryCfg.CaptureAudio = *e.CaptureAudio
+		entryCfg.ExplicitCaptureAudio = true
 	}
 	if strings.TrimSpace(e.Mode) != "" {
 		entryCfg.CaptureMode = strings.ToLower(strings.TrimSpace(e.Mode))
@@ -126,7 +128,7 @@ func buildScheduleEntryConfig(base config.Config, e scheduler.Entry) config.Conf
 	}
 	if strings.EqualFold(strings.TrimSpace(entryCfg.CaptureMode), config.CaptureModeEphemeralLive) {
 		entryCfg.AISummaryDelay = "0s"
-		if e.CaptureAudio == nil && strings.TrimSpace(e.Mode) != "" {
+		if e.CaptureAudio == nil && !entryCfg.ExplicitCaptureAudio {
 			entryCfg.CaptureAudio = true
 		}
 	}
@@ -277,6 +279,9 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 				return err
 			}
 			applyScheduleFlags(cmd, &cfg, flags)
+			if err := validateCaptureLifecycles(cfg); err != nil {
+				return err
+			}
 			entries := make([]scheduler.Entry, 0, len(cfg.Meetings))
 			for _, m := range cfg.Meetings {
 				entry, bErr := buildSchedulerEntryFromConfig(m)

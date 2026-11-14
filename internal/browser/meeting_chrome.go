@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -23,10 +24,11 @@ import (
 // admissionPollInterval controls how often pre-join and admission loops
 // re-check the DOM.
 const (
-	admissionPollInterval = 1 * time.Second
-	callEndedPollInterval = 2 * time.Second
-	captionMenuStepWait   = 5 * time.Second
-	captionMenuPoll       = 150 * time.Millisecond
+	admissionPollInterval    = 1 * time.Second
+	callEndedPollInterval    = 2 * time.Second
+	defaultForceRecapTimeout = 2 * time.Minute
+	captionMenuStepWait      = 5 * time.Second
+	captionMenuPoll          = 150 * time.Millisecond
 )
 
 // chromeMeeting is the chromedp-backed Meeting implementation. Its methods
@@ -118,10 +120,13 @@ func (m *chromeMeeting) effectivePollInterval() time.Duration {
 }
 
 func (m *chromeMeeting) lobbyDeadline() time.Time {
-	if m.opts.LobbyTimeout <= 0 {
-		return time.Time{}
+	if m.opts.LobbyTimeout > 0 {
+		return time.Now().Add(m.opts.LobbyTimeout)
 	}
-	return time.Now().Add(m.opts.LobbyTimeout)
+	if m.opts.ForceRecap {
+		return time.Now().Add(defaultForceRecapTimeout)
+	}
+	return time.Time{}
 }
 
 func (m *chromeMeeting) withDeadlineContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
@@ -188,6 +193,22 @@ func (m *chromeMeeting) stopHeadedBrowser() {
 	}
 }
 
+func deriveRecapURLFromMeetingURL(meetingURL string) string {
+	lower := strings.ToLower(strings.TrimSpace(meetingURL))
+	if strings.Contains(lower, "meetingrecap") {
+		return ""
+	}
+	id := ExtractMeetingIdentity(meetingURL)
+	if id.ThreadID == "" {
+		return ""
+	}
+	host := "teams.cloud.microsoft"
+	if hasHTTPSHostSuffix(meetingURL, "teams.microsoft.com") {
+		host = "teams.microsoft.com"
+	}
+	return fmt.Sprintf("https://%s/l/meetingrecap?threadId=%s", host, url.QueryEscape(id.ThreadID))
+}
+
 // Join implements Meeting. It validates the meeting URL, navigates to it, waits
 // for user authentication or launcher interstitial handling as needed, and
 // detects either a Teams Meeting Recap transcript (via xplatplugins.aspx /
@@ -204,7 +225,13 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 		return m.joinHeadedWithDeadline(ctx, deadline)
 	}
 	if m.probePreJoinState == nil {
-		if err := chromedp.Run(ctx, chromedp.Navigate(m.opts.MeetingURL)); err != nil {
+		targetURL := m.opts.MeetingURL
+		if m.opts.ForceRecap {
+			if recapURL := deriveRecapURLFromMeetingURL(targetURL); recapURL != "" {
+				targetURL = recapURL
+			}
+		}
+		if err := chromedp.Run(ctx, chromedp.Navigate(targetURL)); err != nil {
 			if m.isLobbyDeadlineExceeded(ctx, deadline, err) {
 				return fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)
 			}
@@ -398,8 +425,14 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 
 func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline time.Time) error {
 	coldProfile := !hasTeamsSessionInProfile(m.headedOpts.UserDataDir)
-	authTracker, initialURL := newHeadedAuthTracker(m.opts.MeetingURL, coldProfile)
-	if initialURL != m.opts.MeetingURL {
+	effectiveMeetingURL := m.opts.MeetingURL
+	if m.opts.ForceRecap {
+		if recapURL := deriveRecapURLFromMeetingURL(effectiveMeetingURL); recapURL != "" {
+			effectiveMeetingURL = recapURL
+		}
+	}
+	authTracker, initialURL := newHeadedAuthTracker(effectiveMeetingURL, coldProfile)
+	if initialURL != effectiveMeetingURL {
 		slog.Info("browser: new or unauthenticated profile detected; bootstrapping Teams session at /v2/ before opening meeting recap")
 	}
 	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, initialURL)
@@ -703,10 +736,6 @@ func isTrustedSingleTabRebindURL(rawURL string) bool {
 	)
 }
 
-func (m *chromeMeeting) awaitPreJoinOrAdmission(ctx context.Context) error {
-	return m.awaitPreJoinOrAdmissionWithDeadline(ctx, m.lobbyDeadline())
-}
-
 func (m *chromeMeeting) awaitPreJoinOrAdmissionWithDeadline(ctx context.Context, deadline time.Time) error {
 	ticker := time.NewTicker(m.effectivePollInterval())
 	defer ticker.Stop()
@@ -714,6 +743,7 @@ func (m *chromeMeeting) awaitPreJoinOrAdmissionWithDeadline(ctx context.Context,
 	clickedLauncher := false
 	reNavigateAttempts := 0
 	coldRecapPolls := 0
+	recapNavAttempted := false
 
 	for {
 		if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
@@ -756,7 +786,17 @@ func (m *chromeMeeting) awaitPreJoinOrAdmissionWithDeadline(ctx context.Context,
 		state := classifyPreJoinState(toolbar, lobby, prejoin, launcher)
 		if m.opts.ForceRecap && (state == PreJoinAdmitted || state == PreJoinInLobby || state == PreJoinReady) {
 			// In ForceRecap mode, never enter the live pre-join click flow or
-			// treat a live call toolbar as Recap completion.
+			// treat a live call toolbar as Recap completion. If the meeting URL
+			// opened live pre-join and carries a threadId, navigate to its
+			// meetingrecap route once so Recap extraction can proceed.
+			if !recapNavAttempted && m.probePreJoinState == nil {
+				recapNavAttempted = true
+				if recapURL := deriveRecapURLFromMeetingURL(m.opts.MeetingURL); recapURL != "" {
+					navCtx, cancelNav := m.withDeadlineContext(ctx, deadline)
+					_ = chromedp.Run(navCtx, chromedp.Navigate(recapURL))
+					cancelNav()
+				}
+			}
 			state = PreJoinWaitingForUser
 		}
 
@@ -985,12 +1025,8 @@ func (m *chromeMeeting) injectName(ctx context.Context) error {
 	return nil
 }
 
-// awaitAdmission polls the DOM for the meeting toolbar (admitted) or the lobby
-// prompt (waiting) until admitted or ctx is cancelled.
-func (m *chromeMeeting) awaitAdmission(ctx context.Context) error {
-	return m.awaitAdmissionWithDeadline(ctx, m.lobbyDeadline())
-}
-
+// awaitAdmissionWithDeadline polls the DOM for the meeting toolbar (admitted)
+// or the lobby prompt (waiting) until admitted or ctx/deadline expires.
 func (m *chromeMeeting) awaitAdmissionWithDeadline(ctx context.Context, deadline time.Time) error {
 	ticker := time.NewTicker(m.effectivePollInterval())
 	defer ticker.Stop()

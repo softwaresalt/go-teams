@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -231,4 +232,95 @@ func TestQueueFileHonorsPerEntryAudioAliasOverrides(t *testing.T) {
 	}
 	require.NoError(t, runCmd(context.Background(), d, "--queue", queuePath, "--recap-audio"))
 	assert.Equal(t, map[string]bool{"inherit": true, "audio-off": false, "recap-off": false}, got)
+}
+
+func TestAppendDeferredAISummaryQueueHelpers(t *testing.T) {
+	dir := t.TempDir()
+	qPath := filepath.Join(dir, "transcription_queue.txt")
+	mdPath := filepath.Join(dir, "call.md")
+	require.NoError(t, appendDeferredAISummaryQueueLine(qPath, "https://teams.microsoft.com/meet/123", mdPath, time.Now().UTC()))
+	require.NoError(t, markDeferredAISummaryQueueLineDone(qPath, mdPath))
+	b, err := os.ReadFile(qPath)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(string(b)), "::"))
+}
+
+func TestQueueSkipsFutureNotBeforeAndExecutesDueAppendAISummary(t *testing.T) {
+	dir := t.TempDir()
+	qPath := filepath.Join(dir, "transcription_queue.txt")
+	futureMD := filepath.Join(dir, "future.md")
+	dueMD := filepath.Join(dir, "due.md")
+	require.NoError(t, os.WriteFile(futureMD, []byte("# Meeting Transcript\n\n> **Alice:** Future.\n"), 0o600))
+	require.NoError(t, os.WriteFile(dueMD, []byte("# Meeting Transcript\n\n> **Bob:** Due now.\n"), 0o600))
+
+	futureTS := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
+	pastTS := time.Now().Add(-1 * time.Minute).UTC().Format(time.RFC3339)
+
+	require.NoError(t, appendDeferredAISummaryQueueLine(qPath, "https://teams.microsoft.com/meet/future", futureMD, time.Now().Add(1*time.Hour)))
+	require.NoError(t, appendDeferredAISummaryQueueLine(qPath, "https://teams.microsoft.com/meet/due", dueMD, time.Now().Add(-1*time.Minute)))
+	_ = futureTS
+	_ = pastTS
+
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
+		newRunner:  func(config.Config) browser.Runner { return &fakeRunner{} },
+		newMeeting: func(ctx context.Context, _ config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			return &fakeSummaryMeeting{summary: "Summary:\nAppended from queue."}, ctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession {
+			t.Fatal("newSession must not be called for --append-ai-summary queue lines")
+			return nil
+		},
+	}
+
+	require.NoError(t, runCmd(context.Background(), d, "--queue", qPath))
+
+	qBytes, err := os.ReadFile(qPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(qBytes)), "\n")
+	require.Len(t, lines, 2)
+	assert.False(t, strings.HasPrefix(lines[0], "::"), "future --not-before line must remain uncommented")
+	assert.True(t, strings.HasPrefix(lines[1], "::"), "due --not-before line must be marked ::")
+
+	dueBytes, err := os.ReadFile(dueMD)
+	require.NoError(t, err)
+	assert.Contains(t, string(dueBytes), "Due now.")
+	assert.Contains(t, string(dueBytes), "Appended from queue.")
+}
+
+func TestQueueBatchCatchUpUsesConfiguredOutputDirAndPerLineFlags(t *testing.T) {
+	dir := t.TempDir()
+	qPath := filepath.Join(dir, "transcription_queue.txt")
+	queueContent := strings.Join([]string{
+		`"https://teams.cloud.microsoft/l/meetingrecap?threadId=one" --mode past-recap --category ENG --audio`,
+		`"https://teams.microsoft.com/meet/two" --mode ephemeral-live --category PROD`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(qPath, []byte(queueContent), 0o600))
+
+	var gotCfgs []config.Config
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) {
+			c := validConfig()
+			c.OutputDir = filepath.Join(dir, "configured-out")
+			return c, nil
+		},
+		newRunner: func(config.Config) browser.Runner { return &fakeRunner{} },
+		newMeeting: func(ctx context.Context, c config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			gotCfgs = append(gotCfgs, c)
+			return nil, ctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession { return &fakeSession{} },
+	}
+
+	require.NoError(t, runCmd(context.Background(), d, "--queue", qPath))
+	require.Len(t, gotCfgs, 2)
+	assert.Equal(t, filepath.Join(dir, "configured-out"), gotCfgs[0].OutputDir)
+	assert.Equal(t, config.CaptureModePastRecap, gotCfgs[0].CaptureMode)
+	assert.Equal(t, "ENG", gotCfgs[0].Category)
+	assert.True(t, gotCfgs[0].CaptureAudio)
+
+	assert.Equal(t, filepath.Join(dir, "configured-out"), gotCfgs[1].OutputDir)
+	assert.Equal(t, config.CaptureModeEphemeralLive, gotCfgs[1].CaptureMode)
+	assert.Equal(t, "PROD", gotCfgs[1].Category)
+	assert.True(t, gotCfgs[1].CaptureAudio)
 }

@@ -16,8 +16,10 @@ drivers and no FFmpeg.
 
 The executable has no server component and persists nothing except the files
 it writes: transcripts, optional MP3 files, the browser profile directory, and
-the optional YAML configuration file. For user-facing commands and flags, see
-the [README](../README.md). For the full blueprint, see
+the optional YAML configuration file. For an approachable setup walkthrough and
+the complete command, flag, and configuration reference, see the
+[user guide](USER_GUIDE.md); the [README](../README.md) is the cover page. For
+the full blueprint, see
 [Go-TeamsTranscriptCLI-Architecture.md](product-specs/Go-TeamsTranscriptCLI-Architecture.md).
 For graded quality per domain, see [QUALITY_SCORE.md](QUALITY_SCORE.md).
 
@@ -28,8 +30,8 @@ The module contains one entrypoint and ten packages under `internal/`.
 | Package | Responsibility | Key exported surface |
 |---|---|---|
 | `cmd/teams-cli` | Process entrypoint; wires signal handling (`os/signal`) to the root command | `main` |
-| `internal/cli` | Cobra commands (`captions`, `join`, `auth`, `schedule`, `update`, root), capture flag binding, output target resolution, batch queue runner | `NewRootCommand` |
-| `internal/config` | YAML configuration model, defaults, key aliases, validation, atomic save | `Config`, `Load`, `Save`, `DefaultConfig` |
+| `internal/cli` | Cobra commands (`captions`, `join`, `auth`, `schedule`, `generate-config`, `update`, root), capture flag binding, output target resolution, batch queue runner | `NewRootCommand` |
+| `internal/config` | YAML configuration model, defaults, key aliases, validation, atomic save, commented template generation (`template.go`) | `Config`, `Load`, `Save`, `DefaultConfig`, `TemplateYAML`, `ResolveTemplatePath`, `WriteTemplate` |
 | `internal/teams` | Meeting URL allowlist validation, join URL mutation, URL redaction | `ValidateMeetingURL`, `MutateJoinURL`, `RedactURL`, `RedactArgs` |
 | `internal/browser` | `chromedp` allocator and stealth flags, pre-join state machine, live caption observer, Meeting Recap export, AI Summary extraction, audio capture | `Runner`, `Meeting`, `RecapMeeting`, `Options`, `NewLiveMeeting` |
 | `internal/capture` | Capture session that connects a meeting to a transcript writer; output path resolution, filename templates, owner-only file creation | `Session`, `SessionConfig`, `Output`, `FormatTranscriptFilename` |
@@ -222,6 +224,24 @@ a non-blocking sweep for due `--append-ai-summary` entries in `queue_file` /
 The protocol details are in the
 [self-update design doc](design-docs/2026-11-11-self-update-and-interprocess-locking.md).
 
+### Configuration template generation
+
+`teams-cli generate-config [output-dir]` (aliases `init-config`, `gen-config`)
+never loads a configuration file and ignores the root `--config` flag:
+
+1. `internal/cli` folds the optional positional argument into a directory and
+   filename. An explicit `--output-dir` wins; a positional `.yaml` or `.yml`
+   path that is not an existing directory names the file itself.
+2. `config.ResolveTemplatePath` expands the directory like other configuration
+   paths and validates the filename, rejecting anything that is not a plain
+   name inside that directory with `ErrInvalidConfigName`.
+3. `config.WriteTemplate` writes `config.TemplateYAML()`, a fully commented file
+   that is valid as generated. Without `--force` it opens the target with
+   `O_EXCL` and returns `ErrConfigExists` for an existing file. With `--force`
+   it replaces the file atomically through a sibling temporary file.
+4. The resolved path is printed to stdout. `config.example.yaml` is kept
+   identical to `TemplateYAML()` by a test.
+
 ## Security and isolation invariants
 
 * **Meeting URL allowlist.** `teams.ValidateMeetingURL` runs before any browser
@@ -246,6 +266,10 @@ The protocol details are in the
   permissions; the code does not tighten them. On POSIX platforms,
   `internal/capture/output_unix_test.go` verifies these modes under
   `syscall.Umask(0)`, including preservation of a pre-existing directory's mode.
+  `config.WriteTemplate` (`generate-config`) also creates missing parent
+  directories with `0o700` and generated configuration files with `0o600`,
+  using `O_EXCL` unless `--force` is set, and rejects filenames that could
+  escape the target directory with `ErrInvalidConfigName`.
 * **Recap identity isolation.** Recap export is bound to the requested recap's
   tab, frame, and recording identity. Audio whose identity cannot be verified
   is rejected rather than captured.

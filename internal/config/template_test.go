@@ -311,3 +311,11 @@ func TestWriteTemplate(t *testing.T) {
 		require.ErrorIs(t, WriteTemplate("   ", true), ErrInvalidConfigName)
 	})
 }
+
+func TestExampleConfigMatchesTemplateYAML(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(findRepoRoot(t), "config.example.yaml"))
+	require.NoError(t, err)
+	normalize := func(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+	assert.Equal(t, normalize(TemplateYAML()), normalize(string(data)),
+		"config.example.yaml must equal TemplateYAML(); regenerate with: teams-cli generate-config -d . -n config.example.yaml --force")
+}

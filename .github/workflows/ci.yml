@@ -230,8 +230,8 @@ jobs:
             Write-Error "TestChromeMeetingEndToEnd failed (exit code $exitCode)"
             exit 1
           }
-          if ($output -match '--- SKIP:') {
-            Write-Error "TestChromeMeetingEndToEnd was skipped on windows-latest; a Chromium-based browser must be resolvable"
+          if ($output -match '--- SKIP:' -or $output -notmatch '--- PASS: TestChromeMeetingEndToEnd') {
+            Write-Error "TestChromeMeetingEndToEnd did not run and pass on windows-latest (skipped or no tests to run); a Chromium-based browser must be resolvable"
             exit 1
           }
       - name: Test

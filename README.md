@@ -391,7 +391,8 @@ Release build from `softwaresalt/go-teams`:
   `amd64` and `arm64`, together with `SHA256SUMS`. The release jobs
   cross-compile on `ubuntu-latest` after the Linux and Windows quality gates
   pass, and publication fails if `SHA256SUMS` lacks any of the six platform
-  entries
+  entries. Platforms outside those six published targets
+  (`{linux, darwin, windows} x {amd64, arm64}`) return `ErrAssetNotFound`
 * `--check` only reports availability and never modifies the executable
 * `--version <tag>` installs that release instead of the latest
 * `--force` reinstalls the target version even when it is already current, and

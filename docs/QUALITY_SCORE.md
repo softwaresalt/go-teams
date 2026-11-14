@@ -116,6 +116,7 @@ These gaps are known and unresolved. Tiers 1 to 4 cannot close them.
 | No automated run against a real Microsoft Teams tenant: login, MFA, tenant policy, lobby, and caption DOM selectors are verified only against synthetic pages | A Teams UI change can break capture without failing any test | `010-S` |
 | Real Meeting Recap completeness and AI Summary availability are unverified | Recap export can miss entries or the summary in production | `010-S` |
 | Real meeting audio fidelity (levels, sync, long recordings) is unverified; only the encoder is pinned by golden output | MP3 output may differ from the meeting audio in ways tests cannot see | `010-S` |
+| The `darwin/{amd64,arm64}`, `linux/arm64`, and `windows/arm64` release binaries are cross-compiled on `ubuntu-latest` at release time and never execute a test suite; only `linux/amd64` (`ubuntu-latest`) and `windows/amd64` (`windows-latest`) run native tests in CI | Platform-specific regressions on the cross-compiled targets surface only after release | `023-S` |
 
 ## Improvement roadmap
 

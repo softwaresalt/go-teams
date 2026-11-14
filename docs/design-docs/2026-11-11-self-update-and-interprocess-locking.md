@@ -262,3 +262,7 @@ for operators.
 * Behavior on the Windows rename window is verified on `windows-latest` in CI
   (the `test-windows` job, `023-S`) as well as on Windows development hosts (see
   [QUALITY_SCORE.md](../QUALITY_SCORE.md#live-verification-gaps)).
+* The `darwin/{amd64,arm64}`, `linux/arm64`, and `windows/arm64` release
+  binaries are cross-compiled on `ubuntu-latest` at release time. Only
+  `linux/amd64` (`ubuntu-latest`) and `windows/amd64` (`windows-latest`) execute
+  native test suites in CI.

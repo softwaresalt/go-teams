@@ -62,8 +62,8 @@ jobs:
             Write-Error "TestChromeMeetingEndToEnd failed (exit code $exitCode)"
             exit 1
           }
-          if ($output -match '--- SKIP:') {
-            Write-Error "TestChromeMeetingEndToEnd was skipped on windows-latest; a Chromium-based browser must be resolvable"
+          if ($output -match '--- SKIP:' -or $output -notmatch '--- PASS: TestChromeMeetingEndToEnd') {
+            Write-Error "TestChromeMeetingEndToEnd did not run and pass on windows-latest (skipped or no tests to run); a Chromium-based browser must be resolvable"
             exit 1
           }
       - name: Test
@@ -263,7 +263,8 @@ jobs:
             teams-cli-darwin-arm64 \
             teams-cli-windows-amd64.exe \
             teams-cli-windows-arm64.exe; do
-            if ! grep -Eq "^[0-9a-f]{64}[[:space:]]+\*?(\./)?${expected}$" SHA256SUMS; then
+            pattern="${expected//./\\.}"
+            if ! grep -Eq "^[0-9a-f]{64}[[:space:]]+\*?(\./)?${pattern}$" SHA256SUMS; then
               echo "ERROR: SHA256SUMS is missing an entry for ${expected}" >&2
               exit 1
             fi

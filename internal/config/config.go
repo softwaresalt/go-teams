@@ -106,6 +106,7 @@ type Config struct {
 	AISummaryDelay   string            `yaml:"ai_summary_delay,omitempty"`
 	LobbyTimeout     string            `yaml:"lobby_timeout,omitempty"`
 	QueueFile        string            `yaml:"queue_file,omitempty"`
+	MeetingTitle     string            `yaml:"-"`
 	AppendAISummary  string            `yaml:"-"`
 	NotBefore        string            `yaml:"-"`
 	Meetings         []MeetingSchedule `yaml:"meetings"`

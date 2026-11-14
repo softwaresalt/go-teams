@@ -42,14 +42,20 @@ func defaultDeps() *deps {
 		},
 		newMeeting: defaultNewMeeting,
 		newSession: func(c config.Config, meetingURL string) meetingSession {
+			dur, _ := parseOptionalDuration(c.Duration)
+			idle, _ := parseOptionalDuration(c.IdleTimeout)
 			return capture.NewSession(capture.SessionConfig{
 				OutputDir:        c.OutputDir,
 				OutputFile:       c.OutputFile,
 				FilenameTemplate: c.FilenameTemplate,
 				MeetingURL:       meetingURL,
+				MeetingTitle:     c.MeetingTitle,
 				Category:         c.Category,
 				BotName:          c.BotName,
 				CaptionsOnly:     !c.CaptureAudio,
+				Mode:             c.CaptureMode,
+				Duration:         dur,
+				IdleTimeout:      idle,
 			})
 		},
 	}
@@ -107,12 +113,15 @@ func applyBrowserFlags(cmd *cobra.Command, cfg *config.Config, f browserFlags) {
 // returns a chromedp-backed Meeting bound to it. The cleanup func cancels the
 // browser and allocator contexts, terminating the spawned Chromium process.
 func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
+	lobbyTimeout, _ := parseOptionalDuration(c.LobbyTimeout)
 	return browser.NewLiveMeeting(ctx,
 		browserOptions(c),
 		browser.MeetingOptions{
 			MeetingURL:     meetingURL,
 			BotName:        c.BotName,
 			DefaultAccount: c.DefaultAccount,
+			LobbyTimeout:   lobbyTimeout,
+			ForceRecap:     strings.EqualFold(strings.TrimSpace(c.CaptureMode), config.CaptureModePastRecap),
 		})
 }
 

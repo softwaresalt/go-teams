@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 // audioBinding is the CDP runtime binding the injected capture script calls to
@@ -13,6 +14,36 @@ const audioBinding = "sendAudioToGo"
 // audioQueueSize bounds the buffer between chromedp's event goroutine and the
 // audio worker.
 const audioQueueSize = 256
+
+// DefaultVoiceRMSThreshold is the default root-mean-square int16 PCM amplitude
+// above which an audio chunk is treated as containing active voice speech
+// (~-40.8 dBFS), distinguishing speech from WebRTC silence and comfort noise.
+const DefaultVoiceRMSThreshold = 300.0
+
+// PCMRMS returns the root-mean-square amplitude of mono int16 PCM samples.
+func PCMRMS(samples []int16) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	var sumSquares float64
+	for _, s := range samples {
+		v := float64(s)
+		sumSquares += v * v
+	}
+	return math.Sqrt(sumSquares / float64(len(samples)))
+}
+
+// HasVoiceActivity reports whether samples contain voice energy at or above
+// threshold (defaulting to DefaultVoiceRMSThreshold when threshold <= 0).
+func HasVoiceActivity(samples []int16, threshold float64) bool {
+	if len(samples) == 0 {
+		return false
+	}
+	if threshold <= 0 {
+		threshold = DefaultVoiceRMSThreshold
+	}
+	return PCMRMS(samples) >= threshold
+}
 
 // audioCaptureJS captures the meeting tab's audio via getDisplayMedia, discards
 // the video track, and forwards raw int16 PCM (mono, 44.1 kHz) as base64 chunks

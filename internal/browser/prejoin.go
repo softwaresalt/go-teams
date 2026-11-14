@@ -18,8 +18,61 @@ const (
 	displayNameInputSel = `input[data-tid="prejoin-display-name-input"]`
 	joinNowSel          = `[data-tid="prejoin-join-button"]`
 	meetingToolbarSel   = `#hangup-button, [data-tid="hangup-button"], [data-tid="hangup-main-btn"]`
+	callEndedScreenSel  = `[data-tid="call-ended-screen"], [data-tid="post-call-screen"], [data-tid="rejoin-call-button"], [data-tid="call-quality-rating"]`
 	lobbyText           = "Someone will let you in shortly"
 )
+
+type callEndedProbeResult struct {
+	ToolbarPresent  bool `json:"toolbarPresent"`
+	CallEndedScreen bool `json:"callEndedScreen"`
+	RecapView       bool `json:"recapView"`
+}
+
+// shouldNotifyCallEnded evaluates a callEndedProbeJS JSON payload and updates
+// missingToolbarPolls, returning true when an explicit call-ended screen is
+// visible without the active toolbar or when the toolbar has been absent for 3
+// consecutive polls outside a Meeting Recap view.
+func shouldNotifyCallEnded(raw string, missingToolbarPolls *int) bool {
+	var res callEndedProbeResult
+	if err := json.Unmarshal([]byte(raw), &res); err != nil || res.RecapView {
+		if missingToolbarPolls != nil {
+			*missingToolbarPolls = 0
+		}
+		return false
+	}
+	if res.ToolbarPresent {
+		if missingToolbarPolls != nil {
+			*missingToolbarPolls = 0
+		}
+		return false
+	}
+	if res.CallEndedScreen {
+		return true
+	}
+	if missingToolbarPolls != nil {
+		*missingToolbarPolls++
+		return *missingToolbarPolls >= 3
+	}
+	return false
+}
+
+// callEndedProbeJS returns a JavaScript expression that evaluates whether the
+// live call toolbar has disappeared or an explicit post-call / call-ended
+// surface is visible.
+func callEndedProbeJS() string {
+	return `JSON.stringify((() => {
+	const toolbar = document.querySelector('#hangup-button, [data-tid="hangup-button"], [data-tid="hangup-main-btn"]') !== null;
+	const endedSel = document.querySelector('[data-tid="call-ended-screen"], [data-tid="post-call-screen"], [data-tid="rejoin-call-button"], [data-tid="call-quality-rating"]') !== null;
+	const bodyText = (document.body && document.body.innerText) || '';
+	const endedBanner = !toolbar && (bodyText.includes('You left the meeting') || bodyText.includes('Call ended'));
+	const recap = document.querySelector('[data-tid="intelligent-recap-header"]') !== null;
+	return {
+		toolbarPresent: toolbar,
+		callEndedScreen: !toolbar && (endedSel || endedBanner),
+		recapView: recap
+	};
+})())`
+}
 
 // PreJoinState classifies the browser page state while waiting for user
 // authentication, launcher bypass, pre-join configuration, or direct call

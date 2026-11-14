@@ -3,6 +3,7 @@ package browser
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/softwaresalt/go-teams/internal/transcript"
 )
@@ -42,6 +43,7 @@ const captionObserverJS = `(() => {
   const timers = new WeakMap();
   const pendingText = new WeakMap();
   const lastSent = new WeakMap();
+  let lastInterimSentAt = 0;
   const findSpeaker = (el, root) => {
     let cur = el.closest('.fui-ChatMessageCompact') || el.parentElement;
     while (cur && cur !== root && cur !== document.body) {
@@ -68,6 +70,11 @@ const captionObserverJS = `(() => {
       return;
     }
     if (pendingText.get(el) === stateKey && timers.has(el)) { return; }
+    const now = Date.now();
+    if (now - lastInterimSentAt >= 1000) {
+      lastInterimSentAt = now;
+      window.sendCaptionToGo(JSON.stringify({ speaker: speaker, text: text, interim: true }));
+    }
     const prevTimer = timers.get(el);
     if (prevTimer) { clearTimeout(prevTimer); }
     pendingText.set(el, stateKey);
@@ -100,16 +107,22 @@ type captionPayload struct {
 	Speaker string `json:"speaker"`
 	Text    string `json:"text"`
 	Final   bool   `json:"final,omitempty"`
+	Interim bool   `json:"interim,omitempty"`
 }
 
-// handleCaptionPayload parses a raw binding payload, applies Go-side rolling
-// deduplication, and invokes sink for newly finalized utterances. It returns an
-// error only when the payload cannot be parsed; suppressed duplicates and
-// non-final fragments are not errors.
-func handleCaptionPayload(raw string, dedup *transcript.Deduplicator, sink CaptionSink) error {
+// handleCaptionPayloadWithActivity parses a raw binding payload, invokes
+// onActivity when non-empty caption text arrives, and passes non-interim
+// fragments through Go-side rolling deduplication to sink.
+func handleCaptionPayloadWithActivity(raw string, dedup *transcript.Deduplicator, sink CaptionSink, onActivity func()) error {
 	var p captionPayload
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		return fmt.Errorf("browser: parse caption payload: %w", err)
+	}
+	if strings.TrimSpace(p.Text) != "" && onActivity != nil {
+		onActivity()
+	}
+	if p.Interim {
+		return nil
 	}
 	var (
 		text string
@@ -124,4 +137,12 @@ func handleCaptionPayload(raw string, dedup *transcript.Deduplicator, sink Capti
 		sink(p.Speaker, text)
 	}
 	return nil
+}
+
+// handleCaptionPayload parses a raw binding payload, applies Go-side rolling
+// deduplication, and invokes sink for newly finalized utterances. It returns an
+// error only when the payload cannot be parsed; suppressed duplicates and
+// non-final fragments are not errors.
+func handleCaptionPayload(raw string, dedup *transcript.Deduplicator, sink CaptionSink) error {
+	return handleCaptionPayloadWithActivity(raw, dedup, sink, nil)
 }

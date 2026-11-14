@@ -3,6 +3,9 @@ package browser
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/chromedp/chromedp"
 
@@ -67,8 +70,26 @@ func (r *ChromeRunner) run(ctx context.Context, opts Options, target string) err
 	if err := chromedp.Run(browserCtx, chromedp.Navigate(target)); err != nil {
 		return navigateError(target, err)
 	}
-	<-browserCtx.Done()
-	return nil
+	account := strings.TrimSpace(opts.DefaultAccount)
+	if account == "" {
+		<-browserCtx.Done()
+		return nil
+	}
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	js := selectEntraAccountJS(account)
+	redacted := redactAccountIdentifier(account)
+	for {
+		select {
+		case <-browserCtx.Done():
+			return nil
+		case <-ticker.C:
+			var clicked bool
+			if err := chromedp.Run(browserCtx, chromedp.Evaluate(js, &clicked)); err == nil && clicked {
+				slog.Info("browser: selected default Entra account", "account", redacted)
+			}
+		}
+	}
 }
 
 // navigateError wraps a navigation failure, replacing target with its

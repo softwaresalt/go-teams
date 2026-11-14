@@ -1,6 +1,11 @@
 package browser
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
 
 // Teams launcher, pre-join, and in-meeting DOM selectors.
 //
@@ -124,4 +129,119 @@ func propStringJS(selector, prop string) string {
 // document body text contains substr.
 func containsTextJS(substr string) string {
 	return fmt.Sprintf(`document.body !== null && document.body.innerText.includes(%q)`, substr)
+}
+
+// redactAccountIdentifier masks a configured Microsoft Entra UPN/email or
+// display name before logging so raw account identifiers never appear in logs.
+func redactAccountIdentifier(account string) string {
+	trimmed := strings.TrimSpace(account)
+	if trimmed == "" {
+		return ""
+	}
+	if at := strings.IndexByte(trimmed, '@'); at > 0 {
+		local := trimmed[:at]
+		domain := trimmed[at:]
+		r, _ := utf8.DecodeRuneInString(local)
+		return string(r) + "***" + domain
+	}
+	r, _ := utf8.DecodeRuneInString(trimmed)
+	return string(r) + "***"
+}
+
+// selectEntraAccountJS returns a JavaScript expression that detects a Microsoft
+// Entra / Microsoft account picker surface and clicks the single tile matching
+// account case-insensitively. It fails closed when zero or multiple tiles match,
+// skips #otherTile ("Use another account"), avoids password-entry screens, and
+// enforces a 3000ms per-tile click cooldown.
+func selectEntraAccountJS(account string) string {
+	target := strings.ToLower(strings.TrimSpace(account))
+	if target == "" {
+		return "false"
+	}
+	encoded, err := json.Marshal(target)
+	if err != nil {
+		return "false"
+	}
+	return fmt.Sprintf(`(() => {
+	try {
+		const target = %s;
+		if (!target || target === "othertile" || target === "use another account") {
+			return false;
+		}
+		const selector = '#tilesHolder [data-test-id], div.table[role="button"][data-test-id], div.table[role="button"], div[data-bind*="acctTile"], [data-testid="accountTile"], div[role="listitem"] button[data-test-id]';
+		const rawNodes = Array.from(document.querySelectorAll(selector));
+		if (rawNodes.length === 0) {
+			return false;
+		}
+		const pwdInputs = Array.from(document.querySelectorAll('input[type="password"]:not([aria-hidden="true"])'));
+		for (const pwd of pwdInputs) {
+			const rect = pwd.getBoundingClientRect();
+			if (rect && rect.width > 0 && rect.height > 0 && document.querySelector('#tilesHolder') === null) {
+				return false;
+			}
+		}
+		const seen = new Set();
+		const tiles = [];
+		for (const node of rawNodes) {
+			const tile = node.closest('div.table[role="button"], div[data-bind*="acctTile"], [data-testid="accountTile"], button[data-test-id]') || node;
+			if (!seen.has(tile)) {
+				seen.add(tile);
+				tiles.push(tile);
+			}
+		}
+		const matches = [];
+		for (const el of tiles) {
+			const rawId = (el.getAttribute('id') || '').trim();
+			const rawTestId = (el.getAttribute('data-test-id') || '').trim();
+			const rawDataBind = (el.getAttribute('data-bind') || '').trim();
+			const id = rawId.toLowerCase();
+			const testId = rawTestId.toLowerCase();
+			const dataBind = rawDataBind.toLowerCase();
+			if (rawId === 'otherTile' || rawTestId === 'otherTile' || rawDataBind.includes('otherTile') || id === 'othertile' || testId === 'othertile' || dataBind.includes('othertile')) {
+				continue;
+			}
+			let matched = false;
+			if (testId !== '' && testId === target) {
+				matched = true;
+			}
+			if (!matched) {
+				const subNodes = [el, ...Array.from(el.querySelectorAll('[data-test-id], .table-cell, small, div, span'))];
+				for (const sub of subNodes) {
+					const subTestId = (sub.getAttribute && sub.getAttribute('data-test-id') || '').trim().toLowerCase();
+					if (subTestId === 'othertile') {
+						matched = false;
+						break;
+					}
+					if (subTestId !== '' && subTestId === target) {
+						matched = true;
+						break;
+					}
+					const rawText = (sub.innerText || sub.textContent || '');
+					const lines = rawText.split(/\r?\n/).map(s => s.trim().toLowerCase()).filter(Boolean);
+					if (lines.includes(target)) {
+						matched = true;
+						break;
+					}
+				}
+			}
+			if (matched) {
+				matches.push(el);
+			}
+		}
+		if (matches.length !== 1) {
+			return false;
+		}
+		const chosen = matches[0];
+		const now = Date.now();
+		const prev = Number(chosen.dataset.teamsCliAutoSelected || '0');
+		if (prev > 0 && now - prev < 3000) {
+			return false;
+		}
+		chosen.dataset.teamsCliAutoSelected = String(now);
+		chosen.click();
+		return true;
+	} catch (_) {
+		return false;
+	}
+})()`, string(encoded))
 }

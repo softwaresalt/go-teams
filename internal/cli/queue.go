@@ -9,10 +9,144 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/teams"
 )
+
+var (
+	errQueueEntryNotYetDue = errors.New("cli: queue entry not yet due")
+	queueFileMu            sync.Mutex
+)
+
+func extractQueueFlagValue(args []string, flagName string) string {
+	prefix := flagName + "="
+	for i := 0; i < len(args); i++ {
+		if args[i] == flagName && i+1 < len(args) {
+			return strings.TrimSpace(args[i+1])
+		}
+		if strings.HasPrefix(args[i], prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(args[i], prefix))
+		}
+	}
+	return ""
+}
+
+func parseQueueContent(data []byte) (lines []string, lineEnding string, hasTrailingNewline bool) {
+	content := string(data)
+	lineEnding = "\n"
+	if strings.Contains(content, "\r\n") {
+		lineEnding = "\r\n"
+	}
+	hasTrailingNewline = strings.HasSuffix(content, "\n")
+
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	if hasTrailingNewline {
+		normalized = strings.TrimSuffix(normalized, "\n")
+	}
+	if normalized != "" {
+		lines = strings.Split(normalized, "\n")
+	}
+	return lines, lineEnding, hasTrailingNewline
+}
+
+func appendDeferredAISummaryQueueLine(queuePath, meetingURL, transcriptPath string, notBefore time.Time) error {
+	if strings.TrimSpace(queuePath) == "" {
+		return nil
+	}
+	queueFileMu.Lock()
+	defer queueFileMu.Unlock()
+
+	var (
+		lines              []string
+		lineEnding         = "\n"
+		hasTrailingNewline = true
+	)
+	if data, err := os.ReadFile(queuePath); err == nil {
+		lines, lineEnding, hasTrailingNewline = parseQueueContent(data)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cli: read queue file %s: %w", queuePath, err)
+	}
+
+	cleanTarget := filepath.Clean(transcriptPath)
+	for _, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "::") {
+			continue
+		}
+		if args, err := splitQueueArgs(trimmed); err == nil {
+			if got := extractQueueFlagValue(args, "--append-ai-summary"); got != "" && filepath.Clean(got) == cleanTarget {
+				return nil
+			}
+		}
+	}
+
+	entry := fmt.Sprintf("%q --append-ai-summary %q --not-before %s",
+		meetingURL, transcriptPath, notBefore.UTC().Format(time.RFC3339))
+	lines = append(lines, entry)
+	return writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline)
+}
+
+func markDeferredAISummaryQueueLineDone(queuePath, transcriptPath string) error {
+	if strings.TrimSpace(queuePath) == "" || strings.TrimSpace(transcriptPath) == "" {
+		return nil
+	}
+	queueFileMu.Lock()
+	defer queueFileMu.Unlock()
+
+	data, err := os.ReadFile(queuePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("cli: read queue file %s: %w", queuePath, err)
+	}
+	lines, lineEnding, hasTrailingNewline := parseQueueContent(data)
+	cleanTarget := filepath.Clean(transcriptPath)
+	changed := false
+	for i, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "::") {
+			continue
+		}
+		args, splitErr := splitQueueArgs(trimmed)
+		if splitErr != nil {
+			continue
+		}
+		if got := extractQueueFlagValue(args, "--append-ai-summary"); got != "" && filepath.Clean(got) == cleanTarget {
+			lines[i] = "::" + rawLine
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline)
+}
+
+func markQueueLineCompleted(queuePath string, lineIdx int, originalLine string) error {
+	queueFileMu.Lock()
+	defer queueFileMu.Unlock()
+
+	data, err := os.ReadFile(queuePath)
+	if err != nil {
+		return err
+	}
+	lines, lineEnding, hasTrailingNewline := parseQueueContent(data)
+	if lineIdx >= 0 && lineIdx < len(lines) && lines[lineIdx] == originalLine {
+		lines[lineIdx] = "::" + originalLine
+	} else {
+		for i, l := range lines {
+			if l == originalLine {
+				lines[i] = "::" + originalLine
+				break
+			}
+		}
+	}
+	return writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline)
+}
 
 // runQueueFile reads a batch queue file line by line, executes each active
 // capture command line, and comments out each completed line in-place by
@@ -25,21 +159,7 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 		return fmt.Errorf("cli: read queue file %s: %w", queuePath, err)
 	}
 
-	content := string(data)
-	lineEnding := "\n"
-	if strings.Contains(content, "\r\n") {
-		lineEnding = "\r\n"
-	}
-	hasTrailingNewline := strings.HasSuffix(content, "\n")
-
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	if hasTrailingNewline {
-		normalized = strings.TrimSuffix(normalized, "\n")
-	}
-	var lines []string
-	if normalized != "" {
-		lines = strings.Split(normalized, "\n")
-	}
+	lines, _, _ := parseQueueContent(data)
 
 	var errs []error
 	for i, rawLine := range lines {
@@ -70,12 +190,27 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 			errs = append(errs, fmt.Errorf("cli: queue line %d: nested --queue flag is not allowed", i+1))
 			continue
 		}
+		if notBeforeRaw := extractQueueFlagValue(lineArgs, "--not-before"); notBeforeRaw != "" {
+			nb, parseErr := time.Parse(time.RFC3339, notBeforeRaw)
+			if parseErr != nil {
+				errs = append(errs, fmt.Errorf("cli: queue line %d: invalid --not-before timestamp %q: %w", i+1, notBeforeRaw, parseErr))
+				continue
+			}
+			if time.Now().Before(nb) {
+				slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)
+				continue
+			}
+		}
 
 		effectiveArgs := append([]string(nil), inheritedArgs...)
 		effectiveArgs = append(effectiveArgs, lineArgs...)
 
 		slog.Info("cli: processing queue entry", "line", i+1, "args", sanitizeQueueArgsForLog(lineArgs))
 		if err := executeQueueLine(ctx, d, effectiveArgs); err != nil {
+			if errors.Is(err, errQueueEntryNotYetDue) {
+				slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)
+				continue
+			}
 			slog.Error("cli: queue entry failed", "line", i+1, "err", err)
 			errs = append(errs, fmt.Errorf("cli: queue line %d: %w", i+1, err))
 			continue
@@ -85,8 +220,7 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 			break
 		}
 
-		lines[i] = "::" + rawLine
-		if writeErr := writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline); writeErr != nil {
+		if writeErr := markQueueLineCompleted(queuePath, i, rawLine); writeErr != nil {
 			return fmt.Errorf("cli: update queue file %s after line %d: %w", queuePath, i+1, writeErr)
 		}
 		slog.Info("cli: completed queue entry", "line", i+1)

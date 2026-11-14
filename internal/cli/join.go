@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -31,6 +32,14 @@ type captureFlags struct {
 	headless         bool
 	headed           bool
 	audio            bool
+	mode             string
+	duration         time.Duration
+	idleTimeout      time.Duration
+	aiSummaryDelay   time.Duration
+	noAISummary      bool
+	lobbyTimeout     time.Duration
+	appendAISummary  string
+	notBefore        string
 }
 
 func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
@@ -53,6 +62,14 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	// --recap-audio is an alias that shares state with --audio so the argument
 	// that appears last wins, including for per-entry queue overrides.
 	cmd.Flags().BoolVar(&f.audio, "recap-audio", false, "also capture Meeting Recap audio to an MP3 file")
+	cmd.Flags().StringVar(&f.mode, "mode", "", "meeting capture protocol: auto, ephemeral-live, live-with-summary, or past-recap")
+	cmd.Flags().DurationVar(&f.duration, "duration", 0, "nominal live capture duration (e.g. 30m, 1h) before post-duration idle monitoring")
+	cmd.Flags().DurationVar(&f.idleTimeout, "idle-timeout", 0, "inactivity grace period after duration or call-end before stopping capture (default 3m)")
+	cmd.Flags().DurationVar(&f.aiSummaryDelay, "ai-summary-delay", 0, "delay after a live call ends before fetching and appending the AI Summary (default 30m)")
+	cmd.Flags().BoolVar(&f.noAISummary, "no-ai-summary", false, "disable delayed post-call AI Summary capture")
+	cmd.Flags().DurationVar(&f.lobbyTimeout, "lobby-timeout", 0, "maximum time to wait in pre-join or lobby before aborting")
+	cmd.Flags().StringVar(&f.appendAISummary, "append-ai-summary", "", "existing Markdown transcript file to append the Meeting Recap AI Summary into")
+	cmd.Flags().StringVar(&f.notBefore, "not-before", "", "RFC3339 timestamp before which a queued --append-ai-summary entry is skipped")
 }
 
 func applyOutputTarget(cfg *config.Config, target string) {
@@ -115,8 +132,39 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if f.headed {
 		cfg.Headless = false
 	}
-	if cmd.Flags().Changed("audio") || cmd.Flags().Changed("recap-audio") {
+	audioFlagChanged := cmd.Flags().Changed("audio") || cmd.Flags().Changed("recap-audio")
+	if audioFlagChanged {
 		cfg.CaptureAudio = f.audio
+	}
+	if cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "" {
+		cfg.CaptureMode = strings.ToLower(strings.TrimSpace(f.mode))
+	}
+	if cmd.Flags().Changed("duration") || f.duration > 0 {
+		cfg.Duration = f.duration.String()
+	}
+	if cmd.Flags().Changed("idle-timeout") || f.idleTimeout > 0 {
+		cfg.IdleTimeout = f.idleTimeout.String()
+	}
+	if cmd.Flags().Changed("ai-summary-delay") {
+		cfg.AISummaryDelay = f.aiSummaryDelay.String()
+	}
+	if f.noAISummary {
+		cfg.AISummaryDelay = "0s"
+	}
+	if cmd.Flags().Changed("lobby-timeout") || f.lobbyTimeout > 0 {
+		cfg.LobbyTimeout = f.lobbyTimeout.String()
+	}
+	if cmd.Flags().Changed("append-ai-summary") || strings.TrimSpace(f.appendAISummary) != "" {
+		cfg.AppendAISummary = strings.TrimSpace(f.appendAISummary)
+	}
+	if cmd.Flags().Changed("not-before") || strings.TrimSpace(f.notBefore) != "" {
+		cfg.NotBefore = strings.TrimSpace(f.notBefore)
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.CaptureMode), config.CaptureModeEphemeralLive) {
+		cfg.AISummaryDelay = "0s"
+		if !audioFlagChanged && (cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "") {
+			cfg.CaptureAudio = true
+		}
 	}
 }
 
@@ -184,6 +232,24 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 		} else {
 			out = append(out, "--"+name+"=false")
 		}
+	}
+	if cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "" {
+		out = append(out, "--mode", strings.ToLower(strings.TrimSpace(f.mode)))
+	}
+	if cmd.Flags().Changed("duration") || f.duration > 0 {
+		out = append(out, "--duration", f.duration.String())
+	}
+	if cmd.Flags().Changed("idle-timeout") || f.idleTimeout > 0 {
+		out = append(out, "--idle-timeout", f.idleTimeout.String())
+	}
+	if cmd.Flags().Changed("ai-summary-delay") {
+		out = append(out, "--ai-summary-delay", f.aiSummaryDelay.String())
+	}
+	if cmd.Flags().Changed("no-ai-summary") && f.noAISummary {
+		out = append(out, "--no-ai-summary")
+	}
+	if cmd.Flags().Changed("lobby-timeout") || f.lobbyTimeout > 0 {
+		out = append(out, "--lobby-timeout", f.lobbyTimeout.String())
 	}
 	return out
 }

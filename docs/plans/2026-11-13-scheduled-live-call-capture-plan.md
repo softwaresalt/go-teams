@@ -238,7 +238,7 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
 * **Verify:** `go test -race ./internal/browser/...` passes.
 * **Depends on:** none.
 
-### U4 (`022.004-T`) — Wire `LobbyTimeout` (`R9`), activity callbacks (`R11`, `R12`), and live call-end polling (`R3`) in `internal/browser`
+### U4 (`022.004-T`) — Wire `LobbyTimeout` (`R9`), `ForceRecap` (`R14`), activity callbacks (`R11`, `R12`), and live call-end polling (`R3`) in `internal/browser`
 
 * **Domain:** code (Go `internal/browser`). **Posture:** test-first. **Size:** `S` | **Complexity:** `medium`.
 * **What:**
@@ -247,6 +247,10 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
        `ErrLobbyTimeout = errors.New("browser: lobby admission timed out")`.
      * Extend `MeetingOptions` with:
        - `LobbyTimeout time.Duration`
+       - `ForceRecap bool` (`R13`, `R14`: forces `chromeMeeting.Join` to use
+         the Meeting Recap discovery/extraction path with
+         `ExtractMeetingIdentity` verification and never enter the live
+         pre-join click flow)
        - `VoiceRMSThreshold float64`
        - `OnCaptionActivity func()`
        - `OnAudioActivity func()`
@@ -262,12 +266,23 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
        on `*chromeMeeting` (synchronized under a mutex `activityMu` and falling
        back to `m.opts.OnCaptionActivity`, `m.opts.OnAudioActivity`,
        `m.opts.OnCallEnded`).
-     * In `Join(ctx)`: when `m.opts.LobbyTimeout > 0`, wrap `ctx` for the
-       duration of `Join` (`joinHeaded` / `awaitPreJoinOrAdmission` /
-       `awaitAdmission`) with `joinCtx, cancel := context.WithTimeout(ctx, m.opts.LobbyTimeout)`
-       (`defer cancel()`), and if `joinCtx` expires while `ctx.Err() == nil`,
-       return `fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)`
-       (`R9`).
+     * In `Join(ctx)`:
+       - Keep the session-lifetime `ctx` as the parent of
+         `chromedp.NewRemoteAllocator` / `chromedp.NewContext` when constructing
+         `m.attachedCtx` in `joinHeaded` so `m.attachedCtx` remains alive and
+         uncancelled after `Join(ctx)` returns for subsequent `EnableCaptions`
+         and `CaptureAudio` calls!
+       - Enforce `m.opts.LobbyTimeout` (when `> 0`) via an explicit admission
+         deadline (`deadline := time.Now().Add(m.opts.LobbyTimeout)`) and
+         bounded per-poll contexts inside the pre-join/admission wait loops
+         (`joinHeaded`, `awaitPreJoinOrAdmission`, `awaitAdmission`), returning
+         `fmt.Errorf("%w after %s", ErrLobbyTimeout, m.opts.LobbyTimeout)` if
+         the deadline expires while `ctx.Err() == nil` (`R9`).
+       - When `m.opts.ForceRecap` is `true`, treat the session as Recap-only:
+         verify recording identity via `ExtractMeetingIdentity` /
+         `retainRecapAudioIdentity`, extract the Recap transcript and
+         `AISummary()` without ever clicking live pre-join `Join now`, and
+         return an error if no Recap view or AI Summary is available (`R14`).
      * In `EnableCaptions`:
        - Pass `m.notifyCaptionActivity` to `handleCaptionPayloadWithActivity`.
        - Launch a background goroutine tied to `workerCtx` that polls the live
@@ -286,7 +301,7 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
 * **Verify:** `go test -race ./internal/browser/...` passes.
 * **Depends on:** U3 (`022.003-T`).
 
-### U5 (`022.005-T`) — Add unit tests for PCM RMS voice activity, interim caption heartbeats, call-end probes, and lobby timeout in `internal/browser`
+### U5 (`022.005-T`) — Add unit tests for PCM RMS voice activity, interim caption heartbeats, call-end probes, `ForceRecap`, and lobby timeout in `internal/browser`
 
 * **Domain:** tests (Go `internal/browser`). **Posture:** test-first. **Size:** `S` | **Complexity:** `low`.
 * **What:**
@@ -301,8 +316,10 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
        payloads trigger both `onActivity()` and `sink`.
   3. In `internal/browser/prejoin_test.go`:
      * Add unit tests for `callEndedProbeJS()`, `SetActivityCallbacks` on
-       `chromeMeeting`, and `Join` returning `ErrLobbyTimeout` when
-       `LobbyTimeout` expires before admission.
+       `chromeMeeting`, `MeetingOptions.ForceRecap` bypassing live pre-join,
+       and `Join` returning `ErrLobbyTimeout` when `LobbyTimeout` expires before
+       admission while keeping `m.attachedCtx` derived from the session-lifetime
+       `ctx` uncancelled after successful `Join` return.
 * **Files (3 files):** `internal/browser/audio_test.go`,
   `internal/browser/captions_test.go`, `internal/browser/prejoin_test.go`.
 * **Verify:** `go test -race ./internal/browser/...` passes.
@@ -410,7 +427,7 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
 * **Verify:** `go test -race -cover ./internal/capture/...` passes.
 * **Depends on:** U6 (`022.006-T`).
 
-### U8 (`022.008-T`) — Wire protocol modes, lifecycle flags, and Idea 2C hybrid delayed post-call AI Summary capture in `internal/cli` (`root.go`, `join.go`, `capture.go`) (`R1`, `R9`, `R12`–`R15`)
+### U8 (`022.008-T`) — Bind capture protocol and lifecycle CLI flags (`join.go`) and implement serialized deferred queue helpers and `--not-before` handling (`queue.go`) (`R1`, `R9`, `R12`–`R15`)
 
 * **Domain:** code (Go `internal/cli`). **Posture:** test-first. **Size:** `M` | **Complexity:** `medium`.
 * **What:**
@@ -433,23 +450,48 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
        `--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`, and
        `--lobby-timeout` when changed, while never forwarding `--url`,
        `--queue`, `--append-ai-summary`, or `--not-before`.
-  2. In `internal/cli/root.go`:
-     * Add optional fields on `config.Config` or `cli` runtime helpers and pass
-       `LobbyTimeout` in `defaultNewMeeting` and `Mode`, `Duration`,
-       `IdleTimeout`, and `MeetingTitle` in `defaultDeps().newSession`.
+  2. In `internal/cli/queue.go` (`R14`, `R15`):
+     * Define sentinel error `errQueueEntryNotYetDue = errors.New("cli: queue entry not yet due")`.
+     * When `executeQueueLine` (or `runQueueFile` inspecting `--not-before`)
+       sees a `--not-before <RFC3339>` timestamp that is still in the future
+       (`now.Before(notBefore)`), return `errQueueEntryNotYetDue`.
+     * In `runQueueFile`: when `errors.Is(err, errQueueEntryNotYetDue)`, log
+       `slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)`
+       and leave the line uncommented (do NOT prepend `::` and do NOT append to
+       `errs`) so a later `--queue` or `schedule` run executes it once due!
+     * Export package helpers `appendDeferredAISummaryQueueLine(queuePath, meetingURL, transcriptPath string, notBefore time.Time) error`
+       and `markDeferredAISummaryQueueLineDone(queuePath, transcriptPath string) error`
+       protected by a package-level `queueFileMu sync.Mutex` that always
+       re-reads the current on-disk queue file before mutating and writing via
+       `writeQueueLines`, and also use that same re-read-under-mutex helper when
+       `runQueueFile` marks a completed line as `::` so concurrent or nested
+       appends are never overwritten!
+* **Files (2 files):** `internal/cli/join.go`, `internal/cli/queue.go`.
+* **Verify:** `go test -race ./internal/cli/...` passes.
+* **Depends on:** U1 (`022.001-T`), U4 (`022.004-T`), U6 (`022.006-T`).
+
+### U9 (`022.009-T`) — Wire `root` / `capture` Idea 2C delayed AI Summary execution and enrich `teams-cli schedule` with per-meeting overrides, flags, and profile-gate release (`R2`, `R4`–`R8`, `R14`, `R15`)
+
+* **Domain:** code (Go `internal/cli`). **Posture:** test-first. **Size:** `M` | **Complexity:** `medium`.
+* **What:**
+  1. In `internal/cli/root.go`:
+     * Pass `LobbyTimeout` and `ForceRecap: c.CaptureMode == config.CaptureModePastRecap`
+       in `defaultNewMeeting`, and pass `Mode`, `Duration`, `IdleTimeout`, and
+       `MeetingTitle` in `defaultDeps().newSession`.
      * When `--append-ai-summary` is passed on `root`, `join`, or `captions`,
        route execution to `runAppendAISummary(cmd.Context(), d, cfg, mutated, flags.appendAISummary)`
-       (checking `--not-before` first when set).
-  3. In `internal/cli/capture.go` (`R13`, `R14`):
+       (checking `--not-before` first when set and returning `errQueueEntryNotYetDue`
+       when still in the future).
+  2. In `internal/cli/capture.go` (`R13`, `R14`):
      * Implement `resolveCaptureDurations(cfg config.Config)` and
        `effectiveAISummaryDelay(cfg config.Config, isRecap bool) time.Duration`
        (returning `0` for `past-recap`, `ephemeral-live`, or when
        `cfg.AISummaryDelay == "0"` / `"0s"`, and defaulting to `30 * time.Minute`
        for `live-with-summary` when `cfg.AISummaryDelay == ""`).
      * Implement `runAppendAISummary(ctx context.Context, d *deps, cfg config.Config, meetingURL, transcriptPath string) error`:
-       sets `cfg.CaptureMode = config.CaptureModePastRecap` (and passes
-       `MeetingOptions{MeetingURL: meetingURL, BotName: cfg.BotName, ForceRecap: true}`
-       so `chromeMeeting.Join` uses the Recap discovery/extraction path and
+       sets `cfg.CaptureMode = config.CaptureModePastRecap` (so
+       `defaultNewMeeting` sets `MeetingOptions.ForceRecap = true` and
+       `chromeMeeting.Join` uses the Recap discovery/extraction path and
        verifies recording identity via `ExtractMeetingIdentity` rather than
        entering the live pre-join FSM), allocates a meeting via
        `d.newMeeting(ctx, cfg, meetingURL)` (`defer cleanup()`), calls
@@ -470,7 +512,7 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
             if that file exists in the working directory) and write a crash-safe
             pending line:
             `"<meetingURL>" --append-ai-summary "<transcriptPath>" --not-before <RFC3339>`
-            using serialized `appendDeferredAISummaryQueueLine`.
+            using `appendDeferredAISummaryQueueLine` from `022.008-T`.
           - When `scheduleAsyncSummary func(delay time.Duration, fn func())` is
             provided by `scheduleJob`, detach the `delay` timer into a
             daemon-managed goroutine (tracked by a daemon `sync.WaitGroup`) so
@@ -480,33 +522,8 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
             acquire the optional `acquireProfile func() (func(), bool)` hook,
             run `runAppendAISummary(ctx, d, cfg, meetingURL, transcriptPath)`,
             and on success mark the corresponding queue file line with `::` via
-            serialized `markDeferredAISummaryQueueLineDone`!
-* **Files (3 files):** `internal/cli/root.go`, `internal/cli/join.go`,
-  `internal/cli/capture.go`.
-* **Verify:** `go test -race ./internal/cli/...` passes.
-* **Depends on:** U1 (`022.001-T`), U4 (`022.004-T`), U6 (`022.006-T`).
-
-### U9 (`022.009-T`) — Wire batch queue `--append-ai-summary` / `--not-before` handling and enrich `teams-cli schedule` with per-meeting overrides, flags, and profile-gate release (`R2`, `R4`–`R8`, `R14`, `R15`)
-
-* **Domain:** code (Go `internal/cli`). **Posture:** test-first. **Size:** `M` | **Complexity:** `medium`.
-* **What:**
-  1. In `internal/cli/queue.go` (`R14`, `R15`):
-     * Define sentinel error `errQueueEntryNotYetDue = errors.New("cli: queue entry not yet due")`.
-     * When `executeQueueLine` (or `runAppendAISummary` when `--not-before` is
-       present) sees a `--not-before <RFC3339>` timestamp that is still in the
-       future (`now.Before(notBefore)`), return `errQueueEntryNotYetDue`.
-     * In `runQueueFile`: when `errors.Is(err, errQueueEntryNotYetDue)`, log
-       `slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)`
-       and leave the line uncommented (do NOT prepend `::` and do NOT append to
-       `errs`) so a later `--queue` or `schedule` run executes it once due!
-     * Export package helpers `appendDeferredAISummaryQueueLine(queuePath, meetingURL, transcriptPath string, notBefore time.Time) error`
-       and `markDeferredAISummaryQueueLineDone(queuePath, transcriptPath string) error`
-       protected by a package-level `queueFileMu sync.Mutex` that always
-       re-reads the current on-disk queue file before mutating and writing via
-       `writeQueueLines`, and also use that same re-read-under-mutex helper when
-       `runQueueFile` marks line `i` (matched by content/index) as `::` so
-       concurrent or nested appends are never overwritten!
-  2. In `internal/cli/schedule.go` (`R2`, `R4`–`R8`, `R14`):
+            `markDeferredAISummaryQueueLineDone` from `022.008-T`!
+  3. In `internal/cli/schedule.go` (`R2`, `R4`–`R8`, `R14`):
      * Export `defaultScheduleDuration = 1 * time.Hour` and
        `defaultScheduleIdleTimeout = 3 * time.Minute` (`R2`, `A1`).
      * Bind `--audio`, `--recap-audio`, `--headless`, `--headed`, `--duration`,
@@ -536,7 +553,8 @@ workflow for delayed post-call AI Summary capture (`R14`, `R15`).
          for any due `--append-ai-summary` queue entries whose `--not-before`
          timestamp has already passed so daemon restarts recover pending
          summaries (`R14`, `R15`).
-* **Files (2 files):** `internal/cli/queue.go`, `internal/cli/schedule.go`.
+* **Files (3 files):** `internal/cli/root.go`, `internal/cli/capture.go`,
+  `internal/cli/schedule.go`.
 * **Verify:** `go test -race ./internal/cli/...` passes.
 * **Depends on:** U1 (`022.001-T`), U2 (`022.002-T`), U8 (`022.008-T`).
 

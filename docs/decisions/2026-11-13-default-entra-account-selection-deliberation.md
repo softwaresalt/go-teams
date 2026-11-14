@@ -137,10 +137,14 @@ DOM.
        input is active.
      - Exclude the "Use another account" tile (`#otherTile`,
        `[data-bind*="otherTile"]`, `[data-test-id="otherTile"]`).
-     - Match a candidate tile case-insensitively when its `data-test-id`
-       attribute equals the configured account or when any tile text line /
-       nested cell equals or contains the configured UPN/email or display text,
-       then click the tile and return `true`.
+     - Match a candidate tile case-insensitively using **exact, unambiguous
+       matching** (never arbitrary substring containment, so
+       `alice@contoso.com` never matches `bob.alice@contoso.com` and `"John"`
+       never matches `"Johnathan"`): when its trimmed `data-test-id` attribute
+       equals the configured account exactly, or when any trimmed tile text line
+       or nested cell equals the configured UPN/email or display text exactly.
+       Collect all matching candidate tiles first and fail closed (`return false`
+       without clicking) when `matches.length !== 1` (`0` or `> 1` matches).
      - Redact any logged account identifier via `redactAccountIdentifier`
        (e.g. `a***@contoso.com` or `j***`) so raw UPNs/emails never appear in
        logs (`strict-safety` `ActionRisk: high` protection).

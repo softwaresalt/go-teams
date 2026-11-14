@@ -97,6 +97,7 @@ For each task, select the appropriate harness strategy:
    reason.
 4. Keep signatures, types, and module names aligned with the current
    codebase.
+5. **Docs-only or config-only verification boundary**: When a task modifies only documentation, markdown, or static configuration examples with no production Go code or test symbols to stub, do not invent artificial Go stubs; instead record the task's verification boundary (e.g., `go vet ./...` or tracked-file hygiene test) as its `harness_cmd`.
 
 ### File placement rules
 
@@ -123,10 +124,10 @@ with a non-compiling harness.
 
 #### Step 5.2: Red phase check
 
-Run `go test ./...` for the harness tests. ALL tests MUST fail with
-the expected failure marker (not-implemented error or failing test assertion).
+For code and test tasks, run the task-scoped `go test` command (`harness_cmd`) for each scaffolded task. ALL newly scaffolded harness tests MUST fail with
+the expected failure marker (not-implemented error or failing test assertion). For docs-only or config-only tasks with no Go code/test surface, verify the recorded verification boundary (`go vet ./...`) passes and record `Red Phase: N/A (docs/config-only verification boundary)`.
 
-If any test passes (false positive) or fails with an unexpected error
+If any code/test harness passes (false positive) or fails with an unexpected error
 (compilation vs runtime), fix the harness.
 
 ### Step 6: Apply harness-ready label
@@ -135,26 +136,26 @@ After both checks pass (P-004 gate satisfied):
 
 1. Update each task with `harness-ready` label using the backlog tool's
    update operation.
-2. Add an implementation note with the harness command.
+2. Add an implementation note with the task-scoped `harness_cmd` (so `build-feature` and intermediate task verification run that task's test target while downstream tasks' red harnesses remain pending, before the unfiltered full-suite `go test ./...` runs on the final task).
 3. Record the harness manifest: `Compilation: PASS`,
-   `Red Phase: CONFIRMED`.
+   `Red Phase: CONFIRMED` (or `Red Phase: N/A (docs/config-only verification boundary)`).
 
 ## Completion Criteria
 
 The skill is complete only when the selected tasks have:
 
-* harness files in the correct modules
-* structural stubs with intentional not-implemented behavior
+* harness files in the correct modules (or a recorded verification boundary for docs/config-only tasks)
+* structural stubs with intentional not-implemented behavior for all code/test tasks
 * a successful `go vet ./...` result after scaffolding
-* all harness tests failing with the expected marker
-* clear mapping from backlog task to harness command
+* all code/test harness tests failing with the expected marker
+* clear mapping from backlog task to its task-scoped `harness_cmd`
 
 ## Guardrails
 
 * Do not implement production logic — stubs only.
 * Do not skip compilation verification.
-* Do not apply the harness-ready label until both compilation and red
-  phase checks pass.
+* Do not apply the harness-ready label until compilation and the red
+  phase check (or documented docs/config-only verification boundary) pass.
 * Keep test scenarios traceable to acceptance criteria.
 
 ## Model Routing

@@ -1227,6 +1227,7 @@ func TestRecapAudioJSHandlesBlobFallbackRedirectsCredentialsRetryAndOneHour48kHz
 	for _, scenario := range []string{
 		"prefers-non-blob-and-retries-omit",
 		"resets-identity-per-candidate",
+		"skips-unverified-early-candidate-and-uses-later-verified-url",
 		"rejects-redirect-identity-mismatch",
 		"accepts-one-hour-48khz-resampled",
 	} {
@@ -1252,7 +1253,8 @@ const maxRecapAudioPCMBytes = 360 * 1024 * 1024;
 const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 
 const isResetScenario = scenario === 'resets-identity-per-candidate';
-const pageUrl = isResetScenario
+const isSkipUnverifiedScenario = scenario === 'skips-unverified-early-candidate-and-uses-later-verified-url';
+const pageUrl = (isResetScenario || isSkipUnverifiedScenario)
   ? 'https://teams.cloud.microsoft/l/meetingrecap'
   : 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a';
 
@@ -1262,6 +1264,7 @@ const media = {
   getAttribute: (name) => {
     if (name !== 'data-audio-src') return null;
     if (isResetScenario) return 'https://tenant-my.sharepoint.com/stream?driveItemId=recording-a';
+    if (isSkipUnverifiedScenario) return 'https://tenant-my.sharepoint.com/opaque-unverified-source';
     return null;
   },
   querySelector: () => null,
@@ -1361,6 +1364,15 @@ globalThis.AudioContext = class {
     if (!failure || !String(failure.message || failure).includes('identity unverified')) {
       throw new Error('expected second unverified candidate to fail identity check after reset, got: ' + String(failure || result));
     }
+  } else if (scenario === 'skips-unverified-early-candidate-and-uses-later-verified-url') {
+    if (failure) throw new Error('expected later verified candidate to succeed after skipping unverified early candidate: ' + String(failure.message || failure));
+    if (fetchCalls.some(c => String(c.url).includes('opaque-unverified-source'))) {
+      throw new Error('unverified early candidate must not be fetched');
+    }
+    const parsed = JSON.parse(result);
+    if (!parsed.mediaUrl.includes('driveItemId=recording-a')) {
+      throw new Error('expected verified candidate mediaUrl, got ' + parsed.mediaUrl);
+    }
   } else if (scenario === 'rejects-redirect-identity-mismatch') {
     if (!failure || !String(failure.message || failure).includes('identity mismatch')) {
       throw new Error('expected post-redirect identity mismatch error, got: ' + String(failure || result));
@@ -1392,6 +1404,18 @@ func TestJoinColdProfileRequiresDefaultAccount(t *testing.T) {
 	require.NoError(t, err)
 	defer cleanup()
 	err = headlessMeeting.Join(bctx)
+	require.ErrorIs(t, err, ErrAccountRequired)
+
+	// 3. Headless NewLiveMeeting for a SharePoint Stream Recap URL or with an empty
+	// UserDataDir also fails fast with ErrAccountRequired when DefaultAccount is empty.
+	spMeeting, spCtx, spCleanup, err := NewLiveMeeting(
+		context.Background(),
+		Options{Headless: true, ExecPath: "/nonexistent/browser"},
+		MeetingOptions{MeetingURL: "https://tenant-my.sharepoint.com/personal/user/_layouts/15/stream.aspx?id=rec.mp4"},
+	)
+	require.NoError(t, err)
+	defer spCleanup()
+	err = spMeeting.Join(spCtx)
 	require.ErrorIs(t, err, ErrAccountRequired)
 }
 

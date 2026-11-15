@@ -310,6 +310,9 @@ func extractThreadIDMeetingToken(rawURL string) string {
 // The result always matches [a-z0-9-]+ and never contains path separators or
 // "..", so it is safe to join onto the output directory.
 func sanitizeMeetingID(rawURL string) string {
+	if hasSharePointSharingPath(rawURL) {
+		return "meeting"
+	}
 	redacted := redactSourceURL(rawURL)
 	decodedPath := redacted
 	if unescaped, err := url.PathUnescape(redacted); err == nil {

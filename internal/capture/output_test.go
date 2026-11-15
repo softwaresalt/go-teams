@@ -52,6 +52,11 @@ func TestSanitizeMeetingID(t *testing.T) {
 			url:  "https://tenant-my.sharepoint.com/%3Av%3A/g/personal/user/EabcSecretSharingToken",
 			want: "meeting",
 		},
+		{
+			name: "SharePoint sharing link containing meeting_ substring never leaks token",
+			url:  "https://tenant.sharepoint.com/:v:/g/personal/user/Eabcmeeting_PrivateToken",
+			want: "meeting",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

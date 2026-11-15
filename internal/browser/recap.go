@@ -122,7 +122,10 @@ const extractRecapAudioJS = `(async () => {
 	for (const candidateUrl of candidates) {
 		identityMatched = baseIdentityMatched;
 		checkIdentity(candidateUrl);
-		if (enforceIdentity && !identityMatched) throw new Error('recap audio recording identity unverified');
+		if (enforceIdentity && !identityMatched) {
+			lastFetchErr = new Error('recap audio recording identity unverified');
+			continue;
+		}
 		for (const rawDuration of [media && media.duration, info.duration, info.durationSeconds]) {
 			const duration = Number(rawDuration);
 			if (Number.isFinite(duration) && duration > 0 &&
@@ -150,7 +153,10 @@ const extractRecapAudioJS = `(async () => {
 		}
 		if (resp.url) {
 			checkIdentity(resp.url);
-			if (enforceIdentity && !identityMatched) throw new Error('recap audio recording identity unverified');
+			if (enforceIdentity && !identityMatched) {
+				lastFetchErr = new Error('recap audio recording identity unverified');
+				continue;
+			}
 		}
 		response = resp;
 		selectedUrl = resp.url || candidateUrl;

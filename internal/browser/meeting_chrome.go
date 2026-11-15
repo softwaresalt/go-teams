@@ -37,6 +37,7 @@ const (
 type chromeMeeting struct {
 	opts                 MeetingOptions
 	headedOpts           *Options
+	managedProfile       bool
 	userDataDir          string
 	cdpPort              int
 	capturePageID        string
@@ -210,6 +211,19 @@ func deriveRecapURLFromMeetingURL(meetingURL string) string {
 	return fmt.Sprintf("https://%s/l/meetingrecap?threadId=%s", host, url.QueryEscape(id.ThreadID))
 }
 
+func isRemoteAuthBackedMeetingURL(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "", "localhost", "127.0.0.1", "::1":
+		return false
+	default:
+		return true
+	}
+}
+
 // Join implements Meeting. It validates the meeting URL, navigates to it, waits
 // for user authentication or launcher interstitial handling as needed, and
 // detects either a Teams Meeting Recap transcript (via xplatplugins.aspx /
@@ -226,7 +240,7 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 		return m.joinHeadedWithDeadline(ctx, deadline)
 	}
 	if m.probePreJoinState == nil {
-		if m.userDataDir != "" && isTeamsHostURL(m.opts.MeetingURL) && !hasTeamsSessionInProfile(m.userDataDir) && m.defaultAccount() == "" {
+		if (m.managedProfile || m.userDataDir != "") && isRemoteAuthBackedMeetingURL(m.opts.MeetingURL) && !hasTeamsSessionInProfile(m.userDataDir) && m.defaultAccount() == "" {
 			return ErrAccountRequired
 		}
 		targetURL := m.opts.MeetingURL

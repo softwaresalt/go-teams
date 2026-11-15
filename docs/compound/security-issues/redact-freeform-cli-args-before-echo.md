@@ -22,8 +22,12 @@ the PR found it.
 
 ## Resolution
 
-* Inspect the original argument first. Only an input that starts with a
-  well-formed `http://` or `https://` scheme goes through `teams.RedactArgs`.
+* Dispatch on the original argument's prefix. An input that starts
+  (case-insensitively, after trimming) with `http://` or `https://` goes through
+  `teams.RedactArgs`, which strips userinfo, query, and fragment. This is prefix
+  dispatch, not URL validation: a malformed URL with that prefix still reaches
+  `RedactArgs`, and host or path text it retains can still contain secrets, so
+  callers must not assume the output has a validated safe shape.
 * Any other input containing `@`, `?`, `#`, `://`, or an embedded `http:` or
   `https:` token is replaced wholesale with `[redacted]`.
 * Pin both delimiter-containing and scheme-token-containing passwords with

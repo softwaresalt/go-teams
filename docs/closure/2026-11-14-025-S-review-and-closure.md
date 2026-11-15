@@ -45,7 +45,7 @@ Multi-persona, cross-model adversarial and `rubber-duck` review of
 | CLI help (`rubber-duck`, Coupling) | `update --help` lock recovery listed fewer steps than README and USER_GUIDE | Fixed in-scope (P-021 C1); commit `14545c9` |
 | CLI help (Correctness) | `schedule --help` omitted required entry fields and startup-sweep behavior | Fixed in-scope (P-021 C1); commit `14545c9` |
 | Docs (Scope, Coupling) | README and USER_GUIDE lacked the base-normalization caveat, busy gate, sweep, shutdown window, default duration | Fixed in-scope (P-021 C1); commit `14545c9` |
-| Copilot (`PRRT_kwDOTStvas63lNfV`, `internal/cli/root.go`) | Banner could leak password prefixes (`//user:secret?pw@host` became `//user:secret`; an embedded `https:` kept a prefix) | Fixed in-scope (P-021 C1): original argument inspected first, non-`http(s)://` inputs with `@ ? #`, `://`, or `http(s):` print `[redacted]`; regression tests added; commit `be92c2b`; replied citing the commit; thread resolved |
+| Copilot (`PRRT_kwDOTStvas63lNfV`, `internal/cli/root.go`) | Banner could leak password prefixes (`//user:secret?pw@host` became `//user:secret`; an embedded `https:` kept a prefix) | Fixed in-scope (P-021 C1): original argument inspected first; inputs with an `http://` or `https://` prefix go through `RedactArgs` (prefix dispatch, not URL validation), and other inputs with `@ ? #`, `://`, or `http(s):` print `[redacted]`; regression tests added; commit `be92c2b`; replied citing the commit; thread resolved |
 
 Blocking findings: `P0=0, P1=0`. Outcome: `READY`.
 
@@ -60,7 +60,10 @@ Blocking findings: `P0=0, P1=0`. Outcome: `READY`.
 
 ## Follow-ups
 
-None. No deferred-scope entries were captured.
+* Stash `2925E813` (deferred scope expansion, provisional priority `low`, raised by
+  Copilot thread `PRRT_kwDOTStvas63lUy4` on closure PR #65): correct the
+  `redactHelpArg` doc comment in `internal/cli/root.go`, which says "well-formed"
+  although dispatch is by `http://`/`https://` prefix only. Stage triages it.
 
 ## Post-merge closure
 

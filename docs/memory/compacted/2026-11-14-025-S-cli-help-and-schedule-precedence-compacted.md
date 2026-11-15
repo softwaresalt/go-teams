@@ -23,9 +23,11 @@ deliberation `014-DL` archived via `backlogit archive 014-DL`.
   unknown argument. `--help <subcommand>` renders that subcommand's help,
   `help -f cfg <topic>` skips flag values, and the intercepted help path shows
   `--version`.
-* Banner redaction: only well-formed `http(s)://` inputs go through
-  `teams.RedactArgs`; any other input carrying `@ ? #`, `://`, or an embedded
-  `http(s):` token prints `[redacted]`
+* Banner redaction: dispatch is by prefix, not URL validation. Inputs starting
+  with `http://` or `https://` (case-insensitive, after trimming) go through
+  `teams.RedactArgs`, which strips userinfo, query, and fragment but may retain
+  secret-bearing host or path text from a malformed URL. Any other input carrying
+  `@ ? #`, `://`, or an embedded `http(s):` token prints `[redacted]`
   (`docs/compound/security-issues/redact-freeform-cli-args-before-echo.md`).
 * Docs: README, `docs/USER_GUIDE.md`, `schedule --help`, and `update --help`
   document the three-tier schedule precedence (config, global flags with base
@@ -45,7 +47,8 @@ deliberation `014-DL` archived via `backlogit archive 014-DL`.
 
 ## Open items
 
-* None. Stash `3EB89E2D` (live-tenant validation from `022-S`) and shipment
-  `010-S` stay queued for an attended session.
+* Stage triages stash `2925E813` (fix the `redactHelpArg` doc comment wording in
+  `internal/cli/root.go`). Stash `3EB89E2D` (live-tenant validation from `022-S`)
+  and shipment `010-S` stay queued for an attended session.
 
 Full closure record: `docs/closure/2026-11-14-025-S-review-and-closure.md`.

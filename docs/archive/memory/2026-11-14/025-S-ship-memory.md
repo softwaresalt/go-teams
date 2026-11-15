@@ -34,4 +34,4 @@ status: completed
 
 ## Next Steps
 
-* None for `025-S`. No follow-up stash entries were required.
+* None for `025-S`. One deferred doc-comment follow-up was captured as stash `2925E813` during closure review (PR #65).

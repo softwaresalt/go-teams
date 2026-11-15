@@ -34,26 +34,26 @@ var (
 // examples that become valid YAML when the leading "# " is removed. Aliases
 // and alternatives are documented as prose so that activating every canonical
 // example never produces conflicting settings.
-const templateYAML = `# teams-cli configuration file
+const templateYAML = `# go-teams configuration file
 #
 # Every setting below is turned off (commented out), so this file is valid as
-# generated and teams-cli falls back to its built-in defaults. To change a
+# generated and go-teams falls back to its built-in defaults. To change a
 # setting, remove the leading "# " from its line and edit the value. Lines that
 # start with "#   Alias:" or "#   Alternative:" are notes, not settings.
 #
-# Where teams-cli looks for this file (first match wins):
+# Where go-teams looks for this file (first match wins):
 #   1. the path given with --config / -f
 #   2. config.yaml in the current directory
-#   3. config.yaml next to the teams-cli executable
+#   3. config.yaml next to the go-teams executable
 #   4. the per-user default location (for example
-#      %APPDATA%\teams-cli\config.yaml on Windows)
+#      %APPDATA%\go-teams\config.yaml on Windows)
 #
 # Paths accept %LOCALAPPDATA%-style variables, $ENV_VAR variables, and a
 # leading ~ for your home folder. In double-quoted YAML text, write a backslash
 # as two backslashes (\\).
 #
 # Defaults when nothing below is changed:
-#   * transcripts are saved under your per-user teams-cli\transcripts folder
+#   * transcripts are saved under your per-user go-teams\transcripts folder
 #   * a visible browser window opens (set headless: true to run in the background)
 #   * the bot name is "Transcription Agent"
 
@@ -120,7 +120,7 @@ const templateYAML = `# teams-cli configuration file
 # ai_summary_delay: "30m"
 # lobby_timeout: "5m"
 
-# Queue file where deferred --append-ai-summary entries are written. "teams-cli
+# Queue file where deferred --append-ai-summary entries are written. "go-teams
 # schedule" sweeps it at startup. Defaults to transcription_queue.txt.
 # queue_file: "C:\\Transcripts\\Team\\transcription_queue.txt"
 
@@ -130,7 +130,7 @@ const templateYAML = `# teams-cli configuration file
 
 # Browser profile folder that keeps your Microsoft 365 sign-in between runs.
 # Treat it like a password: never share or commit it.
-# profile_dir: "%LOCALAPPDATA%\\teams-cli\\profile"
+# profile_dir: "%LOCALAPPDATA%\\go-teams\\profile"
 
 # Path to Microsoft Edge or Google Chrome. Edge is found automatically on
 # Windows when this is not set.
@@ -145,12 +145,12 @@ const templateYAML = `# teams-cli configuration file
 # bot_name: "Transcription Agent"
 
 # true runs the browser in the background (use after your first interactive
-# sign-in with teams-cli auth); false shows the browser window.
+# sign-in with go-teams auth); false shows the browser window.
 #   Alias: headed (headed: true forces a visible window)
 # headless: true
 
 # ---------------------------------------------------------------------------
-# Scheduled meetings for "teams-cli schedule"
+# Scheduled meetings for "go-teams schedule"
 # ---------------------------------------------------------------------------
 
 # Each meeting needs a url and exactly one trigger: cron (repeats) or at (once).

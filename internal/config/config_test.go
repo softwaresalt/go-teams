@@ -15,8 +15,9 @@ func TestDefaultConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, cfg.OutputDir)
 	assert.NotEmpty(t, cfg.ProfileDir)
+	assert.Contains(t, cfg.OutputDir, filepath.Join("go-teams", "transcripts"))
 	assert.NotContains(t, cfg.ProfileDir, filepath.Join("bin", "profile"), "default profile dir should live under the user profile, not workspace bin/profile")
-	assert.Contains(t, cfg.ProfileDir, filepath.Join("teams-cli", "profile"))
+	assert.Contains(t, cfg.ProfileDir, filepath.Join("go-teams", "profile"))
 	assert.Equal(t, "Transcription Agent", cfg.BotName)
 	assert.True(t, cfg.Headless)
 	assert.NoError(t, cfg.Validate())
@@ -26,6 +27,7 @@ func TestDefaultConfigPath(t *testing.T) {
 	path, err := DefaultConfigPath()
 	require.NoError(t, err)
 	assert.Equal(t, "config.yaml", filepath.Base(path))
+	assert.Contains(t, path, filepath.Join("go-teams", "config.yaml"))
 }
 
 func TestConfigValidate(t *testing.T) {
@@ -165,13 +167,13 @@ func TestLoadExpandsWindowsUserVariables(t *testing.T) {
 	path := filepath.Join(dir, "user-vars.yaml")
 	yamlContent := `
 output_folder: "%USER%\\Documents\\Transcripts"
-profile_dir: "%USERPROFILE%\\AppData\\Local\\teams-cli\\profile"
+profile_dir: "%USERPROFILE%\\AppData\\Local\\go-teams\\profile"
 `
 	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0o600))
 	got, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, "Documents", "Transcripts"), got.OutputDir)
-	assert.Equal(t, filepath.Join(home, "AppData", "Local", "teams-cli", "profile"), got.ProfileDir)
+	assert.Equal(t, filepath.Join(home, "AppData", "Local", "go-teams", "profile"), got.ProfileDir)
 }
 
 func TestLoadDefaultAccountAndAliases(t *testing.T) {

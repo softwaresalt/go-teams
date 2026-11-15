@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	appDirName = "teams-cli"
+	appDirName = "go-teams"
 	// DefaultFilenameTemplate is the default transcript filename pattern used
 	// when only an output directory is specified.
 	DefaultFilenameTemplate = "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
@@ -115,8 +115,8 @@ type Config struct {
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default
-// paths resolved in the user's Windows profile (%LOCALAPPDATA%\teams-cli and
-// %APPDATA%\teams-cli).
+// paths resolved in the user's Windows profile (%LOCALAPPDATA%\go-teams and
+// %APPDATA%\go-teams).
 func DefaultConfig() (Config, error) {
 	appDir, err := appConfigDir()
 	if err != nil {
@@ -132,7 +132,7 @@ func DefaultConfig() (Config, error) {
 }
 
 // defaultProfileDir returns the standard per-user browser profile location on
-// Windows (%LOCALAPPDATA%\teams-cli\profile, matching Edge/Chrome User Data
+// Windows (%LOCALAPPDATA%\go-teams\profile, matching Edge/Chrome User Data
 // placement under AppData\Local), falling back to appDir\profile when
 // LOCALAPPDATA is unset.
 func defaultProfileDir(appDir string) string {

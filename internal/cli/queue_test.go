@@ -26,7 +26,7 @@ func TestQueueFileProcessesActiveLinesAndCommentsOutCompletedEntries(t *testing.
 		":: --config " + cfgA + ` -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=already-done"`,
 		"",
 		`--config "` + cfgA + `" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=first"`,
-		`teams-cli.exe --config "` + cfgB + `" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=second" -c ACME`,
+		`go-teams.exe --config "` + cfgB + `" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=second" -c ACME`,
 	}, "\r\n") + "\r\n"
 	require.NoError(t, os.WriteFile(queuePath, []byte(initialQueue), 0o600))
 
@@ -71,7 +71,7 @@ func TestQueueFileProcessesActiveLinesAndCommentsOutCompletedEntries(t *testing.
 		":: --config " + cfgA + ` -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=already-done"`,
 		"",
 		`::--config "` + cfgA + `" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=first"`,
-		`::teams-cli.exe --config "` + cfgB + `" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=second" -c ACME`,
+		`::go-teams.exe --config "` + cfgB + `" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=second" -c ACME`,
 	}, "\r\n") + "\r\n"
 	assert.Equal(t, expectedQueue, updated)
 
@@ -79,6 +79,50 @@ func TestQueueFileProcessesActiveLinesAndCommentsOutCompletedEntries(t *testing.
 	capturedURLs = nil
 	require.NoError(t, runCmd(context.Background(), d, "--queue", queuePath))
 	assert.Empty(t, capturedURLs)
+}
+
+func TestQueueFileStripsCrossPlatformGoTeamsAndLegacyTeamsCLITokensAndSkipsBareTokens(t *testing.T) {
+	dir := t.TempDir()
+	queuePath := filepath.Join(dir, "transcript-queue.txt")
+
+	initialQueue := strings.Join([]string{
+		`go-teams`,
+		`teams-cli.exe`,
+		`go-teams -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=one"`,
+		`GO-TEAMS.EXE -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=two"`,
+		`"C:\Tools\go-teams.exe" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=three"`,
+		`"/usr/local/bin/go-teams" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=four"`,
+		`teams-cli -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=five"`,
+		`".\bin\teams-cli.exe" -u "https://teams.cloud.microsoft/l/meetingrecap?threadId=six"`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(queuePath, []byte(initialQueue), 0o600))
+
+	var capturedURLs []string
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) {
+			c := validConfig()
+			c.Headless = true
+			return c, nil
+		},
+		newRunner: func(config.Config) browser.Runner { return &fakeRunner{} },
+		newMeeting: func(ctx context.Context, _ config.Config, url string) (browser.Meeting, context.Context, func(), error) {
+			capturedURLs = append(capturedURLs, url)
+			return nil, ctx, func() {}, nil
+		},
+		newSession: func(config.Config, string) meetingSession {
+			return recorderSession{&captureRecorder{}}
+		},
+	}
+
+	require.NoError(t, runCmd(context.Background(), d, "--queue", queuePath))
+	assert.Equal(t, []string{
+		"https://teams.cloud.microsoft/l/meetingrecap?threadId=one",
+		"https://teams.cloud.microsoft/l/meetingrecap?threadId=two",
+		"https://teams.cloud.microsoft/l/meetingrecap?threadId=three",
+		"https://teams.cloud.microsoft/l/meetingrecap?threadId=four",
+		"https://teams.cloud.microsoft/l/meetingrecap?threadId=five",
+		"https://teams.cloud.microsoft/l/meetingrecap?threadId=six",
+	}, capturedURLs)
 }
 
 func TestQueueFileLeavesFailedLineUncommentedAndContinuesBatch(t *testing.T) {

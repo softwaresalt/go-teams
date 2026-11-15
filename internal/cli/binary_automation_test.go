@@ -16,7 +16,7 @@ import (
 func TestCompiledBinaryCapturesRecapToExplicitOutput(t *testing.T) {
 	binary := os.Getenv("GO_TEAMS_BINARY")
 	if binary == "" {
-		t.Skip("set GO_TEAMS_BINARY to a freshly built teams-cli executable")
+		t.Skip("set GO_TEAMS_BINARY to a freshly built go-teams executable")
 	}
 	binary, err := filepath.Abs(binary)
 	require.NoError(t, err)

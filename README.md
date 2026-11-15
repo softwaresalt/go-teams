@@ -134,7 +134,11 @@ ships as [`config.example.yaml`](config.example.yaml). The
 Command-line flags override top-level `config.yaml` settings. In
 `teams-cli schedule`, global `schedule` flags are applied to the base
 configuration first, and the per-meeting `meetings:` settings in `config.yaml`
-then override those flags for that entry. See
+then override those flags for that entry. Base `ephemeral-live` normalization
+(`ai_summary_delay: 0s`, `capture_audio: true`) also runs when the global
+`schedule` flags are applied, so changing a meeting entry's `mode` away from an
+`ephemeral-live` base requires explicit per-meeting `ai_summary_delay` or
+`capture_audio` values to override the normalized base. See
 [Configuration](docs/USER_GUIDE.md#configuration) and
 [Built-in daemon scheduling](docs/USER_GUIDE.md#built-in-daemon-scheduling-teams-cli-schedule)
 for the full precedence rules.

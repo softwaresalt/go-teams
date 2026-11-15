@@ -42,9 +42,15 @@ func newUpdateCommand(d *deps) *cobra.Command {
 			"(JSON owner metadata: pid, token, created_at) plus a short-lived <exe>.lock.ctl control lock,\n" +
 			"waiting up to 15 seconds before failing with a locked error. The lock fails closed:\n" +
 			"teams-cli never evicts another process's lock on its own.\n\n" +
-			"Manual lock recovery: if an update was killed and left <exe>.lock behind, confirm that the\n" +
-			"recorded pid is no longer running, delete <exe>.lock (and <exe>.lock.ctl if present) by hand,\n" +
-			"and rerun the update. Executable names ending in .lock or .lock.ctl are rejected.\n\n" +
+			"Manual lock recovery (never delete <exe>.lock while an update might still be running):\n" +
+			"  1. Confirm every teams-cli update process has exited. The recorded pid in <exe>.lock may be\n" +
+			"     stale because the OS can reuse a pid after a crash, so check for running updates, not\n" +
+			"     just that pid.\n" +
+			"  2. If <exe> is missing and <exe>.old exists, restore the backup by renaming <exe>.old back\n" +
+			"     to <exe>.\n" +
+			"  3. Remove <exe>.lock and any <exe>.lock.ctl (taken briefly during lock release).\n" +
+			"  4. Rerun teams-cli update.\n" +
+			"Executable names ending in .lock or .lock.ctl are rejected.\n\n" +
 			"The executable's directory must be writable by the current user; an install under a\n" +
 			"privileged folder such as C:\\Program Files needs an elevated shell. Local builds report\n" +
 			"the version dev and treat any release as an upgrade.",

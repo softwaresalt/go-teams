@@ -519,6 +519,15 @@ Every `meetings:` entry forwards `name` as the fallback meeting title for
 supply a richer title. Past `at:` timestamps are logged and skipped on startup,
 and future `at:` timestamps fire once at the target time without repeating.
 
+All scheduled meetings share one browser profile behind an atomic `busy` gate.
+An entry that overlaps a running capture is skipped and logged. The gate
+releases as soon as the live call ends, before any delayed
+`--ai-summary-delay` AI Summary fetch, so the next meeting is not blocked. When
+`queue_file` is configured, the daemon sweeps it at startup and runs pending
+entries, skipping `--not-before` entries whose timestamp is still in the
+future. On shutdown the daemon allows a 15-second graceful window. A scheduled
+entry without a `duration` uses a nominal 1-hour duration.
+
 #### Schedule configuration and flag precedence
 
 `teams-cli schedule` resolves each meeting's settings in three tiers, from

@@ -272,15 +272,16 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"fires. All meetings share a single browser profile, serialized by an " +
 			"atomic busy gate that releases automatically when each live call and " +
 			"browser session finish.\n\n" +
-			"Meetings come from the meetings: list in config.yaml. Each entry needs a name, a url, and " +
-			"either a 5-field cron expression or a one-shot at timestamp (RFC3339 or local YYYY-MM-DD HH:MM). " +
+			"Meetings come from the meetings: list in config.yaml. Each entry requires a url and either a " +
+			"5-field cron expression or a one-shot at timestamp (RFC3339 or local YYYY-MM-DD HH:MM); name is " +
+			"an optional human-readable title fallback. " +
 			"Past at timestamps are logged and skipped on startup.\n\n" +
 			"Busy gate: while a capture holds the shared profile, an overlapping distinct entry is skipped " +
 			"and logged rather than launched. The gate is released as soon as the live call ends, " +
 			"before the delayed --ai-summary-delay AI Summary fetch, so the next meeting is not blocked.\n\n" +
-			"Startup sweep: when queue_file is configured, the daemon scans it at startup and runs deferred " +
-			"--append-ai-summary entries that are due; entries whose --not-before is still in the future " +
-			"stay queued.\n\n" +
+			"Startup sweep: when queue_file is configured, the daemon scans it at startup and executes " +
+			"the pending entries it finds, including deferred --append-ai-summary entries; entries whose " +
+			"--not-before timestamp is still in the future are skipped and stay queued.\n\n" +
 			"Precedence for each scheduled meeting (3 tiers, lowest to highest):\n" +
 			"  1. Top-level settings in config.yaml form the baseline.\n" +
 			"  2. Global schedule flags (--mode, --duration, --idle-timeout, --ai-summary-delay,\n" +

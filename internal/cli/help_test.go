@@ -188,6 +188,8 @@ func TestRootHelpPlaceholderAndUnknownCommandGuidance(t *testing.T) {
 			{"config flag and value skipped", []string{"-f", "config.yaml", "[command]", "--help"}, "[command]"},
 			{"help subcommand placeholder", []string{"help", "[command]"}, "[command]"},
 			{"help subcommand unknown", []string{"help", "unknown-subcmd"}, "unknown-subcmd"},
+			{"help config flag value skipped", []string{"help", "-f", "config.yaml", "[command]"}, "[command]"},
+			{"help long config flag value skipped", []string{"help", "--config", "config.yaml", "[command]"}, "[command]"},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
@@ -199,6 +201,39 @@ func TestRootHelpPlaceholderAndUnknownCommandGuidance(t *testing.T) {
 				assert.Contains(t, rest, "ephemeral-live", "root help follows the banner")
 				assert.Equal(t, 1, strings.Count(out, helpNoteMarker), "banner printed exactly once")
 			})
+		}
+	})
+
+	t.Run("help subcommand placeholder lists the version flag like --help", func(t *testing.T) {
+		for _, args := range [][]string{{"--help"}, {"help", "[command]"}} {
+			out := runHelp(t, args...)
+			assert.Contains(t, out, "--version", "args %v", args)
+		}
+	})
+
+	t.Run("leading help flag renders the named subcommand help", func(t *testing.T) {
+		for _, args := range [][]string{{"--help", "join"}, {"-f", "config.yaml", "--help", "join"}} {
+			out := runHelp(t, args...)
+			assert.NotContains(t, out, helpNoteMarker, "args %v", args)
+			assert.Contains(t, out, "--not-before", "args %v: join help expected", args)
+			assert.Contains(t, out, "Examples:", "args %v", args)
+		}
+		out := runHelp(t, "--help", "init-config")
+		assert.NotContains(t, out, helpNoteMarker)
+		assert.Contains(t, out, "--force")
+	})
+
+	t.Run("schemeless URL credentials are never echoed", func(t *testing.T) {
+		for _, raw := range []string{
+			"teams.microsoft.com/meet/123?p=secretpass",
+			"user:secret@teams.microsoft.com/meet/123",
+			"//user:secret@teams.microsoft.com/meet/123#secretpass",
+		} {
+			out := runHelp(t, raw, "--help")
+			assert.Contains(t, out, helpNoteMarker, "raw %q", raw)
+			assert.NotContains(t, out, "secretpass", "raw %q", raw)
+			assert.NotContains(t, out, "secret", "raw %q", raw)
+			assert.NotContains(t, out, "?p=", "raw %q", raw)
 		}
 	})
 

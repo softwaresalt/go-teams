@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/capture"
@@ -229,6 +230,7 @@ func installRootHelpHandler(root *cobra.Command) {
 			target, rest, err := root.Find(args)
 			if err == nil && target == root && len(rest) > 0 {
 				root.InitDefaultHelpFlag()
+				root.InitDefaultVersionFlag()
 				root.HelpFunc()(root, rest)
 				return
 			}
@@ -240,8 +242,17 @@ func installRootHelpHandler(root *cobra.Command) {
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		if cmd == root {
-			if posArgs := helpPositionalArgs(cmd, args); len(posArgs) > 0 && teams.ValidateMeetingURL(posArgs[0]) != nil {
-				redacted := teams.RedactArgs([]string{posArgs[0]})
+			posArgs := helpPositionalArgs(cmd, args)
+			if len(posArgs) > 0 {
+				if sub := findDirectSubcommand(root, posArgs[0]); sub != nil {
+					// "teams-cli --help join" renders the subcommand's own help.
+					sub.InitDefaultHelpFlag()
+					sub.HelpFunc()(sub, posArgs[1:])
+					return
+				}
+			}
+			if len(posArgs) > 0 && teams.ValidateMeetingURL(posArgs[0]) != nil {
+				redacted := redactHelpArg(posArgs[0])
 				// Informational help output only; a failed write to stdout is not actionable (Principle I).
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"Note: %q is not a subcommand or a valid Teams meeting URL. "+
@@ -265,12 +276,78 @@ func helpPositionalArgs(cmd *cobra.Command, args []string) []string {
 		return cmd.Flags().Args()
 	}
 	var out []string
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if !strings.HasPrefix(a, "-") {
 			out = append(out, a)
+			continue
+		}
+		if flagTakesSeparateValue(cmd, a) {
+			i++ // skip the flag's value so it is not mistaken for a positional argument
 		}
 	}
 	return out
+}
+
+// flagTakesSeparateValue reports whether token is a non-boolean flag written
+// without an inline value ("-f", "--config"), meaning the next token is its value.
+func flagTakesSeparateValue(cmd *cobra.Command, token string) bool {
+	if token == "--" || strings.Contains(token, "=") {
+		return false
+	}
+	var name string
+	var lookup func(string) *pflag.Flag
+	switch {
+	case strings.HasPrefix(token, "--"):
+		name = token[2:]
+		lookup = func(n string) *pflag.Flag {
+			if f := cmd.Flags().Lookup(n); f != nil {
+				return f
+			}
+			return cmd.PersistentFlags().Lookup(n)
+		}
+	case len(token) == 2:
+		name = token[1:]
+		lookup = func(n string) *pflag.Flag {
+			if f := cmd.Flags().ShorthandLookup(n); f != nil {
+				return f
+			}
+			return cmd.PersistentFlags().ShorthandLookup(n)
+		}
+	default:
+		return false
+	}
+	f := lookup(name)
+	return f != nil && f.NoOptDefVal == ""
+}
+
+// findDirectSubcommand returns the direct subcommand of root named name (or
+// carrying it as an alias), or nil when there is none.
+func findDirectSubcommand(root *cobra.Command, name string) *cobra.Command {
+	for _, sub := range root.Commands() {
+		if sub.Name() == name || sub.HasAlias(name) {
+			return sub
+		}
+	}
+	return nil
+}
+
+// redactHelpArg redacts a rejected help argument for echo in the Note banner.
+// teams.RedactArgs only recognizes scheme-bearing URLs, so schemeless or
+// protocol-relative inputs ("host/meet/1?p=secret", "user:pw@host/x") get an
+// additional conservative pass that drops userinfo, query, and fragment.
+func redactHelpArg(raw string) string {
+	redacted := teams.RedactArgs([]string{raw})
+	if !strings.ContainsAny(redacted, "?#@") {
+		return redacted
+	}
+	if i := strings.IndexAny(redacted, "?#"); i >= 0 {
+		redacted = redacted[:i]
+	}
+	if at := strings.LastIndex(redacted, "@"); at >= 0 {
+		redacted = redacted[at+1:]
+	}
+	return redacted
 }
 
 // loadConfigFrom resolves the effective config path (falling back to the

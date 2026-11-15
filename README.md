@@ -1,6 +1,6 @@
 # go-teams
 
-`teams-cli` is a standalone Go command-line tool that captures Microsoft Teams
+`go-teams` is a standalone Go command-line tool that captures Microsoft Teams
 live captions and Meeting Recaps and saves them as local Markdown files. It
 compiles to a single static binary and drives your installed Chromium-based
 browser directly over the Chrome DevTools Protocol through
@@ -11,9 +11,9 @@ drivers or FFmpeg.
 > New here? Follow the [Quick start](#quick-start) below, then read the
 > step-by-step [user guide](docs/USER_GUIDE.md).
 
-## Why teams-cli exists
+## Why go-teams exists
 
-`teams-cli` is built for legitimate context capture in AI agentic work
+`go-teams` is built for legitimate context capture in AI agentic work
 environments. It does not circumvent meeting security: it works only in
 meetings and Meeting Recaps that you are already authorized to attend or view,
 signed in as yourself.
@@ -33,15 +33,15 @@ recording and consent policies.
 * Scheduled and protocol-driven capture (`auto`, `ephemeral-live`,
   `live-with-summary`, `past-recap`)
 * Batch queue processing (`--queue`)
-* Templated YAML configuration generation (`teams-cli generate-config`)
-* Verified cross-platform self-update (`teams-cli update`)
+* Templated YAML configuration generation (`go-teams generate-config`)
+* Verified cross-platform self-update (`go-teams update`)
 
 ## Quick start
 
-Build `teams-cli` (Go 1.26 or later, plus Chrome, Edge, or Brave installed):
+Build `go-teams` (Go 1.26 or later, plus Chrome, Edge, or Brave installed):
 
 ```powershell
-go build -o .\bin\teams-cli.exe .\cmd\teams-cli
+go build -o .\bin\go-teams.exe .\cmd\go-teams
 ```
 
 Then follow three steps:
@@ -49,19 +49,19 @@ Then follow three steps:
 1. Create a commented configuration file:
 
    ```powershell
-   .\bin\teams-cli.exe generate-config
+   .\bin\go-teams.exe generate-config
    ```
 
 2. Sign in interactively once to cache your browser session:
 
    ```powershell
-   .\bin\teams-cli.exe auth
+   .\bin\go-teams.exe auth --account alice@contoso.com
    ```
 
 3. Capture live captions, or export a Meeting Recap:
 
    ```powershell
-   .\bin\teams-cli.exe captions "<meeting-or-recap-url>"
+   .\bin\go-teams.exe captions "<meeting-or-recap-url>"
    ```
 
 Transcripts are written to the `output_dir` you set in the generated
@@ -71,27 +71,27 @@ Transcripts are written to the `output_dir` you set in the generated
 
 | Command | Purpose |
 |---|---|
-| `teams-cli [meeting-url] [output-markdown-path]` | Capture directly |
-| `teams-cli captions [meeting-url] [output-markdown-path]` | Capture live captions or a Meeting Recap |
-| `teams-cli join <meeting-url> [output-markdown-path]` | Join and capture (also accepts `--url`) |
-| `teams-cli --queue <file>` | Run every meeting in a batch queue file (also `-q`) |
-| `teams-cli auth` | Sign in interactively and cache the session |
-| `teams-cli schedule` | Run as a daemon, joining meetings on a cron schedule |
-| `teams-cli generate-config` | Write a fully commented YAML configuration file |
-| `teams-cli update` | Update to the latest GitHub Release |
-| `teams-cli --version` | Print the installed version |
+| `go-teams [meeting-url] [output-markdown-path]` | Capture directly |
+| `go-teams captions [meeting-url] [output-markdown-path]` | Capture live captions or a Meeting Recap |
+| `go-teams join <meeting-url> [output-markdown-path]` | Join and capture (also accepts `--url`) |
+| `go-teams --queue <file>` | Run every meeting in a batch queue file (also `-q`) |
+| `go-teams auth` | Sign in interactively and cache the session |
+| `go-teams schedule` | Run as a daemon, joining meetings on a cron schedule |
+| `go-teams generate-config` | Write a fully commented YAML configuration file |
+| `go-teams update` | Update to the latest GitHub Release |
+| `go-teams --version` | Print the installed version |
 
 The [user guide](docs/USER_GUIDE.md#commands) lists every command, and
 [Compiled executable and explicit output file](docs/USER_GUIDE.md#compiled-executable-and-explicit-output-file)
 documents the capture flags.
 
 Every command has detailed built-in help with examples. Run
-`teams-cli <subcommand> --help` or `teams-cli help <subcommand>`, for example:
+`go-teams <subcommand> --help` or `go-teams help <subcommand>`, for example:
 
 ```text
-teams-cli join --help
-teams-cli schedule --help
-teams-cli help captions
+go-teams join --help
+go-teams schedule --help
+go-teams help captions
 ```
 
 Name a real subcommand. Passing the literal placeholder `[command]` (or any
@@ -110,29 +110,29 @@ clears any `output_file` from the config. See the full rules in the
 
 ### Self-update
 
-`teams-cli update` replaces the running executable with a GitHub Release build
+`go-teams update` replaces the running executable with a GitHub Release build
 after verifying its SHA-256 digest against the release `SHA256SUMS`. Updates
 take an inter-process lock next to the executable. See
 [Self-update](docs/USER_GUIDE.md#self-update) for flags, locking, and errors.
 
 #### Manual lock and backup recovery
 
-Recover by hand only when no `teams-cli update` is running and a lock error
+Recover by hand only when no `go-teams update` is running and a lock error
 persists: restore `<exe>` from `<exe>.old` if it is missing, delete `<exe>.lock`
-and any `<exe>.lock.ctl`, then rerun `teams-cli update`. The
+and any `<exe>.lock.ctl`, then rerun `go-teams update`. The
 [full procedure](docs/USER_GUIDE.md#manual-lock-and-backup-recovery) explains
 each step and its warnings.
 
 ## Configuration
 
-`teams-cli` reads a YAML file from `--config` / `-f`, then `./config.yaml`,
+`go-teams` reads a YAML file from `--config` / `-f`, then `./config.yaml`,
 then `config.yaml` next to the executable, then the per-user config directory.
-Create a commented template with `teams-cli generate-config`; the same template
+Create a commented template with `go-teams generate-config`; the same template
 ships as [`config.example.yaml`](config.example.yaml). The
 [user guide](docs/USER_GUIDE.md#configuration) documents every key and alias.
 
 Command-line flags override top-level `config.yaml` settings. In
-`teams-cli schedule`, global `schedule` flags are applied to the base
+`go-teams schedule`, global `schedule` flags are applied to the base
 configuration first, and the per-meeting `meetings:` settings in `config.yaml`
 then override those flags for that entry. Base `ephemeral-live` normalization
 (`ai_summary_delay: 0s`, `capture_audio: true`) also runs when the global
@@ -140,7 +140,7 @@ then override those flags for that entry. Base `ephemeral-live` normalization
 `ephemeral-live` base requires explicit per-meeting `ai_summary_delay` or
 `capture_audio` values to override the normalized base. See
 [Configuration](docs/USER_GUIDE.md#configuration) and
-[Built-in daemon scheduling](docs/USER_GUIDE.md#built-in-daemon-scheduling-teams-cli-schedule)
+[Built-in daemon scheduling](docs/USER_GUIDE.md#built-in-daemon-scheduling-go-teams-schedule)
 for the full precedence rules.
 
 ## Documentation

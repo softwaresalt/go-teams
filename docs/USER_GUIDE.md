@@ -1,14 +1,14 @@
 ---
-title: teams-cli user guide
-description: Step-by-step setup, configuration, and complete command reference for teams-cli
+title: go-teams user guide
+description: Step-by-step setup, configuration, and complete command reference for go-teams
 ---
 
 This guide takes you from a fresh install to your first captured meeting, then
 documents every command, flag, and configuration key. If you are new to
-`teams-cli`, read the first four sections in order. If you already use it, jump
+`go-teams`, read the first four sections in order. If you already use it, jump
 to the section you need through the contents list below.
 
-* [Why teams-cli exists](#why-teams-cli-exists)
+* [Why go-teams exists](#why-go-teams-exists)
 * [Before you begin](#before-you-begin)
 * [Getting started](#getting-started)
 * [Generating a configuration file](#generating-a-configuration-file)
@@ -27,15 +27,15 @@ to the section you need through the contents list below.
 * [Project layout](#project-layout)
 * [Development](#development)
 
-## Why teams-cli exists
+## Why go-teams exists
 
-`teams-cli` is built for legitimate context capture in AI agentic work
+`go-teams` is built for legitimate context capture in AI agentic work
 environments. It is not a way around meeting security. It works only inside
 meetings and Meeting Recaps that you are already authorized to attend or view,
 using your own signed-in Microsoft account.
 
 People who work with AI assistants need the substance of meetings in a form
-those assistants can read. `teams-cli` saves what was said as local Markdown so
+those assistants can read. `go-teams` saves what was said as local Markdown so
 you can:
 
 * capture requirements and decisions while they are fresh
@@ -58,7 +58,7 @@ You need:
 * a Chromium-based browser (Microsoft Edge, Google Chrome, or Brave) installed
   on that computer
 * a Microsoft 365 account that can attend the meetings you want to capture
-* Go 1.26 or later, only if you build `teams-cli` from source instead of using
+* Go 1.26 or later, only if you build `go-teams` from source instead of using
   a published release build
 
 ## Getting started
@@ -69,18 +69,18 @@ without the `.exe` suffix.
 
 ### Step 1: Get the executable
 
-Build `teams-cli` from a copy of the source code:
+Build `go-teams` from a copy of the source code:
 
 ```powershell
-go build -o .\bin\teams-cli.exe .\cmd\teams-cli
+go build -o .\bin\go-teams.exe .\cmd\go-teams
 ```
 
-The rest of this guide writes `teams-cli` for the executable. Use the full path
-(for example `.\bin\teams-cli.exe`) unless you place the file in a folder on
+The rest of this guide writes `go-teams` for the executable. Use the full path
+(for example `.\bin\go-teams.exe`) unless you place the file in a folder on
 your `PATH`. Confirm that it runs:
 
 ```powershell
-.\bin\teams-cli.exe --version
+.\bin\go-teams.exe --version
 ```
 
 ### Step 2: Create your configuration file
@@ -90,7 +90,7 @@ account, and your preferred defaults once, instead of typing them each time.
 Generate a ready-to-edit file in the current folder:
 
 ```powershell
-.\bin\teams-cli.exe generate-config
+.\bin\go-teams.exe generate-config
 ```
 
 The command prints the path of the file it wrote, `config.yaml` by default.
@@ -113,8 +113,8 @@ Save the file. Leave every other line commented out until you need it.
 
 > [!NOTE]
 > Until you set `output_dir`, transcripts go to the per-user default folder
-> (`%APPDATA%\teams-cli\transcripts` on Windows). Until you turn on
-> `headless: true`, `teams-cli` opens a visible browser window, which is what
+> (`%APPDATA%\go-teams\transcripts` on Windows). Until you turn on
+> `headless: true`, `go-teams` opens a visible browser window, which is what
 > you want for your first sign-in.
 
 ### Step 4: Sign in once
@@ -124,7 +124,7 @@ Run the sign-in command (using `default_account` from `config.yaml` or passing
 including any multi-factor prompt:
 
 ```powershell
-.\bin\teams-cli.exe auth --account alice@contoso.com
+.\bin\go-teams.exe auth --account alice@contoso.com
 ```
 
 `--account` (or `default_account` in `config.yaml`) is required for `auth` and
@@ -138,17 +138,17 @@ To record live captions, start the capture and then join your call in the
 browser window that opens:
 
 ```powershell
-.\bin\teams-cli.exe captions
+.\bin\go-teams.exe captions
 ```
 
 To capture a specific meeting or to export a finished meeting's Meeting Recap,
 pass its link in quotes:
 
 ```powershell
-.\bin\teams-cli.exe captions "<meeting-or-recap-url>"
+.\bin\go-teams.exe captions "<meeting-or-recap-url>"
 ```
 
-When the capture ends, `teams-cli` writes a Markdown transcript to your
+When the capture ends, `go-teams` writes a Markdown transcript to your
 `output_dir`. Open it in any editor, or hand it to your AI assistant.
 
 ### Step 6: Run unattended (optional)
@@ -161,12 +161,12 @@ To capture on a schedule, see
 
 ## Generating a configuration file
 
-`teams-cli generate-config` (aliases `init-config` and `gen-config`) writes a
-fully commented YAML configuration file. Every option that `teams-cli` reads is
+`go-teams generate-config` (aliases `init-config` and `gen-config`) writes a
+fully commented YAML configuration file. Every option that `go-teams` reads is
 included, turned off, with a plain-language explanation and an example value.
 
 ```text
-teams-cli generate-config [output-dir] [--output-dir <dir>] [--name <file>] [--force]
+go-teams generate-config [output-dir] [--output-dir <dir>] [--name <file>] [--force]
 ```
 
 | Flag or argument | Meaning |
@@ -180,13 +180,13 @@ Examples:
 
 ```powershell
 # ./config.yaml in the current folder
-teams-cli generate-config
+go-teams generate-config
 
 # a named file in a specific folder
-teams-cli generate-config -d "%LOCALAPPDATA%\teams-cli" -n wsp
+go-teams generate-config -d "%LOCALAPPDATA%\go-teams" -n wsp
 
 # a full file path as the positional argument
-teams-cli generate-config C:\teams\team.yaml
+go-teams generate-config C:\teams\team.yaml
 ```
 
 Rules to know:
@@ -206,7 +206,7 @@ Rules to know:
 * The root `--config` / `-f` flag is not read by this command. The destination
   is set only by the options above.
 * The generated file is valid as written. With every setting commented out,
-  `teams-cli` uses its built-in defaults: the per-user transcript folder and a
+  `go-teams` uses its built-in defaults: the per-user transcript folder and a
   visible browser window, until you uncomment `output_dir` or `headless: true`.
 * A copy of the same template ships in the repository as
   [`config.example.yaml`](../config.example.yaml).
@@ -217,28 +217,28 @@ To use a generated file that is not in a default location, pass it with
 ## Commands
 
 ```text
-teams-cli [meeting-url] [output-markdown-path]          Capture directly
-teams-cli captions [meeting-url] [output-markdown-path] Capture live captions or a Meeting Recap
-teams-cli join <meeting-url> [output-markdown-path]     Join and capture (also accepts --url)
-teams-cli --queue <file>         Run every meeting listed in a batch queue file (also -q)
-teams-cli auth                   Sign in interactively and cache the session
-teams-cli schedule               Run as a daemon, joining meetings on a cron schedule
-teams-cli generate-config        Write a fully commented YAML configuration file template
-teams-cli update                 Update teams-cli to the latest GitHub Release
-teams-cli --version              Print the installed version
+go-teams [meeting-url] [output-markdown-path]          Capture directly
+go-teams captions [meeting-url] [output-markdown-path] Capture live captions or a Meeting Recap
+go-teams join <meeting-url> [output-markdown-path]     Join and capture (also accepts --url)
+go-teams --queue <file>         Run every meeting listed in a batch queue file (also -q)
+go-teams auth                   Sign in interactively and cache the session
+go-teams schedule               Run as a daemon, joining meetings on a cron schedule
+go-teams generate-config        Write a fully commented YAML configuration file template
+go-teams update                 Update go-teams to the latest GitHub Release
+go-teams --version              Print the installed version
 ```
 
 Every command has detailed built-in help with examples. Run
-`teams-cli <subcommand> --help` or `teams-cli help <subcommand>`:
+`go-teams <subcommand> --help` or `go-teams help <subcommand>`:
 
 ```text
-teams-cli join --help
-teams-cli captions --help
-teams-cli schedule --help
-teams-cli auth --help
-teams-cli generate-config --help
-teams-cli update --help
-teams-cli help schedule
+go-teams join --help
+go-teams captions --help
+go-teams schedule --help
+go-teams auth --help
+go-teams generate-config --help
+go-teams update --help
+go-teams help schedule
 ```
 
 The `[command]` shown in the `help` usage text is a placeholder, not a literal
@@ -256,16 +256,16 @@ See the [capture design](design-docs/2026-11-09-teams-browser-caption-and-recap-
 
 ## Quick Start (Interactive Live Captions MVP)
 
-Run `teams-cli captions` (with an optional meeting link) to open a browser
+Run `go-teams captions` (with an optional meeting link) to open a browser
 window, sign in to Microsoft Teams manually, enter your call, and automatically
 enable and record live captions to a local Markdown file:
 
 ```bash
 # Open Teams in a browser window, sign in, join any call, and save captions to ./transcripts:
-go run ./cmd/teams-cli captions --account alice@contoso.com --output-dir ./transcripts
+go run ./cmd/go-teams captions --account alice@contoso.com --output-dir ./transcripts
 
 # Or navigate directly to a specific Teams meeting URL:
-go run ./cmd/teams-cli captions "https://teams.microsoft.com/meet/synthetic" --account alice@contoso.com --output-dir ./transcripts
+go run ./cmd/go-teams captions "https://teams.microsoft.com/meet/synthetic" --account alice@contoso.com --output-dir ./transcripts
 ```
 
 ## Compiled executable and explicit output file
@@ -273,10 +273,10 @@ go run ./cmd/teams-cli captions "https://teams.microsoft.com/meet/synthetic" --a
 Build on Windows, then pass both the input URL and destination file:
 
 ```powershell
-go build -o .\bin\teams-cli.exe .\cmd\teams-cli
-.\bin\teams-cli.exe "https://teams.microsoft.com/meet/synthetic" ".\transcripts\call.md"
-.\bin\teams-cli.exe captions "https://teams.microsoft.com/meet/synthetic" ".\transcripts\call.md"
-.\bin\teams-cli.exe -u "https://teams.microsoft.com/meet/synthetic" -o ".\transcripts\call.md"
+go build -o .\bin\go-teams.exe .\cmd\go-teams
+.\bin\go-teams.exe "https://teams.microsoft.com/meet/synthetic" ".\transcripts\call.md"
+.\bin\go-teams.exe captions "https://teams.microsoft.com/meet/synthetic" ".\transcripts\call.md"
+.\bin\go-teams.exe -u "https://teams.microsoft.com/meet/synthetic" -o ".\transcripts\call.md"
 ```
 
 These are synthetic URLs; replace them with a meeting or Meeting Recap URL you
@@ -383,7 +383,7 @@ placeholders:
 accepted on the root command, `captions`, and `join`:
 
 ```powershell
-.\bin\teams-cli.exe --queue .\transcript-queue.txt --output-folder ".\transcripts" --headless
+.\bin\go-teams.exe --queue .\transcript-queue.txt --output-folder ".\transcripts" --headless
 ```
 
 Each queue file line is one capture invocation:
@@ -391,14 +391,16 @@ Each queue file line is one capture invocation:
 ```text
 :: Lines that start with :: are comments or completed entries
 "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-1" --category standup
-teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-2" -o "C:\out\review.md"
+go-teams.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-2" -o "C:\out\review.md"
 ::"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic-3"
 ```
 
 * Empty lines and lines that start with `::` (after leading whitespace) are
   skipped. `::` is the only comment marker; a line starting with `#` is parsed
-  as arguments. A leading `teams-cli` or `teams-cli.exe` token is stripped, so
-  you can paste a full command line.
+  as arguments. A leading `go-teams` or `go-teams.exe` token (as well as a
+  legacy `teams-cli` or `teams-cli.exe` token) is stripped across platforms, so
+  you can paste a full command line and existing queue files continue to work
+  unchanged.
 * Single quotes and double quotes group arguments that contain spaces. Windows
   backslash paths pass through unchanged; inside double quotes, `\"` produces a
   literal quote. An unterminated quote fails that line.
@@ -425,7 +427,7 @@ teams-cli.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=sy
 * Deferred AI Summary enrichment lines (`"<url>" --append-ai-summary "<path.md>" --not-before <RFC3339>`)
   whose `--not-before` timestamp is still in the future are skipped without
   error and left uncommented so a later `--queue` or `schedule` run executes
-  them once due. When the timestamp has passed, `teams-cli` opens the meeting
+  them once due. When the timestamp has passed, `go-teams` opens the meeting
   in Recap mode, appends `# AI Summary` to `<path.md>`, and prefixes the line
   with `::`.
 * [Output target precedence](#output-target-precedence) still applies after the
@@ -443,7 +445,7 @@ capture, so use `--output-folder` or per-line destinations for batches.
 
 ## Scheduled and protocol-driven capture
 
-`teams-cli` classifies every capture into one of four protocols (`--mode` /
+`go-teams` classifies every capture into one of four protocols (`--mode` /
 `capture_mode` / `meetings[].mode`):
 
 * `ephemeral-live`: real-time live caption and MP3 audio capture (`capture_audio`
@@ -472,21 +474,21 @@ window**, not a blind hard cutoff:
    polls), capture stops as soon as caption and voice activity remain silent for
    `--idle-timeout` (default `3m`).
 2. When a live call reaches `--duration` while conversation is still active,
-   `teams-cli` continues capturing in **overtime** as long as live caption DOM
+   `go-teams` continues capturing in **overtime** as long as live caption DOM
    mutations (including throttled 1000 ms interim heartbeats) or PCM voice audio
    energy (`PCMRMS >= 300.0`) is observed.
 3. Once `--duration` has elapsed and neither caption nor voice activity occurs
-   for `--idle-timeout` (default `3m`), `teams-cli` shuts down cleanly and
+   for `--idle-timeout` (default `3m`), `go-teams` shuts down cleanly and
    flushes the `.md` and `.mp3` files.
 
-### Built-in daemon scheduling (`teams-cli schedule`)
+### Built-in daemon scheduling (`go-teams schedule`)
 
 Configure recurring 5-field `cron:` expressions or one-time `at:` timestamps
 (RFC 3339 or local `YYYY-MM-DD HH:MM`) in `config.yaml`:
 
 ```yaml
 output_dir: C:\Transcripts\WSP
-profile_dir: "%LOCALAPPDATA%\\teams-cli\\profile"
+profile_dir: "%LOCALAPPDATA%\\go-teams\\profile"
 default_account: alice@contoso.com
 headless: true
 queue_file: C:\Transcripts\WSP\transcription_queue.txt
@@ -514,7 +516,7 @@ meetings:
 Run the schedule daemon:
 
 ```powershell
-.\bin\teams-cli.exe schedule --config .\config.yaml --headless
+.\bin\go-teams.exe schedule --config .\config.yaml --headless
 ```
 
 Every `meetings:` entry forwards `name` as the fallback meeting title for
@@ -533,11 +535,11 @@ entry without a `duration` uses a nominal 1-hour duration.
 
 #### Schedule configuration and flag precedence
 
-`teams-cli schedule` resolves each meeting's settings in three tiers, from
+`go-teams schedule` resolves each meeting's settings in three tiers, from
 lowest to highest precedence:
 
 1. Top-level settings in `config.yaml` establish the baseline.
-2. Global flags passed to `teams-cli schedule` (`--mode`, `--duration`,
+2. Global flags passed to `go-teams schedule` (`--mode`, `--duration`,
    `--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`,
    `--lobby-timeout`, `--audio` / `--recap-audio`, `--browser-path`,
    `--profile-dir`, `--account`, `--headless`, `--headed`) are applied to that
@@ -568,14 +570,14 @@ daemon-wide browser and profile flags (`--browser-path`, `--profile-dir`,
 > `ai_summary_delay` and `capture_audio` values on that entry to override the
 > normalized base.
 
-### Windows Task Scheduler one-shot recipes (`teams-cli join --duration`)
+### Windows Task Scheduler one-shot recipes (`go-teams join --duration`)
 
 You can also schedule one-shot captures directly with Windows Task Scheduler
 without running a persistent daemon:
 
 ```powershell
 # PowerShell: register a one-time scheduled task for a 45-minute live call
-$action = New-ScheduledTaskAction -Execute "C:\Tools\teams-cli\teams-cli.exe" `
+$action = New-ScheduledTaskAction -Execute "C:\Tools\go-teams\go-teams.exe" `
   -Argument 'join "https://teams.microsoft.com/meet/synthetic" --mode ephemeral-live --duration 45m --idle-timeout 3m --lobby-timeout 5m --category ENG --audio --headless'
 $trigger = New-ScheduledTaskTrigger -Once -At "2026-11-15 14:00"
 Register-ScheduledTask -TaskName "TeamsCapture-ArchReview" -Action $action -Trigger $trigger
@@ -585,7 +587,7 @@ Or with `schtasks.exe`:
 
 ```powershell
 schtasks /Create /SC ONCE /TN "TeamsCapture-ArchReview" /ST 14:00 /SD 11/15/2026 `
-  /TR "\"C:\Tools\teams-cli\teams-cli.exe\" join \"https://teams.microsoft.com/meet/synthetic\" --duration 45m --audio --headless"
+  /TR "\"C:\Tools\go-teams\go-teams.exe\" join \"https://teams.microsoft.com/meet/synthetic\" --duration 45m --audio --headless"
 ```
 
 ## Browser security posture
@@ -608,14 +610,14 @@ schtasks /Create /SC ONCE /TN "TeamsCapture-ArchReview" /ST 14:00 /SD 11/15/2026
 Sign in using a visible capture session first and reuse that profile:
 
 ```powershell
-.\bin\teams-cli.exe captions --account alice@contoso.com --profile-dir ".\bin\profile"
-.\bin\teams-cli.exe captions --url "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --output-file ".\transcripts\recap.md" --profile-dir ".\bin\profile" --headless
+.\bin\go-teams.exe captions --account alice@contoso.com --profile-dir ".\bin\profile"
+.\bin\go-teams.exe captions --url "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --output-file ".\transcripts\recap.md" --profile-dir ".\bin\profile" --headless
 ```
 
 The default profile directory comes from `config.DefaultConfig()`. It is
-`%LOCALAPPDATA%\teams-cli\profile` on Windows when `LOCALAPPDATA` is set, and
-otherwise `teams-cli/profile` under `os.UserConfigDir()` (for example
-`~/.config/teams-cli/profile` on Linux). The code does not search for a profile
+`%LOCALAPPDATA%\go-teams\profile` on Windows when `LOCALAPPDATA` is set, and
+otherwise `go-teams/profile` under `os.UserConfigDir()` (for example
+`~/.config/go-teams/profile` on Linux). The code does not search for a profile
 next to the executable or in `bin\profile`; the `.\bin\profile` paths above are
 explicit `--profile-dir` values. When `UserDataDir` is empty, as with a direct
 library caller that bypasses `DefaultConfig`, the result depends on the launch
@@ -633,24 +635,24 @@ is available.
 
 A `--config` flag overrides the config file path; see [Configuration](#configuration)
 for the default discovery order.
-When no config file exists on disk, `teams-cli` uses built-in defaults and opens
+When no config file exists on disk, `go-teams` uses built-in defaults and opens
 a visible browser window automatically.
 
 ## Self-update
 
-`teams-cli update` replaces the running executable with a published GitHub
+`go-teams update` replaces the running executable with a published GitHub
 Release build from `softwaresalt/go-teams`:
 
 ```powershell
-.\bin\teams-cli.exe --version                  # print the installed version
-.\bin\teams-cli.exe update --check             # report whether a newer release exists
-.\bin\teams-cli.exe update                     # install the latest release
-.\bin\teams-cli.exe update --version v1.2.0    # install a specific release tag
-.\bin\teams-cli.exe update --version v1.1.0 --force   # reinstall or downgrade
+.\bin\go-teams.exe --version                  # print the installed version
+.\bin\go-teams.exe update --check             # report whether a newer release exists
+.\bin\go-teams.exe update                     # install the latest release
+.\bin\go-teams.exe update --version v1.2.0    # install a specific release tag
+.\bin\go-teams.exe update --version v1.1.0 --force   # reinstall or downgrade
 ```
 
 * `internal/updater` resolves release assets named
-  `teams-cli-<goos>-<goarch>` (with an `.exe` suffix on Windows), and
+  `go-teams-<goos>-<goarch>` (with an `.exe` suffix on Windows), and
   `.github/workflows/release.yml` builds and publishes CGO-free
   (`CGO_ENABLED=0`) binaries for `linux`, `darwin`, and `windows` on both
   `amd64` and `arm64`, together with `SHA256SUMS`. The release jobs
@@ -663,6 +665,14 @@ Release build from `softwaresalt/go-teams`:
 * `--force` reinstalls the target version even when it is already current, and
   is required to downgrade to an older release
 
+> [!NOTE]
+> **Upgrading from an older `teams-cli` binary:** Pre-rename `teams-cli` builds
+> look up `teams-cli-<goos>-<goarch>[.exe]` release assets, so running
+> `teams-cli update` against a release that publishes `go-teams-<goos>-<goarch>[.exe]`
+> fails closed with `ErrAssetNotFound`. Perform a one-time binary download from
+> GitHub Releases or run `go install github.com/softwaresalt/go-teams/cmd/go-teams@latest`
+> to switch to `go-teams`; subsequent updates work normally via `go-teams update`.
+
 Every update downloads the release's `SHA256SUMS` asset and verifies the
 platform binary's SHA-256 digest before touching the installed executable. A
 missing `SHA256SUMS`, a missing entry for your platform, or a digest mismatch
@@ -670,7 +680,7 @@ aborts the update and leaves the current binary untouched. Downloads must use
 `https`, and release metadata and assets are size-capped.
 
 The replacement uses a rename sequence that also works for a running Windows
-`.exe`: the current binary is renamed to `teams-cli.exe.old`, the verified
+`.exe`: the current binary is renamed to `go-teams.exe.old`, the verified
 download is moved into place, and the `.old` file is restored automatically if
 the final move fails. The `.old` file is removed after a successful update, or
 on the next update if Windows still holds it open. The executable's directory
@@ -683,7 +693,7 @@ link flags.
 
 ### Update locking and concurrent updates
 
-Two `teams-cli update` processes cannot swap the same executable at once. Each
+Two `go-teams update` processes cannot swap the same executable at once. Each
 update takes an inter-process lock next to the executable before it modifies
 anything:
 
@@ -693,7 +703,7 @@ anything:
   `ErrUpdateLocked`.
 * The lock fails closed. A lock older than 2 minutes only changes the
   diagnostic message (an orphaned dead PID versus a live or reused PID);
-  `teams-cli` never evicts or deletes another process's lock on its own.
+  `go-teams` never evicts or deletes another process's lock on its own.
 * When the target path itself ends in `.old` (for example when you launch the
   backup copy), `acquireSwapLockChain` locks every overlapping path in order,
   shortest prefix first, so two updaters cannot deadlock or overlap. On Windows
@@ -720,7 +730,7 @@ deliberate reinstalls and downgrades:
 
 * `ErrConcurrentUpdateModified` means the executable changed since the process
   started: it was deleted, replaced, or no longer matches the launch snapshot,
-  the running image, or the `.old` provenance. Rerun `teams-cli update`.
+  the running image, or the `.old` provenance. Rerun `go-teams update`.
 * `ErrDowngrade` means the installed binary is already newer than the
   requested release. Pass `--force` to downgrade deliberately.
 * `ErrUpdateLocked` means another update is in progress or left a lock
@@ -733,16 +743,16 @@ cannot hold the lock indefinitely.
 
 ### Manual lock and backup recovery
 
-Only recover by hand when no `teams-cli update` is running and the lock error
+Only recover by hand when no `go-teams update` is running and the lock error
 persists. Follow these steps in order:
 
-1. Confirm that every `teams-cli update` process has exited. Check the PID
+1. Confirm that every `go-teams update` process has exited. Check the PID
    named in the error message; the operating system can reuse a PID after a
    crash, so a live PID does not by itself prove an update is running.
 2. If `<exe>` is missing and `<exe>.old` exists, restore the backup by
    renaming `<exe>.old` back to `<exe>`.
 3. Remove `<exe>.lock` and any `<exe>.lock.ctl`.
-4. Run `teams-cli update` again.
+4. Run `go-teams update` again.
 
 > [!WARNING]
 > Never delete `<exe>.lock` while an update might still be running. Removing
@@ -751,24 +761,34 @@ persists. Follow these steps in order:
 ## Configuration
 
 The CLI reads a YAML configuration file. Pass `--config <path>` (`-f`) to use a
-specific file. Without it, `teams-cli` uses the first file that exists:
+specific file. Without it, `go-teams` uses the first file that exists:
 
 1. `./config.yaml` in the working directory
 2. `config.yaml` next to the executable
-3. the per-user config directory: `%APPDATA%\teams-cli\config.yaml` on
-   Windows, `~/.config/teams-cli/config.yaml` on Linux
+3. the per-user config directory: `%APPDATA%\go-teams\config.yaml` on
+   Windows, `~/.config/go-teams/config.yaml` on Linux
 
 When none exists, built-in defaults apply. Keys you omit keep their built-in
-defaults. Run [`teams-cli generate-config`](#generating-a-configuration-file)
+defaults. Run [`go-teams generate-config`](#generating-a-configuration-file)
 to create a fully commented starting file; the same template ships as
 [`config.example.yaml`](../config.example.yaml).
 
+> [!NOTE]
+> **Migrating an existing `teams-cli` configuration and browser profile:** When
+> upgrading from `teams-cli`, rename or move `%APPDATA%\teams-cli` to
+> `%APPDATA%\go-teams` and `%LOCALAPPDATA%\teams-cli\profile` to
+> `%LOCALAPPDATA%\go-teams\profile` (or `~/.config/teams-cli` to
+> `~/.config/go-teams` on Linux). Alternatively, run `go-teams auth` to create
+> a fresh profile under `go-teams` and securely delete the orphaned
+> `teams-cli\profile` folder so cached Microsoft 365 session tokens are not left
+> behind on disk.
+
 ```yaml
-output_dir: /home/user/.config/teams-cli/transcripts
+output_dir: /home/user/.config/go-teams/transcripts
 # output_file: /home/user/transcripts/standup.md   # fixed file path; takes precedence over output_dir
 filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 category: standup
-profile_dir: /home/user/.config/teams-cli/profile
+profile_dir: /home/user/.config/go-teams/profile
 browser_path: /usr/bin/google-chrome
 default_account: alice@contoso.com
 bot_name: Transcription Agent
@@ -817,18 +837,18 @@ Omitting both `headless` and `headed` opens a visible browser window, so
 interactive sign-in works out of the box. Set `headless: true` for unattended
 runs. For the single-capture commands (the root command, `join`, `captions`,
 and `auth`), command-line flags override every top-level config value (see
-[Output target precedence](#output-target-precedence)). `teams-cli schedule` is
+[Output target precedence](#output-target-precedence)). `go-teams schedule` is
 the exception: global `schedule` flags override top-level `config.yaml`
 defaults first, and each `meetings:` entry's per-meeting settings (`mode` /
 `capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`,
 `lobby_timeout`, `category`, `capture_audio` / `audio`, and `output_dir`) then
 override those flags for that meeting. See
-[Built-in daemon scheduling (teams-cli schedule)](#built-in-daemon-scheduling-teams-cli-schedule).
+[Built-in daemon scheduling (go-teams schedule)](#built-in-daemon-scheduling-go-teams-schedule).
 
 ## Project layout
 
 ```text
-cmd/teams-cli/        CLI entrypoint
+cmd/go-teams/         CLI entrypoint
 internal/audio/       PCM-to-MP3 encoder for meeting and recap audio
 internal/browser/     chromedp allocator, stealth flags, live meeting and recap runner
 internal/capture/     Capture session, output paths, filename templates, and file writes
@@ -883,8 +903,8 @@ The opt-in compiled-executable harness also verifies recap and AI summary
 output without connecting to a real tenant:
 
 ```powershell
-go build -o .\bin\teams-cli.exe .\cmd\teams-cli
-$env:GO_TEAMS_BINARY = (Resolve-Path .\bin\teams-cli.exe).Path
+go build -o .\bin\go-teams.exe .\cmd\go-teams
+$env:GO_TEAMS_BINARY = (Resolve-Path .\bin\go-teams.exe).Path
 go test ./internal/cli -run TestCompiledBinaryCapturesRecapToExplicitOutput -count=1
 ```
 

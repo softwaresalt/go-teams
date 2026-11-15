@@ -85,6 +85,19 @@ The [user guide](docs/USER_GUIDE.md#commands) lists every command, and
 [Compiled executable and explicit output file](docs/USER_GUIDE.md#compiled-executable-and-explicit-output-file)
 documents the capture flags.
 
+Every command has detailed built-in help with examples. Run
+`teams-cli <subcommand> --help` or `teams-cli help <subcommand>`, for example:
+
+```text
+teams-cli join --help
+teams-cli schedule --help
+teams-cli help captions
+```
+
+Name a real subcommand. Passing the literal placeholder `[command]` (or any
+other word that is not a subcommand) prints a short note followed by the root
+help instead of subcommand help.
+
 ## Key rules at a glance
 
 ### Output target precedence
@@ -117,6 +130,14 @@ then `config.yaml` next to the executable, then the per-user config directory.
 Create a commented template with `teams-cli generate-config`; the same template
 ships as [`config.example.yaml`](config.example.yaml). The
 [user guide](docs/USER_GUIDE.md#configuration) documents every key and alias.
+
+Command-line flags override top-level `config.yaml` settings. In
+`teams-cli schedule`, global `schedule` flags are applied to the base
+configuration first, and the per-meeting `meetings:` settings in `config.yaml`
+then override those flags for that entry. See
+[Configuration](docs/USER_GUIDE.md#configuration) and
+[Built-in daemon scheduling](docs/USER_GUIDE.md#built-in-daemon-scheduling-teams-cli-schedule)
+for the full precedence rules.
 
 ## Documentation
 

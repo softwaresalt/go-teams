@@ -34,14 +34,18 @@ After pushing any fix, do NOT trust an empty unresolved-thread list until a
 **fresh** Copilot review exists for the current HEAD:
 
 1. Record the pushed HEAD SHA.
-2. Poll `pullRequest.reviews` until there is a Copilot review whose
-   `commit.oid` equals the pushed HEAD SHA. Do **not** rely on `submittedAt`: a
-   review that started for the previous SHA can finish (submit) after the push,
-   so a later timestamp does not prove the review covered the new HEAD. The
-   `commit.oid` match is the only reliable signal. Use the back-off cadence
-   (2-5 min, up to ~15 min).
-3. Only then evaluate unresolved threads; address each; re-verify.
-4. Merge only when the latest Copilot review is at the current HEAD AND there are
+2. If GitHub did not automatically re-queue `copilot-pull-request-reviewer` on
+   the follow-up push, re-request the bot review via GraphQL `requestReviews`
+   using `botIds: ["BOT_kgDOCnlnWA"]` (the REST `requested_reviewers` endpoint
+   ignores bot logins and returns `requested_reviewers: []` or HTTP 422).
+3. Poll `pullRequest.reviews` (or run `autoharness gate copilot-review <pr> --repo softwaresalt/go-teams --max-wait <seconds> --json`)
+   until there is a Copilot review whose `commit.oid` equals the pushed HEAD
+   SHA. Do **not** rely on `submittedAt`: a review that started for the previous
+   SHA can finish (submit) after the push, so a later timestamp does not prove
+   the review covered the new HEAD. The `commit.oid` match is the only reliable
+   signal. Use the back-off cadence (2-5 min, up to ~15 min).
+4. Only then evaluate unresolved threads; address each; re-verify.
+5. Merge only when the latest Copilot review is at the current HEAD AND there are
    zero unresolved threads.
 
 Admin fallback bypasses required checks/reviews but MUST NOT be used to merge

@@ -67,7 +67,7 @@ func newFixture(t *testing.T, current string, releases ...release) *fixture {
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 
-	f.exePath = filepath.Join(t.TempDir(), "teams-cli")
+	f.exePath = filepath.Join(t.TempDir(), "go-teams")
 	require.NoError(t, os.WriteFile(f.exePath, []byte("OLD-BINARY"), 0o755))
 	f.updater = New(Config{
 		HTTPClient:     f.srv.Client(),
@@ -91,6 +91,7 @@ func (f *fixture) recorded() []string {
 }
 
 func (f *fixture) handle(w http.ResponseWriter, r *http.Request) {
+	assert.Equal(f.t, "go-teams-updater", r.Header.Get("User-Agent"))
 	f.mu.Lock()
 	f.paths = append(f.paths, r.URL.Path)
 	f.mu.Unlock()
@@ -159,23 +160,27 @@ func (f *fixture) dirEntries() []string {
 var newBin = []byte("NEW-BINARY-V1.2.0")
 
 func TestAssetName(t *testing.T) {
-	assert.Equal(t, "teams-cli-windows-amd64.exe", AssetName("windows", "amd64"))
-	assert.Equal(t, "teams-cli-windows-arm64.exe", AssetName("windows", "arm64"))
-	assert.Equal(t, "teams-cli-linux-amd64", AssetName("linux", "amd64"))
+	assert.Equal(t, "go-teams-windows-amd64.exe", AssetName("windows", "amd64"))
+	assert.Equal(t, "go-teams-windows-arm64.exe", AssetName("windows", "arm64"))
+	assert.Equal(t, "go-teams-linux-amd64", AssetName("linux", "amd64"))
+	assert.Equal(t, "go-teams-linux-arm64", AssetName("linux", "arm64"))
+	assert.Equal(t, "go-teams-darwin-amd64", AssetName("darwin", "amd64"))
+	assert.Equal(t, "go-teams-darwin-arm64", AssetName("darwin", "arm64"))
+	assert.Equal(t, ".go-teams-update-*", tempPattern)
 }
 
 func TestParseChecksums(t *testing.T) {
 	data := []byte("" +
-		strings.Repeat("A", 64) + "  ./teams-cli-windows-amd64.exe\n" +
-		strings.Repeat("b", 64) + " *teams-cli-windows-arm64.exe\r\n" +
+		strings.Repeat("A", 64) + "  ./go-teams-windows-amd64.exe\n" +
+		strings.Repeat("b", 64) + " *go-teams-windows-arm64.exe\r\n" +
 		strings.Repeat("c", 64) + "  plain-name\n" +
 		"short  bad-digest\n" +
 		"not-hex-" + strings.Repeat("z", 56) + "  bad-hex\n" +
 		"\n" +
 		"justonefield\n")
 	got := parseChecksums(data)
-	assert.Equal(t, strings.Repeat("a", 64), got["teams-cli-windows-amd64.exe"])
-	assert.Equal(t, strings.Repeat("b", 64), got["teams-cli-windows-arm64.exe"])
+	assert.Equal(t, strings.Repeat("a", 64), got["go-teams-windows-amd64.exe"])
+	assert.Equal(t, strings.Repeat("b", 64), got["go-teams-windows-arm64.exe"])
 	assert.Equal(t, strings.Repeat("c", 64), got["plain-name"])
 	assert.NotContains(t, got, "bad-digest")
 	assert.NotContains(t, got, "bad-hex")
@@ -275,7 +280,7 @@ func TestDownloadErrorsRedactSignedURLQuery(t *testing.T) {
 		})
 	}))
 	t.Cleanup(api.Close)
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	require.NoError(t, os.WriteFile(exe, []byte("OLD-BINARY"), 0o755))
 	u := New(Config{HTTPClient: api.Client(), APIBaseURL: api.URL, CurrentVersion: "1.0.0",
 		GOOS: testOS, GOARCH: testArch, ExecutablePath: exe})
@@ -318,7 +323,7 @@ func TestUpdateReplacesExecutable(t *testing.T) {
 	assert.True(t, res.UpdateAvailable)
 	assert.Equal(t, "1.2.0", res.LatestVersion)
 	assert.Equal(t, string(newBin), f.exeContent())
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries(), "no temp or .old files may remain")
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries(), "no temp or .old files may remain")
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(f.exePath)
 		require.NoError(t, err)
@@ -545,7 +550,7 @@ func TestUpdateRejectsChecksumMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrChecksumMismatch)
 	assert.False(t, res.Updated)
 	assert.Equal(t, "OLD-BINARY", f.exeContent())
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries(), "temp file must be removed on mismatch")
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries(), "temp file must be removed on mismatch")
 }
 
 func TestUpdateFailsClosedWithoutVerifiableChecksum(t *testing.T) {
@@ -567,7 +572,7 @@ func TestUpdateFailsClosedWithoutVerifiableChecksum(t *testing.T) {
 			require.ErrorIs(t, err, tt.wantErr)
 			assert.False(t, res.Updated)
 			assert.Equal(t, "OLD-BINARY", f.exeContent())
-			assert.Equal(t, []string{"teams-cli"}, f.dirEntries())
+			assert.Equal(t, []string{"go-teams"}, f.dirEntries())
 		})
 	}
 }
@@ -579,7 +584,7 @@ func TestUpdateBinarySizeCap(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds")
 	assert.Equal(t, "OLD-BINARY", f.exeContent())
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries())
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries())
 }
 
 func TestUpdateChecksumSizeCap(t *testing.T) {
@@ -615,7 +620,7 @@ func TestRejectsInsecureNonLoopbackURLs(t *testing.T) {
 		require.ErrorIs(t, err, ErrInsecureURL)
 		assert.False(t, res.Updated)
 		assert.Equal(t, "OLD-BINARY", f.exeContent())
-		assert.Equal(t, []string{"teams-cli"}, f.dirEntries())
+		assert.Equal(t, []string{"go-teams"}, f.dirEntries())
 	})
 	t.Run("redirect to insecure host", func(t *testing.T) {
 		redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -673,7 +678,7 @@ func TestUpdateRollsBackWhenFinalRenameFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "simulated rename failure")
 	assert.False(t, res.Updated)
 	assert.Equal(t, "OLD-BINARY", f.exeContent(), "previous binary must be restored from .old")
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries(), "temp and .old must be cleaned up")
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries(), "temp and .old must be cleaned up")
 	assert.Equal(t, 3, calls, "exe->old, tmp->exe (fails), old->exe (rollback)")
 }
 
@@ -698,7 +703,7 @@ func TestUpdateReplacesStaleOldFile(t *testing.T) {
 	_, err := f.updater.Update(context.Background(), "", false)
 	require.NoError(t, err)
 	assert.Equal(t, string(newBin), f.exeContent())
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries())
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries())
 }
 
 func TestUpdateHonorsContextCancellation(t *testing.T) {
@@ -714,7 +719,7 @@ func TestUpdateHonorsContextCancellation(t *testing.T) {
 // release it even after the caller has canceled its context.
 func TestUpdateReleaseSucceedsWhenCallerContextCanceled(t *testing.T) {
 	u := New(Config{})
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	release, err := u.acquireSwapLock(ctx, exe)
@@ -749,7 +754,7 @@ func TestUpdatePausedOrStaleHolderNeverEvictedAndClassifiedInError(t *testing.T)
 		{"live", true, "live"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			exe := filepath.Join(t.TempDir(), "teams-cli")
+			exe := filepath.Join(t.TempDir(), "go-teams")
 			lock := exe + ".lock"
 			content := fmt.Sprintf(`{"pid":1234,"token":"holder","created_at":%q}`, now.Add(-3*time.Minute).Format(time.RFC3339Nano))
 			require.NoError(t, os.WriteFile(lock, []byte(content), 0o600))
@@ -765,6 +770,8 @@ func TestUpdatePausedOrStaleHolderNeverEvictedAndClassifiedInError(t *testing.T)
 			assert.Contains(t, strings.ToLower(err.Error()), tt.want)
 			assert.Contains(t, err.Error(), "1234")
 			assert.Contains(t, strings.ToLower(err.Error()), "manual")
+			assert.Contains(t, err.Error(), "go-teams update")
+			assert.NotContains(t, err.Error(), "teams-cli")
 			if tt.alive {
 				assert.Contains(t, strings.ToLower(err.Error()), "reus")
 			}
@@ -776,7 +783,7 @@ func TestUpdatePausedOrStaleHolderNeverEvictedAndClassifiedInError(t *testing.T)
 }
 
 func TestSwapLockReleaseInterleavedWithReplacementDoesNotDeleteNewOwnerLock(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	u := New(Config{})
 	release, err := u.acquireSwapLock(context.Background(), exe)
 	require.NoError(t, err)
@@ -806,7 +813,7 @@ func TestUpdateFailsWhenLockHeld(t *testing.T) {
 	got, err := os.ReadFile(lock)
 	require.NoError(t, err)
 	assert.Equal(t, content, got)
-	assert.Equal(t, []string{"teams-cli", "teams-cli.lock"}, f.dirEntries())
+	assert.Equal(t, []string{"go-teams", "go-teams.lock"}, f.dirEntries())
 }
 
 func TestLockPathsFailClosedWhenExclusiveCreateIsDenied(t *testing.T) {
@@ -815,7 +822,7 @@ func TestLockPathsFailClosedWhenExclusiveCreateIsDenied(t *testing.T) {
 	assert.False(t, lockCreateContended(missing, os.ErrInvalid))
 	for _, control := range []bool{false, true} {
 		t.Run(fmt.Sprintf("control=%t", control), func(t *testing.T) {
-			exe := filepath.Join(t.TempDir(), "teams-cli")
+			exe := filepath.Join(t.TempDir(), "go-teams")
 			path := exe + ".lock"
 			if control {
 				path += ".ctl"
@@ -920,7 +927,7 @@ func main() {
 	if len(os.Args) != 2 || os.Args[1] != "--version" { os.Exit(1) }
 	v := os.Getenv("UPDATER_TEST_VERSION")
 	if v == "" { v = "dev" }
-	fmt.Println("teams-cli version", v)
+	fmt.Println("go-teams version", v)
 }`
 	require.NoError(t, os.WriteFile(source, []byte(program), 0o600))
 	built := filepath.Join(dir, "fixture.exe")
@@ -1025,7 +1032,7 @@ func TestSwapRunningImageVersionGuardWithoutProc(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			exe := filepath.Join(dir, "teams-cli")
+			exe := filepath.Join(dir, "go-teams")
 			tmp := filepath.Join(dir, "download")
 			require.NoError(t, os.WriteFile(exe, []byte("OLD"), 0o755))
 			require.NoError(t, os.WriteFile(tmp, []byte("NEW"), 0o755))
@@ -1060,7 +1067,7 @@ func TestSwapRejectsSameVersionReplacementWithoutRunningImageProof(t *testing.T)
 		t.Skip("Linux verifies the running image through /proc/self/exe")
 	}
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	tmp := filepath.Join(dir, "download")
 	// This replacement was installed before the updater took its baseline.
 	require.NoError(t, os.WriteFile(exe, []byte("REPLACEMENT-SAME-VERSION"), 0o755))
@@ -1079,7 +1086,7 @@ func TestSwapRejectsSameVersionReplacementWithoutRunningImageProof(t *testing.T)
 
 func TestReleaseControlLockPreservesReplacement(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	u := New(Config{})
 	release, err := u.acquireReleaseControlLock(context.Background(), exe)
 	require.NoError(t, err)
@@ -1192,7 +1199,7 @@ func TestUpdatePreSwapStatWaitsWhileConcurrentSwapMovesExecutableAside(t *testin
 	assert.True(t, a.result.Updated)
 	assert.True(t, b.result.Updated)
 	assert.Equal(t, string(newBin), f.exeContent())
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries())
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries())
 }
 
 func TestUpdateReleaseSucceedsWhenCallerContextCanceledDuringSwap(t *testing.T) {
@@ -1217,7 +1224,7 @@ func TestUpdateReleaseSucceedsWhenCallerContextCanceledDuringSwap(t *testing.T) 
 }
 
 func TestUpdateTwoConcurrentContendersSerializeWithoutEvictionRace(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	holder := New(Config{})
 	release, err := holder.acquireSwapLock(context.Background(), exe)
 	require.NoError(t, err)
@@ -1287,7 +1294,7 @@ func TestUpdateTwoConcurrentContendersSerializeWithoutEvictionRace(t *testing.T)
 
 func TestUpdateOverlappingBaseAndOldInstallationsSerialize(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	old := exe + ".old"
 	baseTmp := filepath.Join(dir, "base-download")
 	oldTmp := filepath.Join(dir, "old-download")
@@ -1357,7 +1364,7 @@ func TestUpdateOverlappingBaseAndOldInstallationsSerialize(t *testing.T) {
 
 func TestUpdateOverlappingBaseHeldBlocksOldInstallation(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	old := exe + ".old"
 	baseTmp := filepath.Join(dir, "base-download")
 	oldTmp := filepath.Join(dir, "old-download")
@@ -1433,7 +1440,7 @@ func TestUpdateOverlappingBaseHeldBlocksCaseVariantOldInstallation(t *testing.T)
 		t.Skip("case-variant .old aliases only exist on case-insensitive filesystems")
 	}
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	variant := exe + ".OLD"
 	baseTmp := filepath.Join(dir, "base-download")
 	variantTmp := filepath.Join(dir, "variant-download")
@@ -1489,7 +1496,7 @@ func TestUpdateOverlappingBaseHeldBlocksCaseVariantOldInstallation(t *testing.T)
 }
 
 func TestSwapRejectsTargetsCollidingWithLockMarkerNames(t *testing.T) {
-	for _, name := range []string{"teams-cli.lock", "teams-cli.lock.ctl", "teams-cli.lock.old", "teams-cli.LOCK"} {
+	for _, name := range []string{"go-teams.lock", "go-teams.lock.ctl", "go-teams.lock.old", "go-teams.LOCK"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			target := filepath.Join(dir, name)
@@ -1510,7 +1517,7 @@ func TestSwapRejectsTargetsCollidingWithLockMarkerNames(t *testing.T) {
 }
 
 func TestSwapOldChainReleasesAcquiredLocksOnCancellation(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	target := exe + ".old.old"
 	require.NoError(t, os.WriteFile(target+".lock", []byte("holder"), 0o600))
 	u := New(Config{})
@@ -1564,7 +1571,7 @@ func TestSwapOldChainReleasesAcquiredLocksOnCancellation(t *testing.T) {
 
 func TestSwapOldChainAcquiresAndReleasesInOrder(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	target := exe + ".old.old"
 	tmp := filepath.Join(dir, "download")
 	require.NoError(t, os.WriteFile(target, []byte("old"), 0o755))
@@ -1588,7 +1595,7 @@ func TestSwapOldChainAcquiresAndReleasesInOrder(t *testing.T) {
 }
 
 func TestSwapOldChainReleasesAcquiredLocksOnLockTimeout(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	target := exe + ".old"
 	require.NoError(t, os.WriteFile(target+".lock", []byte("holder"), 0o600))
 	u := New(Config{})
@@ -1602,7 +1609,7 @@ func TestSwapOldChainReleasesAcquiredLocksOnLockTimeout(t *testing.T) {
 }
 
 func TestUpdateTwoConcurrentControlLockContendersNeverStealLiveControlLock(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	control := []byte("live control owner")
 	require.NoError(t, os.WriteFile(exe+".lock.ctl", control, 0o600))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1639,7 +1646,7 @@ func TestUpdateTwoConcurrentControlLockContendersNeverStealLiveControlLock(t *te
 
 func TestExecutablePathPreservesLegitimateOldFilenameAndFailsClosedOnRenamedRunningImage(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	old := exe + ".old"
 	require.NoError(t, os.WriteFile(exe, []byte("current"), 0o755))
 	require.NoError(t, os.WriteFile(old, []byte("old"), 0o755))
@@ -1928,7 +1935,7 @@ func TestUpdateNonForceContenderRejectsConcurrentUpgrade(t *testing.T) {
 		t.Fatal("contender did not finish")
 	}
 	assert.Equal(t, "VERSION-3", f.exeContent())
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries())
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries())
 }
 
 // 018.001-T: a contender must not remove the first updater's rollback copy.
@@ -2013,12 +2020,12 @@ func TestUpdateConcurrentSwapsDoNotDeleteRollbackCopy(t *testing.T) {
 		t.Fatal("contender did not finish")
 	}
 	assert.Equal(t, string(newBin), f.exeContent())
-	assert.Equal(t, []string{"teams-cli"}, f.dirEntries())
+	assert.Equal(t, []string{"go-teams"}, f.dirEntries())
 }
 
 // 018.001-T: canceled acquisition context must not cancel release's control wait.
 func TestReleaseWaitsForControlLockAfterCallerCancellation(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	u := New(Config{})
 	u.ctlLockWaitTimeout = time.Second
 	u.ctlLockPollInterval = time.Millisecond

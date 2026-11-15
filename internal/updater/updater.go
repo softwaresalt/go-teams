@@ -1,9 +1,9 @@
-// Package updater implements the teams-cli self-update flow: GitHub Releases
+// Package updater implements the go-teams self-update flow: GitHub Releases
 // lookup, SHA-256 verification against SHA256SUMS, and rollback-safe
 // executable replacement.
 //
 // Release assets are the raw platform executables published by
-// .github/workflows/release.yml (teams-cli-<goos>-<goarch>[.exe]) plus a
+// .github/workflows/release.yml (go-teams-<goos>-<goarch>[.exe]) plus a
 // SHA256SUMS file. The updater never replaces the installed executable with a
 // download that is not verified against SHA256SUMS.
 package updater
@@ -37,7 +37,7 @@ import (
 const (
 	// DefaultAPIBaseURL is the GitHub REST API root.
 	DefaultAPIBaseURL = "https://api.github.com"
-	// DefaultRepo is the owner/name repository that publishes teams-cli releases.
+	// DefaultRepo is the owner/name repository that publishes go-teams releases.
 	DefaultRepo = "softwaresalt/go-teams"
 	// ChecksumAsset is the release asset listing SHA-256 digests of binaries.
 	ChecksumAsset = "SHA256SUMS"
@@ -49,7 +49,7 @@ const (
 	defaultMaxChecksumBytes    = 1 << 20   // SHA256SUMS
 	defaultMaxBinaryBytes      = 256 << 20 // platform executable
 	maxRedirects               = 10
-	tempPattern                = ".teams-cli-update-*"
+	tempPattern                = ".go-teams-update-*"
 	oldSuffix                  = ".old"
 	lockSuffix                 = ".lock"
 	lockCtlSuffix              = ".ctl"
@@ -126,7 +126,7 @@ type Result struct {
 	Updated bool
 }
 
-// Updater checks for and installs teams-cli releases.
+// Updater checks for and installs go-teams releases.
 type Updater struct {
 	cfg                      Config
 	launchSnapshot           executableSnapshot
@@ -173,7 +173,7 @@ func waitPoll(ctx context.Context, interval time.Duration) error {
 }
 
 func (u *Updater) lockDiagnostic(path string) error {
-	recovery := "manual recovery: confirm all teams-cli update processes have exited; if the executable is missing and its .old backup exists, restore .old to the executable; then remove the .lock and any .lock.ctl"
+	recovery := "manual recovery: confirm all go-teams update processes have exited; if the executable is missing and its .old backup exists, restore .old to the executable; then remove the .lock and any .lock.ctl"
 	data, err := os.ReadFile(path)
 	var owner lockOwner
 	if err != nil || json.Unmarshal(data, &owner) != nil || owner.PID <= 0 || owner.Token == "" || owner.CreatedAt.IsZero() {
@@ -184,7 +184,7 @@ func (u *Updater) lockDiagnostic(path string) error {
 		if !u.isProcessAlive(owner.PID) {
 			return fmt.Errorf("%w: %s appears orphaned by dead PID %d (age %s); %s", ErrUpdateLocked, path, owner.PID, age, recovery)
 		}
-		return fmt.Errorf("%w: %s held by live PID %d past lockStaleAfter (age %s); if no teams-cli update process is running the OS may have reused PID %d; %s", ErrUpdateLocked, path, owner.PID, age, owner.PID, recovery)
+		return fmt.Errorf("%w: %s held by live PID %d past lockStaleAfter (age %s); if no go-teams update process is running the OS may have reused PID %d; %s", ErrUpdateLocked, path, owner.PID, age, owner.PID, recovery)
 	}
 	return fmt.Errorf("%w: active contention at %s by PID %d (age %s); %s", ErrUpdateLocked, path, owner.PID, age, recovery)
 }
@@ -570,7 +570,7 @@ func processAlive(pid int) bool {
 
 // AssetName returns the release binary name for goos/goarch.
 func AssetName(goos, goarch string) string {
-	name := "teams-cli-" + goos + "-" + goarch
+	name := "go-teams-" + goos + "-" + goarch
 	if goos == "windows" {
 		name += ".exe"
 	}
@@ -966,7 +966,7 @@ func (u *Updater) open(ctx context.Context, rawURL string) (*http.Response, erro
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json, application/octet-stream")
-	req.Header.Set("User-Agent", "teams-cli-updater")
+	req.Header.Set("User-Agent", "go-teams-updater")
 	resp, err := u.client().Do(req)
 	if err != nil {
 		// Signed asset URLs can carry tokens in the query string; keep them out

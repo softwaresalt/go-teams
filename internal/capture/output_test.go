@@ -37,6 +37,11 @@ func TestSanitizeMeetingID(t *testing.T) {
 			url:  "://@@@",
 			want: "meeting",
 		},
+		{
+			name: "recap url without meeting token strips query secrets before slugifying",
+			url:  "https://teams.cloud.microsoft/l/meetingrecap?driveId=SecretDrive999&sitePath=SecretSite&p=SecretPasscode123",
+			want: "https-teams-cloud-microsoft-l-meetingrecap",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -334,5 +339,50 @@ func TestSetupOutputRejectsHardLinkedTranscriptAndAudioAlias(t *testing.T) {
 	}
 	if string(got) != "original" {
 		t.Fatalf("expected aliased file to remain untouched, got %q", string(got))
+	}
+}
+
+func TestSetupOutputUsesMeetingStartForFilenameAndRedactsSourceURL(t *testing.T) {
+	dir := t.TempDir()
+	captureNow := time.Date(2026, 11, 14, 18, 30, 0, 0, time.UTC)
+	meetingStart := time.Date(2026, 11, 13, 9, 15, 0, 0, time.UTC)
+
+	out, err := setupOutput(OutputConfig{
+		Dir:              dir,
+		FilenameTemplate: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md",
+		MeetingURL:       "https://teams.live.com/meet/9367043528176?p=SuperSecretPasscode999#fragToken=abc",
+		MeetingTitle:     "Prior Day Architecture Review",
+		Category:         "ENG",
+		Now:              captureNow,
+		MeetingStart:     meetingStart,
+		CaptionsOnly:     true,
+	})
+	if err != nil {
+		t.Fatalf("setupOutput: %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	wantFilename := "ENG-PriorDayArchitectureReview-transcript-20261113.md"
+	if filepath.Base(out.TranscriptPath) != wantFilename {
+		t.Fatalf("filename = %q, want %q (using MeetingStart date 20261113, not captureNow 20261114)", filepath.Base(out.TranscriptPath), wantFilename)
+	}
+
+	data, err := os.ReadFile(out.TranscriptPath)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "**Meeting Start:** 2026-11-13 09:15 UTC") {
+		t.Errorf("expected Meeting Start 2026-11-13 09:15 UTC in header, got:\n%s", content)
+	}
+	if !strings.Contains(content, "**Source:** [Teams meeting recap](https://teams.live.com/meet/9367043528176)") {
+		t.Errorf("expected redacted Source URL in header, got:\n%s", content)
+	}
+	for _, secret := range []string{"SuperSecretPasscode999", "p=", "fragToken"} {
+		if strings.Contains(content, secret) {
+			t.Errorf("transcript header leaked %q:\n%s", secret, content)
+		}
 	}
 }

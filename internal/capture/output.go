@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/softwaresalt/go-teams/internal/teams"
 	"github.com/softwaresalt/go-teams/internal/transcript"
 )
 
@@ -84,12 +85,13 @@ type OutputConfig struct {
 	Attendees []string
 	// BotName is retained for compatibility with existing callers.
 	BotName string
-	// Now is the capture start time used for output file naming and as the
-	// fallback header start time; a zero value defaults to time.Now.
+	// Now is the capture start time used as the fallback for output file
+	// naming and the transcript header start time when MeetingStart is zero; a
+	// zero value defaults to time.Now.
 	Now time.Time
 	// MeetingStart is the optional discovered meeting start time written to
-	// the transcript header (**Meeting Start:**) when non-zero, keeping Now as
-	// the per-capture timestamp for file naming.
+	// the transcript header (**Meeting Start:**) and used for date/time
+	// placeholders in output file naming when non-zero.
 	MeetingStart time.Time
 	// CaptionsOnly skips creating the MP3 audio output file when only live
 	// captions are being captured to Markdown.
@@ -118,8 +120,12 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	headerStart := now
+	if !cfg.MeetingStart.IsZero() {
+		headerStart = cfg.MeetingStart
+	}
 	id := sanitizeMeetingID(cfg.MeetingURL)
-	mdFilename := FormatTranscriptFilename(cfg.FilenameTemplate, cfg, now, id)
+	mdFilename := FormatTranscriptFilename(cfg.FilenameTemplate, cfg, headerStart, id)
 	base := strings.TrimSuffix(mdFilename, filepath.Ext(mdFilename))
 
 	explicitFile := cfg.FilePath
@@ -174,16 +180,12 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
-	headerStart := now
-	if !cfg.MeetingStart.IsZero() {
-		headerStart = cfg.MeetingStart
-	}
 	w := transcript.NewWriter(mdFile)
 	if err := w.WriteHeader(transcript.Metadata{
 		MeetingID:    id,
 		MeetingTitle: cfg.MeetingTitle,
 		Category:     cfg.Category,
-		SourceURL:    cfg.MeetingURL,
+		SourceURL:    redactSourceURL(cfg.MeetingURL),
 		StartTime:    headerStart,
 		Timezone:     cfg.Timezone,
 		Attendees:    cfg.Attendees,
@@ -251,6 +253,18 @@ func (o *Output) Close() error {
 	return errors.Join(errs...)
 }
 
+func redactSourceURL(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	redacted := teams.RedactURL(trimmed)
+	if redacted == "" || redacted == "[invalid-url]" || strings.Contains(redacted, "/:") {
+		return ""
+	}
+	return redacted
+}
+
 // sanitizeMeetingID derives a filesystem-safe identifier from a Teams meeting
 // URL. It prefers the embedded "meeting_..." token when present, lowercases the
 // value, replaces every unsafe run with a single hyphen, and caps the length.
@@ -261,10 +275,17 @@ func sanitizeMeetingID(rawURL string) string {
 	if decoded, err := url.QueryUnescape(rawURL); err == nil {
 		candidate = decoded
 	}
+	pathCandidate := strings.SplitN(candidate, "?", 2)[0]
 	if token := meetingIDToken.FindString(candidate); token != "" {
 		candidate = token
-	} else if m := meetPathToken.FindStringSubmatch(candidate); len(m) == 2 {
+	} else if m := meetPathToken.FindStringSubmatch(pathCandidate); len(m) == 2 {
 		candidate = "meet-" + m[1]
+	} else {
+		redacted := teams.RedactURL(strings.TrimSpace(rawURL))
+		if redacted == "" || redacted == "[invalid-url]" || strings.Contains(redacted, "/:") {
+			return "meeting"
+		}
+		candidate = redacted
 	}
 	candidate = strings.ToLower(candidate)
 	candidate = unsafeIDChars.ReplaceAllString(candidate, "-")

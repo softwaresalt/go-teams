@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -169,9 +170,22 @@ func sanitizeSourceURL(raw string) string {
 		return ""
 	}
 	cleaned := strings.Map(controlToSpace, trimmed)
-	cleaned = strings.ReplaceAll(cleaned, " ", "%20")
-	cleaned = strings.ReplaceAll(cleaned, ")", "%29")
-	return cleaned
+	u, err := url.Parse(cleaned)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
+		return ""
+	}
+	if u.Hostname() == "" || strings.Contains(u.Host, "@") || strings.Contains(u.Path, "/:") {
+		return ""
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
+	out := u.String()
+	out = strings.ReplaceAll(out, " ", "%20")
+	out = strings.ReplaceAll(out, ")", "%29")
+	return out
 }
 
 // WriteEvent appends a formatted caption event to the transcript. The

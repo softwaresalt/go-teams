@@ -88,7 +88,7 @@ repo:
   name: "go-teams"
 
 structure:
-  source_layout: "cmd/teams-cli/, internal/{audio,browser,capture,cli,config,scheduler,teams,transcript}/"
+  source_layout: "cmd/go-teams/, internal/{audio,browser,capture,cli,config,scheduler,teams,transcript}/"
   test_layout: "co-located *_test.go files"
   doc_layout: "docs/design-docs/, docs/product-specs/"
 
@@ -108,12 +108,12 @@ runtime_validation:
         probe_hints:
           - id: "cli-help"
             kind: "command"
-            target: "teams-cli root command"
-            command: "go run ./cmd/teams-cli --help"
+            target: "go-teams root command"
+            command: "go run ./cmd/go-teams --help"
             expected_signal: "usage text lists auth, join, and schedule subcommands"
             required: true
             evidence_types: ["stdout", "exit-code"]
-            notes: "cmd/teams-cli is scaffolded; this probe is executable today."
+            notes: "cmd/go-teams is scaffolded; this probe is executable today."
           - id: "cli-build"
             kind: "command"
             target: "module build"
@@ -133,8 +133,8 @@ runtime_validation:
         probe_hints:
           - id: "scheduler-dry-run"
             kind: "command"
-            target: "teams-cli schedule command surface"
-            command: "go run ./cmd/teams-cli schedule --help"
+            target: "go-teams schedule command surface"
+            command: "go run ./cmd/go-teams schedule --help"
             expected_signal: "schedule usage text renders and exits 0 without starting a browser"
             required: false
             evidence_types: ["stdout", "exit-code"]

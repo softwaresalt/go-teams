@@ -778,10 +778,16 @@ to create a fully commented starting file; the same template ships as
 > upgrading from `teams-cli`, rename or move `%APPDATA%\teams-cli` to
 > `%APPDATA%\go-teams` and `%LOCALAPPDATA%\teams-cli\profile` to
 > `%LOCALAPPDATA%\go-teams\profile` (or `~/.config/teams-cli` to
-> `~/.config/go-teams` on Linux). Alternatively, run `go-teams auth` to create
-> a fresh profile under `go-teams` and securely delete the orphaned
-> `teams-cli\profile` folder so cached Microsoft 365 session tokens are not left
-> behind on disk.
+> `~/.config/go-teams` on Linux). Update any explicit `profile_dir`,
+> `output_dir`, or `queue_file` paths in `config.yaml`, any `--config` or
+> `--profile-dir` flags in scheduled tasks or scripts, and any pending
+> `--append-ai-summary` lines in `transcription_queue.txt` that reference the
+> old `teams-cli` directory names. Verify that `go-teams` authenticates and any
+> pending queue entries complete before deleting the legacy directories.
+> Alternatively, run `go-teams auth` to create a fresh profile under `go-teams`
+> and securely delete the orphaned `teams-cli\profile` folder once pending work
+> has finished so cached Microsoft 365 session tokens are not left behind on
+> disk.
 
 ```yaml
 output_dir: /home/user/.config/go-teams/transcripts

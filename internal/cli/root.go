@@ -4,6 +4,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,10 +144,23 @@ func newRootCommand(d *deps) *cobra.Command {
 		Short: "Autonomous Microsoft Teams live-transcription and meeting recap capture",
 		Long: "teams-cli captures live captions and Meeting Recap transcripts (including " +
 			"the AI Summary) from Microsoft Teams into local Markdown files.\n\n" +
-			"Examples:\n" +
-			"  teams-cli.exe \"https://teams.cloud.microsoft/l/meetingrecap?...\" \"C:\\out\\transcript.md\" --headless\n" +
-			"  teams-cli.exe --queue transcript-queue.txt\n" +
-			"  teams-cli.exe captions \"https://teams.cloud.microsoft/l/meetingrecap?...\" -o \"C:\\out\\transcript.md\" --headless",
+			"With a meeting URL (and optional output path) it captures directly; use a subcommand for\n" +
+			"other tasks. Replace [command] with a real subcommand and run, for example,\n" +
+			"teams-cli join --help, teams-cli captions --help, teams-cli schedule --help,\n" +
+			"teams-cli auth --help, teams-cli generate-config --help, or teams-cli update --help.\n\n" +
+			"Subcommands: join, captions, schedule, auth, update, generate-config.\n\n" +
+			"Configuration file: pass --config (-f) or let teams-cli use the first file that exists:\n" +
+			"  1. ./config.yaml in the working directory\n" +
+			"  2. config.yaml next to the executable\n" +
+			"  3. the per-user config directory (%APPDATA%\\teams-cli\\config.yaml on Windows,\n" +
+			"     ~/.config/teams-cli/config.yaml on Linux)\n" +
+			"When none exists, built-in defaults apply and a visible browser window opens.\n\n" +
+			captureHelpBody(),
+		Example: "  teams-cli \"https://teams.microsoft.com/meet/synthetic\" \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli \"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic\" -o \"C:\\out\\recap.md\" --headless\n" +
+			"  teams-cli --queue transcript-queue.txt\n" +
+			"  teams-cli captions \"https://teams.microsoft.com/meet/synthetic\" -o \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli join --help",
 		SilenceUsage: true,
 		Version:      version.Version,
 		Args:         cobra.MaximumNArgs(2),
@@ -193,7 +207,70 @@ func newRootCommand(d *deps) *cobra.Command {
 		newUpdateCommand(d),
 		newGenerateConfigCommand(d),
 	)
+	installRootHelpHandler(root)
 	return root
+}
+
+// installRootHelpHandler makes the root help explain a mistyped or placeholder
+// argument. When a positional argument that is neither a subcommand nor a valid
+// Teams meeting URL reaches the root help (for example "teams-cli [command]
+// --help" or "teams-cli help [command]"), a redacted one-line note precedes the
+// normal root help. It also forwards the topic given to "help" so the root help
+// function can see it; Cobra's default help command otherwise drops it. It must
+// be called after all subcommands are attached.
+func installRootHelpHandler(root *cobra.Command) {
+	root.InitDefaultHelpCmd()
+	for _, c := range root.Commands() {
+		if c.Name() != "help" {
+			continue
+		}
+		defaultRun := c.Run
+		c.Run = func(hc *cobra.Command, args []string) {
+			target, rest, err := root.Find(args)
+			if err == nil && target == root && len(rest) > 0 {
+				root.InitDefaultHelpFlag()
+				root.HelpFunc()(root, rest)
+				return
+			}
+			defaultRun(hc, args)
+		}
+		break
+	}
+
+	defaultHelp := root.HelpFunc()
+	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if cmd == root {
+			if posArgs := helpPositionalArgs(cmd, args); len(posArgs) > 0 && teams.ValidateMeetingURL(posArgs[0]) != nil {
+				redacted := teams.RedactArgs([]string{posArgs[0]})
+				// Informational help output only; a failed write to stdout is not actionable (Principle I).
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+					"Note: %q is not a subcommand or a valid Teams meeting URL. "+
+						"Replace [command] with one of the subcommands below "+
+						"(for example: teams-cli join --help, teams-cli captions --help, "+
+						"teams-cli schedule --help, teams-cli auth --help, "+
+						"teams-cli generate-config --help, or teams-cli update --help).\n\n",
+					redacted)
+			}
+		}
+		defaultHelp(cmd, args)
+	})
+}
+
+// helpPositionalArgs returns the positional arguments seen by the root command.
+// After flag parsing it uses the parsed positionals (so flag values such as the
+// path after --config are not mistaken for arguments); otherwise it falls back
+// to the non-flag tokens of args.
+func helpPositionalArgs(cmd *cobra.Command, args []string) []string {
+	if cmd.Flags().Parsed() {
+		return cmd.Flags().Args()
+	}
+	var out []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // loadConfigFrom resolves the effective config path (falling back to the

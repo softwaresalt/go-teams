@@ -132,6 +132,15 @@ reviewed all 10 entries in `docs/compound/` (retaining all 10 and updating
 ## Releasability evidence
 
 * **Invariants preserved**: Leaf-package isolation (`internal/transcript` imports stdlib only), single-binary CGO-free build, URL/passcode redaction (`scheme://host/path`), Recap recording identity isolation, and owner-only (`0o600`/`0o700`) output permissions.
-* **Rollout and rollback**: Single-binary CLI on `main`; rollback via `git revert 89059afb9fd9c02f238cdf91525761e9a1783009`.
-* **Monitoring and validation window**: Observe CI and next interactive/scheduled Recap captures over a 7-day validation window (owner: repository maintainer).
-* **Readiness verdict**: `READY`.
+* **Rollout and rollback**: Single-binary CLI on `main`; rollback via `git revert -m 1 89059afb9fd9c02f238cdf91525761e9a1783009` (retaining the `main`-branch parent to revert the feature merge cleanly).
+* **Monitoring and validation window (7 days, owner: repository maintainer)**:
+  * **Healthy signals**:
+    1. *Tenant Recap capture (`transcripts/*.md`, `slog` output)*: `--mode past-recap` logs `browser: extracted meeting recap transcript` with `entries > 0`, populates `**Meeting Start:**` and `<YYYYMMDD>` filename dates from the meeting's actual start time, redacts `**Source:**` to `scheme://host/path` with zero query/fragment tokens, and omits `# AI Summary` when `--no-ai-summary` is passed; `--recap-audio` writes a non-empty `.mp3` (up to 70 minutes) or removes any 0-byte `.mp3` if audio extraction fails while still preserving `# AI Summary` in the `.md` file.
+    2. *Cold-profile authentication (`slog` output)*: `teams-cli auth` and cold-profile `join` / `captions` without `--account` / `default_account` fail fast with `browser: initial authentication requires --account or default_account in config.yaml`, and with `--account` log `browser: selected default Entra account` (`account=a***@domain`).
+    3. *Windows Edge CDP lifecycle (`netstat -ano -p tcp`)*: Headed Edge launches survive parent stub exit (`procDone`) while `127.0.0.1:<cdp_port>` remains active, and after session exit `netstat -ano -p tcp` shows zero lingering `LISTENING` sockets on the ephemeral `<cdp_port>`.
+  * **Failure signals and rollback triggers**:
+    1. `--mode past-recap` returning 0 transcript utterances when `.ms-List` is populated in the Recap tab, or leaving a 0-byte `.mp3` on disk after an audio error.
+    2. Any query parameter (`?p=`, `driveId=`, `sitePath=`, `threadId=`), fragment, userinfo, or SharePoint `/:` sharing path appearing in `**Source:**` or a fallback `MeetingID` / filename.
+    3. Orphaned `msedge.exe` / `chrome.exe` listener remaining on `127.0.0.1:<cdp_port>` after `cleanup` completes, or premature `browser process exited before meeting admission` while the child browser window is still open.
+    * *Action on trigger*: Halt release distribution and execute `git revert -m 1 89059afb9fd9c02f238cdf91525761e9a1783009`.
+* **Readiness verdict**: `READY` (all local unit, race, Node.js WebAudio, and Windows headless E2E checks passed; live Microsoft 365 tenant integration harness execution is tracked separately under queued shipment `010-S`).

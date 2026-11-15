@@ -127,7 +127,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           # Asset names must match updater.AssetName(goos, goarch):
-          # teams-cli-<goos>-<goarch>, with an .exe suffix only on Windows.
+          # go-teams-<goos>-<goarch>, with an .exe suffix only on Windows.
           EXT=""
           if [ "${GOOS}" = "windows" ]; then EXT=".exe"; fi
           VERSION="${GITHUB_REF_NAME#v}"
@@ -137,12 +137,12 @@ jobs:
             -X github.com/softwaresalt/go-teams/internal/version.Version=${VERSION} \
             -X github.com/softwaresalt/go-teams/internal/version.Commit=${COMMIT} \
             -X github.com/softwaresalt/go-teams/internal/version.BuildDate=${BUILD_DATE}" \
-            -o "dist/teams-cli-${GOOS}-${GOARCH}${EXT}" \
-            ./cmd/teams-cli
+            -o "dist/go-teams-${GOOS}-${GOARCH}${EXT}" \
+            ./cmd/go-teams
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: teams-cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: go-teams-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/
           if-no-files-found: error
 
@@ -179,7 +179,7 @@ jobs:
   #         name: npm-packages
   #         path: |
   #           npm/platforms/*/
-  #           npm/teams-cli-mcp/
+  #           npm/go-teams-mcp/
   #         if-no-files-found: error
 
   # npm-publish:
@@ -233,8 +233,8 @@ jobs:
   #       env:
   #         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
   #       run: |
-  #         echo "Publishing @go-teams/teams-cli-mcp..."
-  #         npm publish ./npm/teams-cli-mcp --access public
+  #         echo "Publishing @go-teams/go-teams-mcp..."
+  #         npm publish ./npm/go-teams-mcp --access public
 
   release:
     name: Publish GitHub Release
@@ -253,16 +253,17 @@ jobs:
         shell: bash
         run: |
           cd artifacts
-          find . -maxdepth 1 -type f -name 'teams-cli-*' -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+          find . -maxdepth 1 -type f -name 'go-teams-*' -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 6
           # Every updater.AssetName(goos, goarch) asset must be listed, matching
           # the optional "*" and "./" prefixes that updater.parseChecksums strips.
           for expected in \
-            teams-cli-linux-amd64 \
-            teams-cli-linux-arm64 \
-            teams-cli-darwin-amd64 \
-            teams-cli-darwin-arm64 \
-            teams-cli-windows-amd64.exe \
-            teams-cli-windows-arm64.exe; do
+            go-teams-linux-amd64 \
+            go-teams-linux-arm64 \
+            go-teams-darwin-amd64 \
+            go-teams-darwin-arm64 \
+            go-teams-windows-amd64.exe \
+            go-teams-windows-arm64.exe; do
             pattern="${expected//./\\.}"
             if ! grep -Eq "^[0-9a-f]{64}[[:space:]]+\*?(\./)?${pattern}$" SHA256SUMS; then
               echo "ERROR: SHA256SUMS is missing an entry for ${expected}" >&2

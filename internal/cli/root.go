@@ -31,7 +31,7 @@ type deps struct {
 	newMeeting func(ctx context.Context, cfg config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error)
 	// newSession builds the capture session that records a joined meeting.
 	newSession func(cfg config.Config, meetingURL string) meetingSession
-	// runUpdate checks for or installs a teams-cli release.
+	// runUpdate checks for or installs a go-teams release.
 	runUpdate func(ctx context.Context, opts updateOptions) (updater.Result, error)
 	// writeTemplate writes the commented configuration template to path,
 	// replacing an existing file only when force is true.
@@ -149,27 +149,27 @@ func newRootCommand(d *deps) *cobra.Command {
 	var configPath string
 	var flags captureFlags
 	root := &cobra.Command{
-		Use:   "teams-cli [meeting-url] [output-markdown-path]",
+		Use:   "go-teams [meeting-url] [output-markdown-path]",
 		Short: "Autonomous Microsoft Teams live-transcription and meeting recap capture",
-		Long: "teams-cli captures live captions and Meeting Recap transcripts (including " +
+		Long: "go-teams captures live captions and Meeting Recap transcripts (including " +
 			"the AI Summary) from Microsoft Teams into local Markdown files.\n\n" +
 			"With a meeting URL (and optional output path) it captures directly; use a subcommand for\n" +
 			"other tasks. Replace [command] with a real subcommand and run, for example,\n" +
-			"teams-cli join --help, teams-cli captions --help, teams-cli schedule --help,\n" +
-			"teams-cli auth --help, teams-cli generate-config --help, or teams-cli update --help.\n\n" +
+			"go-teams join --help, go-teams captions --help, go-teams schedule --help,\n" +
+			"go-teams auth --help, go-teams generate-config --help, or go-teams update --help.\n\n" +
 			"Subcommands: join, captions, schedule, auth, update, generate-config.\n\n" +
-			"Configuration file: pass --config (-f) or let teams-cli use the first file that exists:\n" +
+			"Configuration file: pass --config (-f) or let go-teams use the first file that exists:\n" +
 			"  1. ./config.yaml in the working directory\n" +
 			"  2. config.yaml next to the executable\n" +
-			"  3. the per-user config directory (%APPDATA%\\teams-cli\\config.yaml on Windows,\n" +
-			"     ~/.config/teams-cli/config.yaml on Linux)\n" +
+			"  3. the per-user config directory (%APPDATA%\\go-teams\\config.yaml on Windows,\n" +
+			"     ~/.config/go-teams/config.yaml on Linux)\n" +
 			"When none exists, built-in defaults apply and a visible browser window opens.\n\n" +
 			captureHelpBody(),
-		Example: "  teams-cli \"https://teams.microsoft.com/meet/synthetic\" \"C:\\out\\transcript.md\" --headless\n" +
-			"  teams-cli \"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic\" -o \"C:\\out\\recap.md\" --headless\n" +
-			"  teams-cli --queue transcript-queue.txt\n" +
-			"  teams-cli captions \"https://teams.microsoft.com/meet/synthetic\" -o \"C:\\out\\transcript.md\" --headless\n" +
-			"  teams-cli join --help",
+		Example: "  go-teams \"https://teams.microsoft.com/meet/synthetic\" \"C:\\out\\transcript.md\" --headless\n" +
+			"  go-teams \"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic\" -o \"C:\\out\\recap.md\" --headless\n" +
+			"  go-teams --queue transcript-queue.txt\n" +
+			"  go-teams captions \"https://teams.microsoft.com/meet/synthetic\" -o \"C:\\out\\transcript.md\" --headless\n" +
+			"  go-teams join --help",
 		SilenceUsage: true,
 		Version:      version.Version,
 		Args:         cobra.MaximumNArgs(2),
@@ -222,8 +222,8 @@ func newRootCommand(d *deps) *cobra.Command {
 
 // installRootHelpHandler makes the root help explain a mistyped or placeholder
 // argument. When a positional argument that is neither a subcommand nor a valid
-// Teams meeting URL reaches the root help (for example "teams-cli [command]
-// --help" or "teams-cli help [command]"), a redacted one-line note precedes the
+// Teams meeting URL reaches the root help (for example "go-teams [command]
+// --help" or "go-teams help [command]"), a redacted one-line note precedes the
 // normal root help. It also forwards the topic given to "help" so the root help
 // function can see it; Cobra's default help command otherwise drops it. It must
 // be called after all subcommands are attached.
@@ -253,7 +253,7 @@ func installRootHelpHandler(root *cobra.Command) {
 			posArgs := helpPositionalArgs(cmd, args)
 			if len(posArgs) > 0 {
 				if sub := findDirectSubcommand(root, posArgs[0]); sub != nil {
-					// "teams-cli --help join" renders the subcommand's own help.
+					// "go-teams --help join" renders the subcommand's own help.
 					sub.InitDefaultHelpFlag()
 					sub.HelpFunc()(sub, posArgs[1:])
 					return
@@ -265,9 +265,9 @@ func installRootHelpHandler(root *cobra.Command) {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"Note: %q is not a subcommand or a valid Teams meeting URL. "+
 						"Replace [command] with one of the subcommands below "+
-						"(for example: teams-cli join --help, teams-cli captions --help, "+
-						"teams-cli schedule --help, teams-cli auth --help, "+
-						"teams-cli generate-config --help, or teams-cli update --help).\n\n",
+						"(for example: go-teams join --help, go-teams captions --help, "+
+						"go-teams schedule --help, go-teams auth --help, "+
+						"go-teams generate-config --help, or go-teams update --help).\n\n",
 					redacted)
 			}
 		}

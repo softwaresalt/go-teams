@@ -37,7 +37,7 @@ signal, not a target; CI reports its own figure with
 | `internal/cli` | A | 80.6% | Flag binding, the `generate-config` subcommand (aliases, positional file-versus-directory handling, `--force` collision, and invalid-name rejection, with the root `--config` flag proven unused), capture protocols, Idea 2C delayed AI summary timer + inter-process locked queue fallback, `--not-before` gating, schedule overrides, output precedence, and flag inheritance are covered through the injected `deps`; the compiled-binary harness adds an end-to-end check |
 | `internal/config` | A | 81.6% | Load, `TemplateYAML` / `ResolveTemplatePath` / `WriteTemplate` (template parses before and after uncommenting, filename traversal rejection, `O_EXCL` and atomic `--force` writes, owner-only modes, and `config.example.yaml` parity), capture modes, lifecycle durations, per-meeting overrides (`cron` vs `at`), `default_account` (`entra_account` / `account`) and output alias precedence (`output` versus `output_file` versus `output_folder` versus `default_path`), `headless` / `headed` and `audio` pointer combinations, `expandUserPath`, `defaultProfileDir`, atomic `Save`, and validation are table-tested, and the tracked-file secret scan lives here |
 | `internal/browser` | B | 71.6% | Synthetic-page and unit tests cover the pre-join machine, lobby timeout (`ErrLobbyTimeout`), `ForceRecap`, PCM RMS voice activity (`PCMRMS`/`HasVoiceActivity`), interim caption heartbeats, call-end probes (`shouldNotifyCallEnded`), recap export, and sandbox flags. The Teams DOM changes without notice, and no automated test runs against a real tenant (queued in `010-S`) |
-| `cmd/teams-cli` | B | none | Thin `main` with signal wiring and no tests of its own; exercised only through the compiled-binary harness |
+| `cmd/go-teams` | B | none | Thin `main` with signal wiring and no tests of its own; exercised only through the compiled-binary harness |
 
 Documentation grade for the repository as a whole is B: the README cover page,
 the [user guide](USER_GUIDE.md), [ARCHITECTURE.md](ARCHITECTURE.md), and the
@@ -75,7 +75,7 @@ the Windows commit limit.
   `windows-latest`.
 * `TestCompiledBinaryCapturesRecapToExplicitOutput` in
   `internal/cli/binary_automation_test.go:16` runs a freshly built
-  `teams-cli` executable against a synthetic Meeting Recap page and checks the
+  `go-teams` executable against a synthetic Meeting Recap page and checks the
   transcript and AI Summary output across the root, `captions`, short-flag,
   `join`, output-file, and output-directory invocation forms. It skips unless
   `GO_TEAMS_BINARY` points at a built executable, and CI does not set that

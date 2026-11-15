@@ -1,4 +1,4 @@
-// Command teams-cli is the go-teams command-line entrypoint for autonomous
+// Command go-teams is the command-line entrypoint for autonomous
 // Microsoft Teams live-transcription and audio capture.
 package main
 

@@ -48,7 +48,7 @@ jobs:
 
   # DISABLED: requires go.mod and a cmd/gen-docs generator that don't exist yet
   # in go-teams (this repo is pre-code — see AGENTS.md). Re-enable once both are
-  # scaffolded and docs/cli-reference/ generation is wired up for the teams-cli
+  # scaffolded and docs/cli-reference/ generation is wired up for the go-teams
   # binary.
   # drift:
   #   name: CLI Reference Drift

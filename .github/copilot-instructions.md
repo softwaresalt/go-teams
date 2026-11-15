@@ -25,7 +25,7 @@ go-teams is a standalone Go CLI for autonomous Microsoft Teams live-transcriptio
 ```text
 go-teams/
 ├── cmd/
-│   └── teams-cli/       # main package (Cobra root command)
+│   └── go-teams/        # main package (Cobra root command)
 ├── internal/
 │   ├── audio/           # pure-Go MP3 encoding, audio capture
 │   ├── browser/         # chromedp allocation, stealth flags, FSM

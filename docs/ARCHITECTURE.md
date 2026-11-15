@@ -1,12 +1,12 @@
 ---
 title: Architecture and Domain Map
-description: Domain map, enforced dependency direction, runtime flows, and security invariants for go-teams (teams-cli)
-date: 2026-11-14
+description: Domain map, enforced dependency direction, runtime flows, and security invariants for go-teams
+date: 2026-11-15
 ---
 
 ## System overview
 
-`go-teams` builds the `teams-cli` executable: a single static Go 1.26 binary
+`go-teams` builds the `go-teams` executable: a single static Go 1.26 binary
 that drives a host Chromium-based browser (Chrome, Edge, or Brave) over the
 Chrome DevTools Protocol using `chromedp` and `gobwas/ws`. It joins Microsoft
 Teams meetings, records live captions, exports finite Meeting Recap
@@ -29,7 +29,7 @@ The module contains one entrypoint and ten packages under `internal/`.
 
 | Package | Responsibility | Key exported surface |
 |---|---|---|
-| `cmd/teams-cli` | Process entrypoint; wires signal handling (`os/signal`) to the root command | `main` |
+| `cmd/go-teams` | Process entrypoint; wires signal handling (`os/signal`) to the root command | `main` |
 | `internal/cli` | Cobra commands (`captions`, `join`, `auth`, `schedule`, `generate-config`, `update`, root), capture flag binding, output target resolution, batch queue runner, root help handler (`installRootHelpHandler`: placeholder/unknown-argument `Note:` banner with credential-safe redaction) | `NewRootCommand` |
 | `internal/config` | YAML configuration model, defaults, key aliases, validation, atomic save, commented template generation (`template.go`) | `Config`, `Load`, `Save`, `DefaultConfig`, `TemplateYAML`, `ResolveTemplatePath`, `WriteTemplate` |
 | `internal/teams` | Meeting URL allowlist validation, join URL mutation, URL redaction | `ValidateMeetingURL`, `MutateJoinURL`, `RedactURL`, `RedactArgs` |
@@ -47,7 +47,7 @@ Imports flow downward only. A package may import packages in the layers below
 it and must not import sideways within its own layer or upward.
 
 ```text
-cmd/teams-cli
+cmd/go-teams
     |
     v
 internal/cli
@@ -68,7 +68,7 @@ Read as layers:
 
 | Layer | Packages | May import |
 |---|---|---|
-| Entrypoint | `cmd/teams-cli` | `internal/cli` |
+| Entrypoint | `cmd/go-teams` | `internal/cli` |
 | Command wiring | `internal/cli` | Every package below it |
 | Adapters | `internal/capture`, `internal/browser`, `internal/updater` | Leaf packages; `capture` also imports `browser` |
 | Leaves | `internal/audio`, `internal/config`, `internal/scheduler`, `internal/teams`, `internal/transcript`, `internal/version` | Standard library and third-party modules only |
@@ -96,7 +96,7 @@ Rules the layout enforces:
 
 ### Interactive auth
 
-`teams-cli auth` opens a visible browser with a persistent profile directory
+`go-teams auth` opens a visible browser with a persistent profile directory
 (`--profile-dir` or the configured `profile_dir`). Initial authentication (and
 cold-profile bootstrap when the profile does not yet contain a Teams session)
 requires `default_account` in `config.yaml` or `--account` on the command line
@@ -164,10 +164,11 @@ transcript instead of listening live:
 
 ### Batch queue
 
-`teams-cli --queue <file>` (`-q`) runs `runQueueFile` in `internal/cli`:
+`go-teams --queue <file>` (`-q`) runs `runQueueFile` in `internal/cli`:
 
 1. The queue file is read once; blank lines and `::` lines are skipped, and an
-   optional leading `teams-cli` token is stripped. Lines carrying a future
+   optional leading `go-teams` / `go-teams.exe` (or legacy `teams-cli` /
+   `teams-cli.exe`) token is stripped. Lines carrying a future
    `--not-before <RFC3339>` timestamp are skipped without error and left
    uncommented until due.
 2. Each due line becomes its own root command invocation built with
@@ -190,7 +191,7 @@ transcript instead of listening live:
 
 ### Cron schedule
 
-`teams-cli schedule` builds a `robfig/cron` instance from the `meetings`
+`go-teams schedule` builds a `robfig/cron` instance from the `meetings`
 entries through `scheduler.Build` / `scheduler.BuildWithClock`, supporting both
 recurring 5-field `cron` expressions and one-shot `at` timestamps (RFC 3339 or
 local `YYYY-MM-DD HH:MM`, scheduled via a single-fire `cron.Schedule` adapter
@@ -211,7 +212,7 @@ a non-blocking sweep for due `--append-ai-summary` entries in `queue_file` /
 
 ### Self-update
 
-`teams-cli update` calls `updater.Update`:
+`go-teams update` calls `updater.Update`:
 
 1. Resolve the release from GitHub, require `https` (or loopback for tests),
    and cap metadata, checksum, and binary sizes.
@@ -229,7 +230,7 @@ The protocol details are in the
 
 ### Configuration template generation
 
-`teams-cli generate-config [output-dir]` (aliases `init-config`, `gen-config`)
+`go-teams generate-config [output-dir]` (aliases `init-config`, `gen-config`)
 never loads a configuration file and ignores the root `--config` flag:
 
 1. `internal/cli` folds the optional positional argument into a directory and

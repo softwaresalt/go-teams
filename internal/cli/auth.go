@@ -20,7 +20,7 @@ func newAuthCommand(d *deps, configPath *string) *cobra.Command {
 			"headless use by the join, captions, and schedule commands.\n\n" +
 			"Profile directory:\n" +
 			"  --profile-dir (or profile_dir in config.yaml) selects the browser user-data directory.\n" +
-			"  It defaults to %LOCALAPPDATA%\\teams-cli\\profile on Windows when LOCALAPPDATA is set.\n" +
+			"  It defaults to %LOCALAPPDATA%\\go-teams\\profile on Windows when LOCALAPPDATA is set.\n" +
 			"  Reuse the same directory for every command that should share the signed-in session.\n\n" +
 			"Account selection (required):\n" +
 			"  --account (or default_account in config.yaml) is required for initial authentication.\n" +
@@ -31,9 +31,9 @@ func newAuthCommand(d *deps, configPath *string) *cobra.Command {
 			"  profile directory at once; close the auth window before starting a headless capture.\n\n" +
 			"Other browser flags: --browser-path selects the Chrome, Edge, or Chromium executable\n" +
 			"(also read from TEAMS_BROWSER_PATH).",
-		Example: "  teams-cli auth --account alice@contoso.com\n" +
-			"  teams-cli auth --account alice@contoso.com --profile-dir \"%LOCALAPPDATA%\\teams-cli\\profile\"\n" +
-			"  teams-cli auth --account alice@contoso.com --browser-path \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"",
+		Example: "  go-teams auth --account alice@contoso.com\n" +
+			"  go-teams auth --account alice@contoso.com --profile-dir \"%LOCALAPPDATA%\\go-teams\\profile\"\n" +
+			"  go-teams auth --account alice@contoso.com --browser-path \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfigFrom(d, *configPath)

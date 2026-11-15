@@ -249,11 +249,15 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 		if len(lineArgs) == 0 {
 			continue
 		}
-		// Strip an optional leading "teams-cli" or "teams-cli.exe" token in
-		// case the operator pasted a full command line into the queue file.
-		firstBase := strings.ToLower(filepath.Base(lineArgs[0]))
-		if firstBase == "teams-cli" || firstBase == "teams-cli.exe" {
+		// Strip an optional leading "go-teams" / "go-teams.exe" (or legacy
+		// "teams-cli" / "teams-cli.exe") token in case the operator pasted a
+		// full command line into the queue file.
+		firstBase := strings.ToLower(filepath.Base(strings.ReplaceAll(lineArgs[0], `\`, "/")))
+		if firstBase == "go-teams" || firstBase == "go-teams.exe" || firstBase == "teams-cli" || firstBase == "teams-cli.exe" {
 			lineArgs = lineArgs[1:]
+		}
+		if len(lineArgs) == 0 {
+			continue
 		}
 		if containsQueueFlag(lineArgs) {
 			errs = append(errs, fmt.Errorf("cli: queue line %d: nested --queue flag is not allowed", i+1))

@@ -1,4 +1,4 @@
-// Package version exposes build metadata for teams-cli and semantic version
+// Package version exposes build metadata for go-teams and semantic version
 // helpers used by the self-update command.
 package version
 

@@ -71,6 +71,8 @@ func writeTestConfig(t *testing.T, content string) string {
 func TestTemplateYAMLContentAndLoad(t *testing.T) {
 	tpl := TemplateYAML()
 	require.NotEmpty(t, tpl)
+	assert.Contains(t, tpl, "# go-teams configuration file")
+	assert.NotContains(t, tpl, "teams-cli")
 
 	t.Run("documents every key and alias", func(t *testing.T) {
 		for _, key := range documentedTemplateKeys {
@@ -131,7 +133,7 @@ func TestTemplateYAMLContentAndLoad(t *testing.T) {
 		assert.Equal(t, DefaultFilenameTemplate, got.FilenameTemplate)
 		assert.Equal(t, "TEAM", got.Category)
 		assert.Equal(t, "https://teams.microsoft.com/meet/synthetic-meeting", got.MeetingURL)
-		assert.Equal(t, expandUserPath(`%LOCALAPPDATA%\teams-cli\profile`), got.ProfileDir)
+		assert.Equal(t, expandUserPath(`%LOCALAPPDATA%\go-teams\profile`), got.ProfileDir)
 		assert.Equal(t, expandUserPath(`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`), got.BrowserPath)
 		assert.Equal(t, "alice@contoso.com", got.DefaultAccount)
 		assert.Equal(t, "Transcription Agent", got.BotName)
@@ -346,5 +348,5 @@ func TestExampleConfigMatchesTemplateYAML(t *testing.T) {
 	require.NoError(t, err)
 	normalize := func(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 	assert.Equal(t, normalize(TemplateYAML()), normalize(string(data)),
-		"config.example.yaml must equal TemplateYAML(); regenerate with: teams-cli generate-config -d . -n config.example.yaml --force")
+		"config.example.yaml must equal TemplateYAML(); regenerate with: go-teams generate-config -d . -n config.example.yaml --force")
 }

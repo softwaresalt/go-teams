@@ -304,9 +304,9 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"ai_summary_delay or capture_audio value. To override the normalized base, set\n" +
 			"explicit per-meeting ai_summary_delay and capture_audio values on that entry.\n\n" +
 			"Stop the daemon with Ctrl+C; in-flight captures get up to 15 seconds to release their browsers.",
-		Example: "  teams-cli schedule --config config.yaml --headless\n" +
-			"  teams-cli schedule --mode live-with-summary --duration 30m --ai-summary-delay 30m --profile-dir \"%LOCALAPPDATA%\\teams-cli\\profile\"\n" +
-			"  teams-cli schedule --mode ephemeral-live --audio=false --headless",
+		Example: "  go-teams schedule --config config.yaml --headless\n" +
+			"  go-teams schedule --mode live-with-summary --duration 30m --ai-summary-delay 30m --profile-dir \"%LOCALAPPDATA%\\go-teams\\profile\"\n" +
+			"  go-teams schedule --mode ephemeral-live --audio=false --headless",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfigFrom(d, *configPath)

@@ -5,7 +5,11 @@ feature: 027-F
 shipment: 027-S
 branch: feat/027-s-rename-cli-executable-entrypoint-package-release-assets-and-self-updater-contract-from-teams-cli-to-go-teams
 status: closed
-closure_status: READY
+closure_status: READY_WITH_CONDITIONS
+conditions:
+  - condition: "All pre-deploy audit checks, 6-target AssetName and release.yml SHA256SUMS static verification, compiled-binary harness checks, and PR #68 CI checks pass; next tagged release (v*.*.*) observation window and disposable self-update verification are recorded and owned by repository maintainer"
+    satisfied: true
+    evidence: "PR #68 CI run 43695968083 (ubuntu-latest + windows-latest PASS), TestAssetName (6/6 targets PASS), release.yml 6-entry SHA256SUMS verification loop, and Releasability evidence monitoring/post-release validation plan below"
 compaction_status: done
 merge_commit: 8aff656d93b76f11f4e4094fd6e6ce724f784dbf
 pull_request: 68
@@ -93,7 +97,7 @@ Blocking findings: `P0=0, P1=0`. Outcome: `READY`.
 | Artifact | Disposition | Result |
 |---|---|---|
 | Stash `66488961` | Already archived by Stage at harvest; absent from active stash | skipped |
-| Deliberation `016-DL` | `retained_description_mention`; status `queued` with zero live references in `.backlogit/queue/`; archived via `backlogit archive 016-DL` | archived |
+| Deliberation `016-DL` | `already-archived` in `pre_close.linked_deliberation_disposition` (`docs/closure/evidence/027-S-027-F-close-evidence.json`): `backlogit archive 016-DL` (hook event 501) executed immediately before the mutating `cascade-close` snapshot after the initial `cascade-close` invocation exited with usage help (ordering deviation from post-cascade Step 6.7); post-cascade cleanup was therefore skipped while preserving the original hook and close-evidence records | skipped (`already-archived`) |
 
 ### Compaction (P-020)
 
@@ -126,14 +130,20 @@ reviewed all 10 entries in `docs/compound/` and classified all 10 as `keep`
 ## Releasability evidence
 
 * **Invariants preserved**: Updater <-> `release.yml` 6-asset parity (`go-teams-{linux,darwin,windows}-{amd64,arm64}[.exe]`), root help argument redaction (`redactHelpArg`), cross-platform batch queue backward compatibility (`go-teams[.exe]` + legacy `teams-cli[.exe]`), `TemplateYAML()` <-> `config.example.yaml` byte-for-byte parity, and CI security invariants.
-* **Rollout and rollback**: Single-binary CLI on `main`; rollback via `git revert -m 1 8aff656d93b76f11f4e4094fd6e6ce724f784dbf` (retaining the `main`-branch parent to revert the feature merge cleanly).
+* **Rollout and rollback**: Single-binary CLI on `main`. Rollback covers three coordinated surfaces:
+  1. *Repository branch (`main`)*: Execute `git revert -m 1 8aff656d93b76f11f4e4094fd6e6ce724f784dbf` (retaining the `main`-branch parent to revert the feature merge cleanly).
+  2. *Published GitHub Release / tag (`v*.*.*`, if already cut)*: Retract or mark the affected GitHub Release as a broken pre-release (`gh release edit <tag> --prerelease --notes "Retracted: use previous release or next patch tag"` or `gh release delete <tag> --cleanup-tag --yes`) and cut a new patch tag `v*.*.*` from the reverted `main` commit so `release.yml` republishes working release assets and `SHA256SUMS`.
+  3. *Operator binary, configuration, and profile recovery*: Reinstall the previous release binary (via direct download from the prior GitHub Release or `go install`). If an operator already renamed `%APPDATA%\teams-cli` -> `%APPDATA%\go-teams` and `%LOCALAPPDATA%\teams-cli\profile` -> `%LOCALAPPDATA%\go-teams\profile` (`~/.config/teams-cli` -> `~/.config/go-teams`), either pass `--config` and `--profile-dir` pointing at the `go-teams` directories or move the directories back to `teams-cli` only after updating any explicit `profile_dir`, `output_dir`, and `queue_file` paths in `config.yaml`, scheduled task arguments, and pending `--append-ai-summary` lines in `transcription_queue.txt` so cached session state and queued work are preserved.
 * **Monitoring and validation window (7 days / next tagged release `v*.*.*`, owner: repository maintainer)**:
   * **Healthy signals**:
-    1. *CI & Release builds (`ci.yml`, `release.yml`)*: `go build -o bin/go-teams.exe ./cmd/go-teams` passes on `ubuntu-latest` (`test`) and `windows-latest` (`test-windows`), and tagged releases publish all 6 `go-teams-{linux,darwin,windows}-{amd64,arm64}[.exe]` binaries listed in `SHA256SUMS`.
-    2. *Self-update & CLI surface*: `go-teams --version`, `go-teams --help`, and `go-teams update --check` report `go-teams` usage and resolve `go-teams-<goos>-<goarch>[.exe]` assets.
+    1. *CI & Release builds (`ci.yml`, `release.yml`)*: `go build -o bin/go-teams.exe ./cmd/go-teams` passes on `ubuntu-latest` (`test`) and `windows-latest` (`test-windows`), and the next tagged release (`v*.*.*`) publishes all 6 `go-teams-{linux,darwin,windows}-{amd64,arm64}[.exe]` binaries plus a 6-entry `SHA256SUMS` file.
+    2. *Self-update & disposable installation probe*: `go-teams --version` and `go-teams --help` report `go-teams` usage; `go-teams update --check --version <tagged-release>` from an older build (or `dev` build) resolves `go-teams-<goos>-<goarch>[.exe]`; and a disposable-directory installation probe (copying `go-teams[.exe]` into a temporary directory and running `go-teams update --version <tagged-release> --force`, plus `gh release download <tagged-release> --pattern "SHA256SUMS" --pattern "go-teams-*"` with `sha256sum -c SHA256SUMS`) verifies end-to-end download, `SHA256SUMS` digest validation, and binary replacement.
     3. *Batch queue compatibility*: `go-teams --queue` strips both `go-teams[.exe]` and legacy `teams-cli[.exe]` leading tokens on Windows and POSIX hosts.
   * **Failure signals and rollback triggers**:
     1. Any `CI` build failure on `bin/go-teams.exe` or `Release` workflow failure in `Generate SHA256SUMS` (`missing an entry for go-teams-*`).
-    2. Any regression in `go-teams --queue`, `go-teams --help`, or `go-teams generate-config`.
-    * *Action on trigger*: Halt release distribution and execute `git revert -m 1 8aff656d93b76f11f4e4094fd6e6ce724f784dbf`.
-* **Readiness verdict**: `READY`.
+    2. Any failure in the post-release `gh release download` + `sha256sum -c SHA256SUMS` check or disposable `go-teams update --version <tagged-release> --force` installation probe (`ErrAssetNotFound`, `ErrChecksumMissing`, or `ErrChecksumMismatch`).
+    3. Any regression in `go-teams --queue`, `go-teams --help`, or `go-teams generate-config`.
+    * *Action on trigger*: Halt release distribution, execute `git revert -m 1 8aff656d93b76f11f4e4094fd6e6ce724f784dbf` on `main`, retract any affected GitHub Release tag (`v*.*.*`) and cut a corrective patch release, and apply the operator binary/configuration/profile recovery steps above while preserving migrated profile state and pending `transcription_queue.txt` entries.
+* **Pending post-release validation (maintainer-owned)**:
+  * On the next tagged release (`v*.*.*`), verify that `.github/workflows/release.yml` publishes all six `go-teams-{linux,darwin,windows}-{amd64,arm64}[.exe]` assets and `SHA256SUMS`, verify all six digests against `SHA256SUMS`, and run the disposable `go-teams update --version <tag> --force` installation probe.
+* **Readiness verdict**: `READY_WITH_CONDITIONS` (all local gates, compiled-binary harness checks, and PR #68 CI checks on `ubuntu-latest` and `windows-latest` passed; tag-triggered `.github/workflows/release.yml` asset publication and disposable self-update verification are pending the next `v*.*.*` release tag).

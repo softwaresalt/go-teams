@@ -1293,15 +1293,14 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 			closeCDPBrowser(wsURL)
 		}
 		if cmd.Process != nil {
-			if runtime.GOOS == "windows" {
-				killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run() // Best-effort Windows process-tree termination before Process.Kill.
-				cancel()
+			select {
+			case <-procDone:
+			default:
+				_ = cmd.Process.Kill() // Best-effort handle-based termination when launcher has not yet exited.
+				<-procDone
 			}
-			_ = cmd.Process.Kill() // Best-effort process kill; Process may have already exited.
-			<-procDone
 		}
-		if runtime.GOOS == "windows" && wsURL != "" {
+		if runtime.GOOS == "windows" {
 			terminateSurvivingCDPBrowserOnPort(port, execPath)
 		}
 	}

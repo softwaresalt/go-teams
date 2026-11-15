@@ -17,6 +17,11 @@ import (
 // MeetingOptions.LobbyTimeout.
 var ErrLobbyTimeout = errors.New("browser: lobby admission timed out")
 
+// ErrAccountRequired is returned when initial authentication or cold-profile
+// browser bootstrap is invoked without a DefaultAccount (--account or
+// default_account in config.yaml).
+var ErrAccountRequired = errors.New("browser: initial authentication requires --account or default_account in config.yaml")
+
 // CaptionSink receives finalized caption utterances (speaker and text) as the
 // in-meeting observer emits them. Implementations should return promptly; a
 // slow sink causes fragments to be dropped under backpressure rather than
@@ -45,6 +50,14 @@ type MeetingOptions struct {
 	// ForceRecap forces Join to use the Meeting Recap discovery and extraction
 	// path and never enter the live pre-join click flow.
 	ForceRecap bool
+	// AISummaryOnly indicates that Join is being run solely to extract the
+	// Meeting Recap AI Summary (e.g. via --append-ai-summary) and may return as
+	// soon as the AI Summary is copied without waiting for the .ms-List
+	// transcript iframe.
+	AISummaryOnly bool
+	// DisableAISummary suppresses AI Summary extraction during Meeting Recap
+	// capture (e.g. when --no-ai-summary or ai_summary_delay: 0s is set).
+	DisableAISummary bool
 	// VoiceRMSThreshold overrides DefaultVoiceRMSThreshold when > 0.
 	VoiceRMSThreshold float64
 	// OnCaptionActivity is invoked when non-empty live caption DOM activity is

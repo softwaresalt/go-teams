@@ -1025,3 +1025,290 @@ func TestRetainRecapAudioIdentity(t *testing.T) {
 		t.Errorf("requested identity must stay authoritative, got %q", specific.recapAudioURL)
 	}
 }
+
+func TestTryExtractRecapViaCDPWaitsForTranscriptUnlessAISummaryOnly(t *testing.T) {
+	var transcriptReady atomic.Bool
+	var summaryCalls atomic.Int32
+	var serverURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/json/list" {
+			wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+			targets := []cdpTargetInfo{
+				{
+					ID:                   "owner",
+					Type:                 "page",
+					URL:                  harnessRecapURL,
+					WebSocketDebuggerURL: wsBase + "/owner",
+				},
+				{
+					ID:                   "frame",
+					ParentID:             "owner",
+					Type:                 "iframe",
+					URL:                  "https://example.sharepoint.com/xplatplugins.aspx",
+					WebSocketDebuggerURL: wsBase + "/frame",
+				},
+			}
+			require.NoError(t, json.NewEncoder(w).Encode(targets))
+			return
+		}
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		reqBytes, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			t.Errorf("read: %v", err)
+			return
+		}
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Expression string `json:"expression"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(reqBytes, &req)
+		if req.Method == "Page.getFrameTree" {
+			resp := map[string]any{
+				"id": req.ID,
+				"result": map[string]any{
+					"frameTree": map[string]any{
+						"frame": map[string]any{"id": "owner", "url": harnessRecapURL},
+					},
+				},
+			}
+			b, _ := json.Marshal(resp)
+			_ = wsutil.WriteServerText(conn, b)
+			return
+		}
+		value := ""
+		switch {
+		case strings.Contains(req.Params.Expression, "Copy all"):
+			summaryCalls.Add(1)
+			value = "Outer page AI summary ready early"
+		case strings.Contains(req.Params.Expression, ".ms-List"):
+			if r.URL.Path == "/frame" && transcriptReady.Load() {
+				value = `{"pageUrl":"` + harnessRecapURL + `","entries":[{"speaker":"Alice","timestamp":"PT2S","text":"Actual recap utterance"}]}`
+			} else {
+				value = `{"pageUrl":"` + harnessRecapURL + `","entries":[]}`
+			}
+		}
+		resp, _ := json.Marshal(map[string]any{
+			"id":     req.ID,
+			"result": map[string]any{"result": map[string]string{"value": value}},
+		})
+		_ = wsutil.WriteServerText(conn, resp)
+	}))
+	defer srv.Close()
+	serverURL = srv.URL
+	_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// 1. ForceRecap: true, AISummaryOnly: false (i.e. --mode past-recap) must NOT
+	// return early when only the AI summary is present and .ms-List is still empty.
+	recapMeeting := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL: harnessRecapURL,
+			ForceRecap: true,
+		},
+		capturePageID: "owner",
+	}
+	require.False(t, recapMeeting.tryExtractRecapViaCDP(ctx, port),
+		"ForceRecap without AISummaryOnly must wait for .ms-List transcript entries")
+	require.Empty(t, recapMeeting.recapEntries)
+
+	// Once .ms-List populates, ForceRecap extracts both transcript and AI summary.
+	transcriptReady.Store(true)
+	require.True(t, recapMeeting.tryExtractRecapViaCDP(ctx, port))
+	require.Len(t, recapMeeting.recapEntries, 1)
+	require.Equal(t, "Actual recap utterance", recapMeeting.recapEntries[0].Text)
+	require.Equal(t, "Outer page AI summary ready early", recapMeeting.AISummary())
+
+	// 2. DisableAISummary: true must skip captureAISummaryFromTargets during Recap extraction.
+	summaryCalls.Store(0)
+	noSummaryMeeting := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL:       harnessRecapURL,
+			ForceRecap:       true,
+			DisableAISummary: true,
+		},
+		capturePageID: "owner",
+	}
+	require.True(t, noSummaryMeeting.tryExtractRecapViaCDP(ctx, port))
+	require.Len(t, noSummaryMeeting.recapEntries, 1)
+	require.Empty(t, noSummaryMeeting.AISummary(), "DisableAISummary must suppress AI summary extraction")
+	require.Equal(t, int32(0), summaryCalls.Load(), "DisableAISummary must not evaluate copyAISummaryJS")
+
+	// 3. AISummaryOnly: true (e.g. --append-ai-summary) skips .ms-List early return
+	// and succeeds as soon as the AI summary is copied even when .ms-List is empty.
+	transcriptReady.Store(false)
+	summaryOnlyMeeting := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL:    harnessRecapURL,
+			ForceRecap:    true,
+			AISummaryOnly: true,
+		},
+		capturePageID: "owner",
+	}
+	require.True(t, summaryOnlyMeeting.tryExtractRecapViaCDP(ctx, port))
+	require.Empty(t, summaryOnlyMeeting.recapEntries, "AISummaryOnly must skip .ms-List transcript extraction")
+	require.Equal(t, "Outer page AI summary ready early", summaryOnlyMeeting.AISummary())
+}
+
+func TestRecapAudioJSHandlesBlobFallbackRedirectsCredentialsRetryAndOneHour48kHz(t *testing.T) {
+	require.Equal(t, 4200, maxRecapAudioDurationSec, "default Recap audio duration cap should support 1-hour+ meetings (4200s)")
+	require.Equal(t, 256*1024*1024, maxRecapAudioSourceBytes, "default Recap audio source cap should be 256 MiB")
+	require.Equal(t, 360*1024*1024, maxRecapAudioPCMBytes, "default Recap audio PCM cap should be 360 MiB")
+
+	for _, scenario := range []string{
+		"prefers-non-blob-and-retries-omit",
+		"resets-identity-per-candidate",
+		"rejects-redirect-identity-mismatch",
+		"accepts-one-hour-48khz-resampled",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "node", "-e", recapAudioSharePointHardeningProbeJS, scenario)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("JavaScript SharePoint audio hardening probe (%s): %v: %s", scenario, err, output)
+			}
+		})
+	}
+}
+
+const recapAudioSharePointHardeningProbeJS = `
+const fs = require('fs');
+const scenario = process.argv[1];
+const maxRecapAudioSourceBytes = 256 * 1024 * 1024;
+const maxRecapAudioDurationSec = 4200;
+const maxRecapAudioPCMBytes = 360 * 1024 * 1024;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+
+const isResetScenario = scenario === 'resets-identity-per-candidate';
+const pageUrl = isResetScenario
+  ? 'https://teams.cloud.microsoft/l/meetingrecap'
+  : 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a';
+
+const media = {
+  currentSrc: 'blob:https://tenant-my.sharepoint.com/550e8400-e29b-41d4-a716-446655440000',
+  src: 'blob:https://tenant-my.sharepoint.com/550e8400-e29b-41d4-a716-446655440000',
+  getAttribute: (name) => {
+    if (name !== 'data-audio-src') return null;
+    if (isResetScenario) return 'https://tenant-my.sharepoint.com/stream?driveItemId=recording-a';
+    return null;
+  },
+  querySelector: () => null,
+};
+globalThis.g_fileInfo = isResetScenario
+  ? { streamUrl: 'https://tenant-my.sharepoint.com/unverified-fallback' }
+  : { streamUrl: 'https://tenant-my.sharepoint.com/streamContent?driveItemId=recording-a' };
+globalThis.location = { href: pageUrl };
+globalThis.window = globalThis;
+globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+globalThis.btoa = s => Buffer.from(s, 'binary').toString('base64');
+
+const fetchCalls = [];
+let audioContextOpts = null;
+globalThis.fetch = async (url, opts) => {
+  fetchCalls.push({ url, opts });
+  if (isResetScenario) {
+    throw new TypeError('Failed to fetch');
+  }
+  if (String(url).startsWith('blob:')) {
+    throw new Error('blob URL should not be fetched before non-blob streamUrl');
+  }
+  if (opts && opts.credentials === 'include') {
+    throw new TypeError('Failed to fetch');
+  }
+  const redirectedUrl = scenario === 'rejects-redirect-identity-mismatch'
+    ? 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-b'
+    : 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-a';
+  let read = false;
+  return {
+    ok: true,
+    status: 200,
+    url: redirectedUrl,
+    headers: { get: () => '4' },
+    body: {
+      getReader: () => ({
+        read: async () => read ? { done: true } : (read = true, { done: false, value: new Uint8Array(4) }),
+        cancel: async () => {},
+      }),
+    },
+  };
+};
+
+globalThis.AudioContext = class {
+  constructor(opts) {
+    audioContextOpts = opts || null;
+  }
+  async decodeAudioData() {
+    if (scenario === 'accepts-one-hour-48khz-resampled') {
+      // Simulate metadata of a 1-hour (3600s) 48 kHz buffer while keeping
+      // getChannelData small via a Proxy so the test finishes in milliseconds.
+      const proxyChannel = new Proxy(new Float32Array(1), {
+        get(target, prop) {
+          if (typeof prop === 'string' && !Number.isNaN(Number(prop))) return 0;
+          return target[prop];
+        }
+      });
+      return {
+        duration: 3600,
+        length: 48000,
+        sampleRate: 48000,
+        numberOfChannels: 1,
+        getChannelData: () => proxyChannel,
+      };
+    }
+    return {
+      duration: 1,
+      length: 1,
+      sampleRate: 44100,
+      numberOfChannels: 1,
+      getChannelData: () => new Float32Array(1),
+    };
+  }
+  async close() {}
+};
+
+(async () => {
+  let result, failure;
+  try { result = await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (scenario === 'prefers-non-blob-and-retries-omit') {
+    if (failure) throw new Error('unexpected failure: ' + String(failure.message || failure));
+    const parsed = JSON.parse(result);
+    if (fetchCalls.length !== 2) throw new Error('expected 2 fetch calls (include then omit), got ' + fetchCalls.length);
+    if (fetchCalls[0].opts.redirect !== 'follow' || fetchCalls[1].opts.redirect !== 'follow') {
+      throw new Error('expected redirect: follow on fetch calls');
+    }
+    if (fetchCalls[0].opts.credentials !== 'include' || fetchCalls[1].opts.credentials !== 'omit') {
+      throw new Error('expected credentials include then omit');
+    }
+    if (parsed.mediaUrl !== 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-a') {
+      throw new Error('expected post-redirect mediaUrl, got ' + parsed.mediaUrl);
+    }
+    if (!audioContextOpts || audioContextOpts.sampleRate !== 44100) {
+      throw new Error('expected AudioContext({sampleRate: 44100})');
+    }
+  } else if (scenario === 'resets-identity-per-candidate') {
+    if (!failure || !String(failure.message || failure).includes('identity unverified')) {
+      throw new Error('expected second unverified candidate to fail identity check after reset, got: ' + String(failure || result));
+    }
+  } else if (scenario === 'rejects-redirect-identity-mismatch') {
+    if (!failure || !String(failure.message || failure).includes('identity mismatch')) {
+      throw new Error('expected post-redirect identity mismatch error, got: ' + String(failure || result));
+    }
+  } else if (scenario === 'accepts-one-hour-48khz-resampled') {
+    if (failure) throw new Error('1-hour 48kHz recording rejected: ' + String(failure.message || failure));
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`

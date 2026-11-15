@@ -30,7 +30,7 @@ The module contains one entrypoint and ten packages under `internal/`.
 | Package | Responsibility | Key exported surface |
 |---|---|---|
 | `cmd/teams-cli` | Process entrypoint; wires signal handling (`os/signal`) to the root command | `main` |
-| `internal/cli` | Cobra commands (`captions`, `join`, `auth`, `schedule`, `generate-config`, `update`, root), capture flag binding, output target resolution, batch queue runner | `NewRootCommand` |
+| `internal/cli` | Cobra commands (`captions`, `join`, `auth`, `schedule`, `generate-config`, `update`, root), capture flag binding, output target resolution, batch queue runner, root help handler (`installRootHelpHandler`: placeholder/unknown-argument `Note:` banner with credential-safe redaction) | `NewRootCommand` |
 | `internal/config` | YAML configuration model, defaults, key aliases, validation, atomic save, commented template generation (`template.go`) | `Config`, `Load`, `Save`, `DefaultConfig`, `TemplateYAML`, `ResolveTemplatePath`, `WriteTemplate` |
 | `internal/teams` | Meeting URL allowlist validation, join URL mutation, URL redaction | `ValidateMeetingURL`, `MutateJoinURL`, `RedactURL`, `RedactArgs` |
 | `internal/browser` | `chromedp` allocator and stealth flags, pre-join state machine, live caption observer, Meeting Recap export, AI Summary extraction, audio capture | `Runner`, `Meeting`, `RecapMeeting`, `Options`, `NewLiveMeeting` |

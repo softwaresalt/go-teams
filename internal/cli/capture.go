@@ -72,6 +72,21 @@ func validateCaptureLifecycles(cfg config.Config) error {
 	return nil
 }
 
+func isAISummaryDisabled(c config.Config) bool {
+	if strings.TrimSpace(c.AppendAISummary) != "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(c.CaptureMode), config.CaptureModeEphemeralLive) {
+		return true
+	}
+	raw := strings.TrimSpace(c.AISummaryDelay)
+	if raw == "" {
+		return false
+	}
+	d, err := time.ParseDuration(raw)
+	return err == nil && d == 0
+}
+
 func effectiveAISummaryDelay(cfg config.Config, isRecap bool) time.Duration {
 	if isRecap {
 		return 0
@@ -103,6 +118,8 @@ func resolveDeferredQueuePath(cfg config.Config) string {
 func runAppendAISummary(ctx context.Context, d *deps, cfg config.Config, meetingURL, transcriptPath string) error {
 	recapCfg := cfg
 	recapCfg.CaptureMode = config.CaptureModePastRecap
+	recapCfg.AppendAISummary = transcriptPath
+	recapCfg.AISummaryDelay = ""
 	if strings.TrimSpace(recapCfg.LobbyTimeout) == "" {
 		recapCfg.LobbyTimeout = defaultRecapEnrichmentTimeout.String()
 	}

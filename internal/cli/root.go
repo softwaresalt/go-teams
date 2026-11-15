@@ -62,6 +62,7 @@ func defaultDeps() *deps {
 				Mode:             c.CaptureMode,
 				Duration:         dur,
 				IdleTimeout:      idle,
+				DisableAISummary: isAISummaryDisabled(c),
 			})
 		},
 	}
@@ -115,20 +116,27 @@ func applyBrowserFlags(cmd *cobra.Command, cfg *config.Config, f browserFlags) {
 	}
 }
 
+func buildMeetingOptions(c config.Config, meetingURL string) browser.MeetingOptions {
+	lobbyTimeout, _ := parseOptionalDuration(c.LobbyTimeout)
+	aiSummaryOnly := strings.TrimSpace(c.AppendAISummary) != ""
+	return browser.MeetingOptions{
+		MeetingURL:       meetingURL,
+		BotName:          c.BotName,
+		DefaultAccount:   c.DefaultAccount,
+		LobbyTimeout:     lobbyTimeout,
+		ForceRecap:       strings.EqualFold(strings.TrimSpace(c.CaptureMode), config.CaptureModePastRecap) || aiSummaryOnly,
+		AISummaryOnly:    aiSummaryOnly,
+		DisableAISummary: isAISummaryDisabled(c),
+	}
+}
+
 // defaultNewMeeting allocates a Chromium context for meeting capture and
 // returns a chromedp-backed Meeting bound to it. The cleanup func cancels the
 // browser and allocator contexts, terminating the spawned Chromium process.
 func defaultNewMeeting(ctx context.Context, c config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
-	lobbyTimeout, _ := parseOptionalDuration(c.LobbyTimeout)
 	return browser.NewLiveMeeting(ctx,
 		browserOptions(c),
-		browser.MeetingOptions{
-			MeetingURL:     meetingURL,
-			BotName:        c.BotName,
-			DefaultAccount: c.DefaultAccount,
-			LobbyTimeout:   lobbyTimeout,
-			ForceRecap:     strings.EqualFold(strings.TrimSpace(c.CaptureMode), config.CaptureModePastRecap),
-		})
+		buildMeetingOptions(c, meetingURL))
 }
 
 // NewRootCommand builds the root command with all subcommands attached, using
@@ -332,18 +340,21 @@ func findDirectSubcommand(root *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-// redactedHelpArg is echoed in place of a rejected argument whose shape could
-// carry credentials but is not a well-formed http(s) URL.
+// redactedHelpArg is echoed in place of a rejected argument that does not
+// start with an http:// or https:// prefix and contains a credential-bearing
+// delimiter.
 const redactedHelpArg = "[redacted]"
 
 // redactHelpArg redacts a rejected help argument for echo in the Note banner.
-// The original argument is inspected first. Only an input that starts with a
-// well-formed http:// or https:// scheme is delegated to teams.RedactArgs,
-// which strips userinfo, query, and fragment. Any other input containing a
-// credential-bearing delimiter (userinfo "@", query "?", fragment "#", a
-// scheme separator, or an embedded http: token) is suppressed entirely: a
-// passcode or password may itself contain those delimiters, so truncating or
-// partially redacting such text could still echo a secret prefix.
+// The original argument is inspected first. Inputs with an http:// or
+// https:// prefix (after trimming whitespace, matched case-insensitively) are
+// delegated to teams.RedactArgs; this is prefix-based dispatch, not URL
+// validation, so malformed http(s) inputs still reach RedactArgs and any
+// retained host/path text is what RedactURL keeps. Any other input containing
+// a credential-bearing delimiter (userinfo "@", query "?", fragment "#", a
+// scheme separator "://", or an embedded http:/https: token) is replaced with
+// redactedHelpArg entirely, because a passcode or password may itself contain
+// those delimiters and partial truncation could still echo a secret prefix.
 func redactHelpArg(raw string) string {
 	lower := strings.ToLower(strings.TrimSpace(raw))
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {

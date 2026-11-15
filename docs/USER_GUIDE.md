@@ -119,15 +119,18 @@ Save the file. Leave every other line commented out until you need it.
 
 ### Step 4: Sign in once
 
-Run the sign-in command. A browser window opens so you can sign in to
-Microsoft 365, including any multi-factor prompt:
+Run the sign-in command (using `default_account` from `config.yaml` or passing
+`--account`). A browser window opens so you can sign in to Microsoft 365,
+including any multi-factor prompt:
 
 ```powershell
-.\bin\teams-cli.exe auth
+.\bin\teams-cli.exe auth --account alice@contoso.com
 ```
 
-Your sign-in is saved in a dedicated browser profile folder, so later runs do
-not ask again. Treat that folder like a password and never share it.
+`--account` (or `default_account` in `config.yaml`) is required for `auth` and
+whenever a cold profile without an existing Teams session is bootstrapped. Your
+sign-in is saved in a dedicated browser profile folder, so later runs do not
+ask again. Treat that folder like a password and never share it.
 
 ### Step 5: Capture a meeting
 
@@ -369,9 +372,9 @@ placeholders:
 | `<concat-meeting-name>` | Meeting title words joined without separators, with filler words dropped |
 | `<meeting-name>` | Meeting title sanitized for use in a file name |
 | `<meeting-id>` | Identifier derived from the meeting URL, used when the title is unavailable |
-| `<YYYYMMDD>` | Capture date, for example `20261112` |
-| `<YYYY-MM-DD>` | Capture date with dashes |
-| `<HHMMSS>` | Capture time |
+| `<YYYYMMDD>` | Meeting start date (or capture date when unavailable), for example `20261112` |
+| `<YYYY-MM-DD>` | Meeting start date (or capture date when unavailable) with dashes |
+| `<HHMMSS>` | Meeting start time (or capture time when unavailable) |
 | `<timestamp>` | Full date and time stamp |
 
 ## Batch queue mode
@@ -594,8 +597,9 @@ schtasks /Create /SC ONCE /TN "TeamsCapture-ArchReview" /ST 14:00 /SD 11/15/2026
   or `https` for local test fixtures. URLs with embedded credentials are
   rejected. The check runs before any browser launches and covers the initial
   URL only; redirects inside the browser are not intercepted.
-* Passcodes (`?p=`), userinfo, query strings, and fragments are stripped from
-  navigation errors and queue logs.
+* Passcodes (`?p=`), userinfo, query strings, fragments, and SharePoint `/:`
+  sharing tokens are stripped from navigation errors, queue logs, and the
+  `**Source:**` link in Markdown transcript headers (`scheme://host/path` only).
 * The Chromium sandbox stays enabled. Set `TEAMS_DISABLE_SANDBOX=1` (or `true`)
   only in containers that cannot run it.
 

@@ -36,7 +36,12 @@ func (f *fakeRunner) Join(_ context.Context, meetingURL string) error {
 }
 
 func validConfig() config.Config {
-	return config.Config{OutputDir: "out", ProfileDir: "prof", BotName: "bot"}
+	return config.Config{
+		OutputDir:      "out",
+		ProfileDir:     "prof",
+		BotName:        "bot",
+		DefaultAccount: "user@example.com",
+	}
 }
 
 // captureRecorder records what the capture seams were invoked with so join and
@@ -89,6 +94,22 @@ func TestAuthCommandInvokesAuthenticate(t *testing.T) {
 	fake := &fakeRunner{}
 	err := runCmd(context.Background(), depsWith(fake), "auth")
 	require.NoError(t, err)
+	assert.True(t, fake.authCalled)
+}
+
+func TestAuthCommandRequiresAccount(t *testing.T) {
+	fake := &fakeRunner{}
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) {
+			return config.Config{OutputDir: "out", ProfileDir: "prof", BotName: "bot"}, nil
+		},
+		newRunner: func(config.Config) browser.Runner { return fake },
+	}
+	err := runCmd(context.Background(), d, "auth")
+	require.ErrorIs(t, err, browser.ErrAccountRequired)
+	assert.False(t, fake.authCalled, "Authenticate must not be called when account is missing")
+
+	require.NoError(t, runCmd(context.Background(), d, "auth", "--account", "alice@contoso.com"))
 	assert.True(t, fake.authCalled)
 }
 
@@ -440,6 +461,12 @@ func TestDefaultAccountFlagAndQueueForwarding(t *testing.T) {
 			loaded.Meetings = []config.MeetingSchedule{{Name: "m", URL: meetingURL, Cron: "@every 1s"}}
 			probe := newBrowserPathProbe()
 			args := append(append([]string{}, cmdCase.args...), "--account=")
+
+			if cmdCase.name == "auth" {
+				err := runCmd(context.Background(), probe.deps(loaded), args...)
+				require.ErrorIs(t, err, browser.ErrAccountRequired)
+				return
+			}
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

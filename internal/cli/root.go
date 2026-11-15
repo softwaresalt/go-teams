@@ -4,11 +4,13 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
 	"github.com/softwaresalt/go-teams/internal/capture"
@@ -143,10 +145,23 @@ func newRootCommand(d *deps) *cobra.Command {
 		Short: "Autonomous Microsoft Teams live-transcription and meeting recap capture",
 		Long: "teams-cli captures live captions and Meeting Recap transcripts (including " +
 			"the AI Summary) from Microsoft Teams into local Markdown files.\n\n" +
-			"Examples:\n" +
-			"  teams-cli.exe \"https://teams.cloud.microsoft/l/meetingrecap?...\" \"C:\\out\\transcript.md\" --headless\n" +
-			"  teams-cli.exe --queue transcript-queue.txt\n" +
-			"  teams-cli.exe captions \"https://teams.cloud.microsoft/l/meetingrecap?...\" -o \"C:\\out\\transcript.md\" --headless",
+			"With a meeting URL (and optional output path) it captures directly; use a subcommand for\n" +
+			"other tasks. Replace [command] with a real subcommand and run, for example,\n" +
+			"teams-cli join --help, teams-cli captions --help, teams-cli schedule --help,\n" +
+			"teams-cli auth --help, teams-cli generate-config --help, or teams-cli update --help.\n\n" +
+			"Subcommands: join, captions, schedule, auth, update, generate-config.\n\n" +
+			"Configuration file: pass --config (-f) or let teams-cli use the first file that exists:\n" +
+			"  1. ./config.yaml in the working directory\n" +
+			"  2. config.yaml next to the executable\n" +
+			"  3. the per-user config directory (%APPDATA%\\teams-cli\\config.yaml on Windows,\n" +
+			"     ~/.config/teams-cli/config.yaml on Linux)\n" +
+			"When none exists, built-in defaults apply and a visible browser window opens.\n\n" +
+			captureHelpBody(),
+		Example: "  teams-cli \"https://teams.microsoft.com/meet/synthetic\" \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli \"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic\" -o \"C:\\out\\recap.md\" --headless\n" +
+			"  teams-cli --queue transcript-queue.txt\n" +
+			"  teams-cli captions \"https://teams.microsoft.com/meet/synthetic\" -o \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli join --help",
 		SilenceUsage: true,
 		Version:      version.Version,
 		Args:         cobra.MaximumNArgs(2),
@@ -193,7 +208,152 @@ func newRootCommand(d *deps) *cobra.Command {
 		newUpdateCommand(d),
 		newGenerateConfigCommand(d),
 	)
+	installRootHelpHandler(root)
 	return root
+}
+
+// installRootHelpHandler makes the root help explain a mistyped or placeholder
+// argument. When a positional argument that is neither a subcommand nor a valid
+// Teams meeting URL reaches the root help (for example "teams-cli [command]
+// --help" or "teams-cli help [command]"), a redacted one-line note precedes the
+// normal root help. It also forwards the topic given to "help" so the root help
+// function can see it; Cobra's default help command otherwise drops it. It must
+// be called after all subcommands are attached.
+func installRootHelpHandler(root *cobra.Command) {
+	root.InitDefaultHelpCmd()
+	for _, c := range root.Commands() {
+		if c.Name() != "help" {
+			continue
+		}
+		defaultRun := c.Run
+		c.Run = func(hc *cobra.Command, args []string) {
+			target, rest, err := root.Find(args)
+			if err == nil && target == root && len(rest) > 0 {
+				root.InitDefaultHelpFlag()
+				root.InitDefaultVersionFlag()
+				root.HelpFunc()(root, rest)
+				return
+			}
+			defaultRun(hc, args)
+		}
+		break
+	}
+
+	defaultHelp := root.HelpFunc()
+	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if cmd == root {
+			posArgs := helpPositionalArgs(cmd, args)
+			if len(posArgs) > 0 {
+				if sub := findDirectSubcommand(root, posArgs[0]); sub != nil {
+					// "teams-cli --help join" renders the subcommand's own help.
+					sub.InitDefaultHelpFlag()
+					sub.HelpFunc()(sub, posArgs[1:])
+					return
+				}
+			}
+			if len(posArgs) > 0 && teams.ValidateMeetingURL(posArgs[0]) != nil {
+				redacted := redactHelpArg(posArgs[0])
+				// Informational help output only; a failed write to stdout is not actionable (Principle I).
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+					"Note: %q is not a subcommand or a valid Teams meeting URL. "+
+						"Replace [command] with one of the subcommands below "+
+						"(for example: teams-cli join --help, teams-cli captions --help, "+
+						"teams-cli schedule --help, teams-cli auth --help, "+
+						"teams-cli generate-config --help, or teams-cli update --help).\n\n",
+					redacted)
+			}
+		}
+		defaultHelp(cmd, args)
+	})
+}
+
+// helpPositionalArgs returns the positional arguments seen by the root command.
+// After flag parsing it uses the parsed positionals (so flag values such as the
+// path after --config are not mistaken for arguments); otherwise it falls back
+// to the non-flag tokens of args.
+func helpPositionalArgs(cmd *cobra.Command, args []string) []string {
+	if cmd.Flags().Parsed() {
+		return cmd.Flags().Args()
+	}
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			out = append(out, a)
+			continue
+		}
+		if flagTakesSeparateValue(cmd, a) {
+			i++ // skip the flag's value so it is not mistaken for a positional argument
+		}
+	}
+	return out
+}
+
+// flagTakesSeparateValue reports whether token is a non-boolean flag written
+// without an inline value ("-f", "--config"), meaning the next token is its value.
+func flagTakesSeparateValue(cmd *cobra.Command, token string) bool {
+	if token == "--" || strings.Contains(token, "=") {
+		return false
+	}
+	var name string
+	var lookup func(string) *pflag.Flag
+	switch {
+	case strings.HasPrefix(token, "--"):
+		name = token[2:]
+		lookup = func(n string) *pflag.Flag {
+			if f := cmd.Flags().Lookup(n); f != nil {
+				return f
+			}
+			return cmd.PersistentFlags().Lookup(n)
+		}
+	case len(token) == 2:
+		name = token[1:]
+		lookup = func(n string) *pflag.Flag {
+			if f := cmd.Flags().ShorthandLookup(n); f != nil {
+				return f
+			}
+			return cmd.PersistentFlags().ShorthandLookup(n)
+		}
+	default:
+		return false
+	}
+	f := lookup(name)
+	return f != nil && f.NoOptDefVal == ""
+}
+
+// findDirectSubcommand returns the direct subcommand of root named name (or
+// carrying it as an alias), or nil when there is none.
+func findDirectSubcommand(root *cobra.Command, name string) *cobra.Command {
+	for _, sub := range root.Commands() {
+		if sub.Name() == name || sub.HasAlias(name) {
+			return sub
+		}
+	}
+	return nil
+}
+
+// redactedHelpArg is echoed in place of a rejected argument whose shape could
+// carry credentials but is not a well-formed http(s) URL.
+const redactedHelpArg = "[redacted]"
+
+// redactHelpArg redacts a rejected help argument for echo in the Note banner.
+// The original argument is inspected first. Only an input that starts with a
+// well-formed http:// or https:// scheme is delegated to teams.RedactArgs,
+// which strips userinfo, query, and fragment. Any other input containing a
+// credential-bearing delimiter (userinfo "@", query "?", fragment "#", a
+// scheme separator, or an embedded http: token) is suppressed entirely: a
+// passcode or password may itself contain those delimiters, so truncating or
+// partially redacting such text could still echo a secret prefix.
+func redactHelpArg(raw string) string {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return teams.RedactArgs([]string{raw})
+	}
+	if strings.ContainsAny(raw, "@?#") || strings.Contains(lower, "://") ||
+		strings.Contains(lower, "http:") || strings.Contains(lower, "https:") {
+		return redactedHelpArg
+	}
+	return raw
 }
 
 // loadConfigFrom resolves the effective config path (falling back to the

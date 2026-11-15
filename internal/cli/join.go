@@ -15,6 +15,66 @@ import (
 
 const defaultTeamsCaptureURL = "https://teams.microsoft.com/v2/"
 
+// Shared help sections for the commands that bind the full capture flag set
+// (root, join, and captions). They are plain text with 2-space indentation so
+// they read well in both Cobra's Long field and the generated help output.
+const (
+	captureProtocolsHelp = `Capture protocols (--mode, or mode / capture_mode in config.yaml):
+  auto               Default. Uses past-recap for Meeting Recap URLs and live capture otherwise.
+  ephemeral-live     Live captions and MP3 audio with no post-call AI Summary wait. Audio
+                     defaults to on (unless --audio=false) and the AI Summary delay is forced to 0s.
+  live-with-summary  Live captions, then reopens the Meeting Recap after --ai-summary-delay
+                     (default 30m) to append the AI Summary to the saved Markdown file.
+  past-recap         Finite export of an already finished Meeting Recap (transcript, AI Summary,
+                     and optional audio).`
+
+	captureTimingHelp = `Timing and lifecycle:
+  --duration         Nominal live capture window (for example 30m or 1h). The call continues in
+                     overtime while captions or voice activity are observed.
+  --idle-timeout     Silence grace period after --duration or in-browser call end (default 3m).
+  --lobby-timeout    Maximum wait in pre-join or the meeting lobby before aborting.
+  --ai-summary-delay Delay after a live call ends before the AI Summary is appended (default 30m).
+  --no-ai-summary    Disable the delayed AI Summary (same as --ai-summary-delay=0s).
+  --append-ai-summary <file.md> with --not-before <RFC3339> enriches an existing transcript with
+  the Meeting Recap AI Summary; a queued entry is skipped until --not-before has passed.`
+
+	outputPrecedenceHelp = `Output target precedence (highest first):
+  1. positional arg[1]
+  2. --output-file
+  3. --output
+  4. --output-dir
+  5. --output-folder
+  6. config output_file
+  7. config output_folder
+  8. config output_dir
+A directory target clears any configured output_file.`
+
+	filenameTemplateHelp = `Filename template placeholders (--filename-template / --name-template or filename_template):
+  <category>  <concat-meeting-name>  <meeting-name>  <meeting-id>
+  <YYYYMMDD>  <YYYY-MM-DD>  <HHMMSS>  <timestamp>
+Default: <category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md`
+
+	queueHelp = `Batch mode (--queue <file>, -q):
+  Each line of the queue file is one capture invocation. Blank lines and lines starting with ::
+  are skipped; a line that succeeds is commented out with :: so a rerun skips it. Nested --queue
+  entries are rejected and a failing line does not stop the remaining lines.`
+
+	configAndUsageHelp = `Quote URLs (especially those containing &) and paths that contain spaces. Use synthetic or
+authorized meeting URLs only. Run "teams-cli generate-config" to create a commented config file.`
+)
+
+// captureHelpBody joins the shared capture help sections.
+func captureHelpBody() string {
+	return strings.Join([]string{
+		captureProtocolsHelp,
+		captureTimingHelp,
+		outputPrecedenceHelp,
+		filenameTemplateHelp,
+		queueHelp,
+		configAndUsageHelp,
+	}, "\n\n")
+}
+
 type captureFlags struct {
 	meetingURL       string
 	queueFile        string
@@ -260,7 +320,16 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "join <meeting-url> [output-markdown-path]",
 		Short: "Join a Teams meeting and capture its live captions to a Markdown file",
-		Args:  cobra.MaximumNArgs(2),
+		Long: "join opens a browser, joins the Teams meeting identified by <meeting-url> (or the --url flag, " +
+			"or meeting_url in config.yaml), and writes the captured transcript to a Markdown file. " +
+			"A positional <meeting-url> overrides --url, which overrides meeting_url. Without a URL, " +
+			"join fails with an error.\n\n" + captureHelpBody(),
+		Example: "  teams-cli join \"https://teams.microsoft.com/meet/synthetic\" --headless\n" +
+			"  teams-cli join \"https://teams.microsoft.com/meet/synthetic\" \"C:\\out\\call.md\"\n" +
+			"  teams-cli join --url \"https://teams.microsoft.com/meet/synthetic\" --mode ephemeral-live --duration 45m --audio\n" +
+			"  teams-cli join --mode live-with-summary --duration 30m --ai-summary-delay 30m --category ENG \"https://teams.microsoft.com/meet/synthetic\"\n" +
+			"  teams-cli join --queue transcript-queue.txt --output-folder transcripts --headless",
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {
 				if isInsideQueueExecution(cmd.Context()) {
@@ -304,7 +373,14 @@ func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 		Short: "Capture Teams live captions or Meeting Recap transcript + AI Summary to Markdown",
 		Long: "captions opens a browser (headed by default, or headless with --headless), " +
 			"navigates to the provided Teams meeting or Meeting Recap URL, and writes " +
-			"the captured transcript and AI Summary to the specified Markdown file or output directory.",
+			"the captured transcript and AI Summary to the specified Markdown file or output directory.\n\n" +
+			"The [meeting-url] argument is optional. When omitted, the URL comes from --url, then meeting_url " +
+			"in config.yaml, and finally defaults to " + defaultTeamsCaptureURL + " so you can sign in and " +
+			"join a call manually while live captions are recorded.\n\n" + captureHelpBody(),
+		Example: "  teams-cli captions --output-dir transcripts\n" +
+			"  teams-cli captions \"https://teams.microsoft.com/meet/synthetic\" -o \"C:\\out\\transcript.md\" --headless\n" +
+			"  teams-cli captions \"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic\" --mode past-recap --audio\n" +
+			"  teams-cli captions --queue transcript-queue.txt --output-folder transcripts",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {

@@ -37,10 +37,11 @@ func newGenerateConfigCommand(d *deps) *cobra.Command {
 			"[output-dir] argument ending in .yaml or .yml that is not an existing directory\n" +
 			"is treated as the full file path. An existing file is never overwritten unless\n" +
 			"--force is set.\n\n" +
-			"Examples:\n" +
-			"  teams-cli generate-config\n" +
+			"Aliases: init-config, gen-config.",
+		Example: "  teams-cli generate-config\n" +
 			"  teams-cli generate-config C:\\teams\\team.yaml\n" +
-			"  teams-cli generate-config -d \"%LOCALAPPDATA%\\teams-cli\" --force",
+			"  teams-cli generate-config -d \"%LOCALAPPDATA%\\teams-cli\" --force\n" +
+			"  teams-cli init-config -d . -n wsp.yaml",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dest := destination{dir: outputDir, name: name}

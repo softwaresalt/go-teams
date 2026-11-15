@@ -271,7 +271,42 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"meeting (transcript and audio) when its cron or one-shot at trigger " +
 			"fires. All meetings share a single browser profile, serialized by an " +
 			"atomic busy gate that releases automatically when each live call and " +
-			"browser session finish.",
+			"browser session finish.\n\n" +
+			"Meetings come from the meetings: list in config.yaml. Each entry requires a url and either a " +
+			"5-field cron expression or a one-shot at timestamp (RFC3339 or local YYYY-MM-DD HH:MM); name is " +
+			"an optional human-readable title fallback. " +
+			"Past at timestamps are logged and skipped on startup.\n\n" +
+			"Busy gate: while a capture holds the shared profile, an overlapping distinct entry is skipped " +
+			"and logged rather than launched. The gate is released as soon as the live call ends, " +
+			"before the delayed --ai-summary-delay AI Summary fetch, so the next meeting is not blocked.\n\n" +
+			"Startup sweep: when queue_file is configured, the daemon scans it at startup and executes " +
+			"the pending entries it finds, including deferred --append-ai-summary entries; entries whose " +
+			"--not-before timestamp is still in the future are skipped and stay queued.\n\n" +
+			"Precedence for each scheduled meeting (3 tiers, lowest to highest):\n" +
+			"  1. Top-level settings in config.yaml form the baseline.\n" +
+			"  2. Global schedule flags (--mode, --duration, --idle-timeout, --ai-summary-delay,\n" +
+			"     --no-ai-summary, --lobby-timeout, --audio / --recap-audio, --headless, --headed,\n" +
+			"     --browser-path, --profile-dir, --account) are applied to that base configuration\n" +
+			"     first (applyScheduleFlags). If the base mode is then ephemeral-live, the base\n" +
+			"     ai_summary_delay is forced to 0s and capture_audio defaults to true unless audio\n" +
+			"     was set explicitly.\n" +
+			"  3. When a meeting fires, its per-meeting settings (mode / capture_mode, duration,\n" +
+			"     idle_timeout, ai_summary_delay, lobby_timeout, category, capture_audio / audio,\n" +
+			"     output_dir) are applied on top of the flag-adjusted base\n" +
+			"     (buildScheduleEntryConfig), followed by the same ephemeral-live normalization on\n" +
+			"     the entry: when its effective mode is ephemeral-live, ai_summary_delay becomes 0s\n" +
+			"     and capture_audio defaults to true unless audio was explicitly false (an entry\n" +
+			"     capture_audio: true overrides an explicit false on the base).\n" +
+			"So per-meeting settings in config.yaml override global schedule flags for that meeting, while\n" +
+			"daemon-wide browser flags (--browser-path, --profile-dir, --account, --headless, --headed)\n" +
+			"apply to every meeting. Because base normalization already ran, changing an entry's mode away\n" +
+			"from an ephemeral-live base (for example to live-with-summary) does not restore an earlier\n" +
+			"ai_summary_delay or capture_audio value. To override the normalized base, set\n" +
+			"explicit per-meeting ai_summary_delay and capture_audio values on that entry.\n\n" +
+			"Stop the daemon with Ctrl+C; in-flight captures get up to 15 seconds to release their browsers.",
+		Example: "  teams-cli schedule --config config.yaml --headless\n" +
+			"  teams-cli schedule --mode live-with-summary --duration 30m --ai-summary-delay 30m --profile-dir \"%LOCALAPPDATA%\\teams-cli\\profile\"\n" +
+			"  teams-cli schedule --mode ephemeral-live --audio=false --headless",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfigFrom(d, *configPath)

@@ -225,6 +225,24 @@ teams-cli update                 Update teams-cli to the latest GitHub Release
 teams-cli --version              Print the installed version
 ```
 
+Every command has detailed built-in help with examples. Run
+`teams-cli <subcommand> --help` or `teams-cli help <subcommand>`:
+
+```text
+teams-cli join --help
+teams-cli captions --help
+teams-cli schedule --help
+teams-cli auth --help
+teams-cli generate-config --help
+teams-cli update --help
+teams-cli help schedule
+```
+
+The `[command]` shown in the `help` usage text is a placeholder, not a literal
+argument. Passing it (or any other word that is not a subcommand or a valid
+Teams meeting URL) prints a one-line note followed by the root help. The note
+redacts any URL it echoes back.
+
 ## Current capabilities and limits
 
 The browser capture MVP supports live captions, Meeting Recap transcripts,
@@ -501,6 +519,52 @@ Every `meetings:` entry forwards `name` as the fallback meeting title for
 supply a richer title. Past `at:` timestamps are logged and skipped on startup,
 and future `at:` timestamps fire once at the target time without repeating.
 
+All scheduled meetings share one browser profile behind an atomic `busy` gate.
+An entry that overlaps a running capture is skipped and logged. The gate
+releases as soon as the live call ends, before any delayed
+`--ai-summary-delay` AI Summary fetch, so the next meeting is not blocked. When
+`queue_file` is configured, the daemon sweeps it at startup and runs pending
+entries, skipping `--not-before` entries whose timestamp is still in the
+future. On shutdown the daemon allows a 15-second graceful window. A scheduled
+entry without a `duration` uses a nominal 1-hour duration.
+
+#### Schedule configuration and flag precedence
+
+`teams-cli schedule` resolves each meeting's settings in three tiers, from
+lowest to highest precedence:
+
+1. Top-level settings in `config.yaml` establish the baseline.
+2. Global flags passed to `teams-cli schedule` (`--mode`, `--duration`,
+   `--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`,
+   `--lobby-timeout`, `--audio` / `--recap-audio`, `--browser-path`,
+   `--profile-dir`, `--account`, `--headless`, `--headed`) are applied to that
+   base configuration first (`applyScheduleFlags`). When the base mode is
+   `ephemeral-live`, this step also normalizes the base: `ai_summary_delay`
+   becomes `0s`, and `capture_audio` defaults to `true` unless audio was
+   configured explicitly.
+3. When a scheduled meeting fires, its per-meeting settings under `meetings:`
+   (`mode` / `capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`,
+   `lobby_timeout`, `category`, `capture_audio` / `audio`, and `output_dir`) are
+   applied on top of the flag-adjusted base (`buildScheduleEntryConfig`). The
+   entry is then normalized again: when its effective mode is `ephemeral-live`,
+   `ai_summary_delay` becomes `0s`, and `capture_audio` defaults to `true`
+   unless audio was explicitly set to `false` through `--audio=false` or
+   top-level `capture_audio: false`. Setting `capture_audio: true` on the
+   meeting entry overrides that explicit `false`.
+
+As a result, per-meeting settings in `config.yaml` override global `schedule`
+flags (such as `--audio=false` or `--no-ai-summary`) for that meeting. The
+daemon-wide browser and profile flags (`--browser-path`, `--profile-dir`,
+`--account`, `--headless`, and `--headed`) apply to every scheduled meeting.
+
+> [!IMPORTANT]
+> Base normalization runs before any entry is built. If the base mode is
+> `ephemeral-live`, changing one entry's `mode` (for example to
+> `live-with-summary`) does not restore an earlier `ai_summary_delay` or
+> `capture_audio` value from before normalization. Set explicit per-meeting
+> `ai_summary_delay` and `capture_audio` values on that entry to override the
+> normalized base.
+
 ### Windows Task Scheduler one-shot recipes (`teams-cli join --duration`)
 
 You can also schedule one-shot captures directly with Windows Task Scheduler
@@ -747,8 +811,15 @@ timestamp, but not both.
 
 Omitting both `headless` and `headed` opens a visible browser window, so
 interactive sign-in works out of the box. Set `headless: true` for unattended
-runs. Command-line flags override every config value (see
-[Output target precedence](#output-target-precedence)).
+runs. For the single-capture commands (the root command, `join`, `captions`,
+and `auth`), command-line flags override every top-level config value (see
+[Output target precedence](#output-target-precedence)). `teams-cli schedule` is
+the exception: global `schedule` flags override top-level `config.yaml`
+defaults first, and each `meetings:` entry's per-meeting settings (`mode` /
+`capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`,
+`lobby_timeout`, `category`, `capture_audio` / `audio`, and `output_dir`) then
+override those flags for that meeting. See
+[Built-in daemon scheduling (teams-cli schedule)](#built-in-daemon-scheduling-teams-cli-schedule).
 
 ## Project layout
 

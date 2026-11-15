@@ -1,11 +1,13 @@
 ---
 title: Ship session memory for shipment 026-S
-description: Ship execution, multi-persona review, and PR preparation for shipment 026-S
+description: Ship execution, multi-persona review, Copilot remediation, merge, and post-merge closure for shipment 026-S
 date: 2026-11-14
 agent: ship
 feature: 026-F
 shipment: 026-S
-status: in_progress
+pull_request: 66
+merge_commit: 89059afb9fd9c02f238cdf91525761e9a1783009
+status: completed
 ---
 
 ## Session Summary
@@ -21,7 +23,17 @@ status: in_progress
 ## Decisions and Rationale
 
 * Multi-persona adversarial review (9 personas including `rubber-duck`: Architecture Strategist, Security Reviewer, Correctness Reviewer, Go Reviewer, Concurrency Reviewer, Maintainability Reviewer, Scope Boundary Auditor, Constitution Reviewer, and `rubber-duck`) identified 1 in-scope P1 (`sanitizeMeetingID` matching `meeting_` tokens in query/fragment parameters before redaction and percent-encoded `/%3A` SharePoint sharing paths) and in-scope P2/P3 improvements (`extractRecapFromTargets` deduplication, `isAuthRedirectURL` guard in `captureAISummaryFromTargets`, `deriveRecapURLFromMeetingURL` on post-auth re-navigation, Principle I `_ =` comments, and doc updates). All were remediated in commit `1504fa8` without amending any task commit.
+* GitHub Copilot review on PR #66 surfaced 6 in-scope comments across 3 review cycles (`ef30a77`, `4c97830`, `7c8aa26`):
+  1. `PRRT_kwDOTStvas63m8H9`: Guard raw `meeting_` token fallback in `sanitizeMeetingID` with `hasSharePointSharingPath(rawURL)` up front.
+  2. `PRRT_kwDOTStvas63m8IF`: Track `managedProfile` on `NewLiveMeeting` and enforce cold-profile `ErrAccountRequired` across all remote `https://` meeting/Recap hosts (`isRemoteAuthBackedMeetingURL`).
+  3. `PRRT_kwDOTStvas63m8IO`: Skip unverified early media URL candidates in `extractRecapAudioJS` without fetching, continuing to later verified candidates.
+  4. `PRRT_kwDOTStvas63m_jf`: Remove unverified raw-PID `taskkill` on `cmd.Process.Pid` in `cleanup`, guarding `cmd.Process.Kill()` with `<-procDone` and using verified listener cleanup (`terminateSurvivingCDPBrowserOnPort`) for surviving children on Windows.
+  5. `PRRT_kwDOTStvas63nCJ5`: Preserve verified `candidateUrl` as `mediaUrl` when `resp.url` redirects to an opaque CDN URL without its own identity fields.
+  6. `PRRT_kwDOTStvas63nCKI`: Run bounded stream download and `AudioContext.decodeAudioData` inside the candidate loop so non-decodable HTML/manifest candidates fall through to later valid audio URLs.
+* All 6 threads were replied to and resolved via GraphQL; `autoharness gate copilot-review 66` returned `SATISFIED` (`exit_code: 0`) on HEAD `7c8aa267c95504fd198902ee4305ecd763f2fbda`, and CI (`test` + `test-windows`) passed.
+* Merged PR #66 via merge commit (`89059afb9fd9c02f238cdf91525761e9a1783009`).
+* Post-merge closure executed via `autoharness shipment cascade-close` (`docs/closure/evidence/026-S-026-F-close-evidence.json`, `postcondition_verdict: pass`) and `backlogit archive 015-DL`.
 
 ## Next Steps
 
-* Push feature branch, open PR to `main`, wait for GitHub Copilot review and CI (`test` + `test-windows`), resolve any review threads, verify `autoharness gate copilot-review`, merge via `--merge`, and complete post-merge closure.
+* Merge the post-merge closure PR for `026-S` to `main`.

@@ -177,7 +177,7 @@ jobs:
         env:
           GOOS: windows
           GOARCH: amd64
-        run: go build -o bin/teams-cli.exe ./cmd/teams-cli
+        run: go build -o bin/go-teams.exe ./cmd/go-teams
       - name: Vet
         run: go vet ./...
       - name: Vet (integration harness)
@@ -212,7 +212,7 @@ jobs:
       - name: Install dependencies
         run: go mod download
       - name: Build Windows executable
-        run: go build -o bin/teams-cli.exe ./cmd/teams-cli
+        run: go build -o bin/go-teams.exe ./cmd/go-teams
       - name: Vet
         run: go vet ./...
       - name: Vet (integration harness)

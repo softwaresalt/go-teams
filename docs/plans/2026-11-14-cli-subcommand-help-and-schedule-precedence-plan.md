@@ -221,22 +221,32 @@ covering feature **`025-F`** and shipment **`025-S`** (sequenced after
           `--no-ai-summary`, `--lobby-timeout`, `--audio` / `--recap-audio`,
           `--browser-path`, `--profile-dir`, `--account`, `--headless`,
           `--headed`) are applied to that base configuration first
-          (`applyScheduleFlags`).
+          (`applyScheduleFlags`), including base-level `ephemeral-live`
+          normalization (which overwrites `ai_summary_delay` on the base config
+          to `0s` and sets `capture_audio = true` unless audio was explicitly
+          configured when the base mode is `ephemeral-live`).
        3. When each scheduled meeting fires, its per-meeting settings under
           `meetings:` (`mode`/`capture_mode`, `duration`, `idle_timeout`,
           `ai_summary_delay`, `lobby_timeout`, `category`,
           `capture_audio`/`audio`, `output_dir`) are applied on top of the
           flag-adjusted base config (`buildScheduleEntryConfig`), followed by
-          `ephemeral-live` protocol normalization (which forces
-          `ai_summary_delay` to `0s` when the effective mode is `ephemeral-live`
-          and defaults `capture_audio` to `true` unless audio was explicitly set
-          to `false` via `--audio=false` or top-level `capture_audio: false`, in
-          which case setting `capture_audio: true` on the meeting entry
-          overrides it). Therefore, per-meeting settings in `config.yaml`
-          override global `schedule` CLI flags (such as `--audio=false` or
-          `--no-ai-summary`) for that specific meeting, while daemon-wide
-          browser/profile flags (`--browser-path`, `--profile-dir`, `--account`,
-          `--headless`, `--headed`) apply to every scheduled meeting.
+          entry-level `ephemeral-live` protocol normalization (which forces
+          `ai_summary_delay` to `0s` when the effective entry mode is
+          `ephemeral-live` and defaults `capture_audio` to `true` unless audio
+          was explicitly set to `false` via `--audio=false` or top-level
+          `capture_audio: false`, in which case setting `capture_audio: true` on
+          the meeting entry overrides it). Because `applyScheduleFlags` already
+          mutates the base config when the base mode is `ephemeral-live`,
+          changing an individual meeting entry's `mode` (for example to
+          `live-with-summary`) does not restore an earlier `ai_summary_delay` or
+          `capture_audio` value from before base normalization — set explicit
+          per-meeting `ai_summary_delay` and `capture_audio` values on that
+          entry to override the normalized base. Therefore, per-meeting settings
+          in `config.yaml` override global `schedule` CLI flags (such as
+          `--audio=false` or `--no-ai-summary`) for that specific meeting, while
+          daemon-wide browser/profile flags (`--browser-path`, `--profile-dir`,
+          `--account`, `--headless`, `--headed`) apply to every scheduled
+          meeting.
      * In `## Configuration` (around line 755): Qualify the sentence
        `Command-line flags override every config value (see Output target precedence).`
        so it accurately states that for single-capture commands (`root`, `join`,

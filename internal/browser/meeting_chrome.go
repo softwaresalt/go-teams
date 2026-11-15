@@ -37,6 +37,7 @@ const (
 type chromeMeeting struct {
 	opts                 MeetingOptions
 	headedOpts           *Options
+	userDataDir          string
 	cdpPort              int
 	capturePageID        string
 	allowSingleTabRebind bool
@@ -225,6 +226,9 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 		return m.joinHeadedWithDeadline(ctx, deadline)
 	}
 	if m.probePreJoinState == nil {
+		if m.userDataDir != "" && isTeamsHostURL(m.opts.MeetingURL) && !hasTeamsSessionInProfile(m.userDataDir) && m.defaultAccount() == "" {
+			return ErrAccountRequired
+		}
 		targetURL := m.opts.MeetingURL
 		if m.opts.ForceRecap || m.opts.AISummaryOnly {
 			if recapURL := deriveRecapURLFromMeetingURL(targetURL); recapURL != "" {
@@ -425,6 +429,9 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 
 func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline time.Time) error {
 	coldProfile := !hasTeamsSessionInProfile(m.headedOpts.UserDataDir)
+	if coldProfile && m.defaultAccount() == "" {
+		return ErrAccountRequired
+	}
 	effectiveMeetingURL := m.opts.MeetingURL
 	if m.opts.ForceRecap || m.opts.AISummaryOnly {
 		if recapURL := deriveRecapURLFromMeetingURL(effectiveMeetingURL); recapURL != "" {
@@ -457,6 +464,8 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 	clickedLauncher := false
 	consecutiveListFailures := 0
 	missingTargetPolls := 0
+	procExited := false
+	procWait := procDone
 
 	for {
 		if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
@@ -465,10 +474,16 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 		targets, err := listCDPTargets(port)
 		if err != nil {
 			consecutiveListFailures++
-			select {
-			case <-procDone:
+			if !procExited {
+				select {
+				case <-procDone:
+					procExited = true
+					procWait = nil
+				default:
+				}
+			}
+			if procExited {
 				return fmt.Errorf("browser: browser process exited before meeting admission: %w", err)
-			default:
 			}
 			if consecutiveListFailures >= 5 {
 				return fmt.Errorf("browser: DevTools endpoint unreachable before meeting admission: %w", err)
@@ -644,8 +659,13 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 		}
 
 		select {
-		case <-procDone:
-			return fmt.Errorf("browser: browser process exited before meeting admission")
+		case <-procWait:
+			procExited = true
+			procWait = nil
+			if _, probeErr := listCDPTargets(port); probeErr != nil {
+				return fmt.Errorf("browser: browser process exited before meeting admission")
+			}
+			slog.Debug("browser: initial launcher process exited while DevTools endpoint remains active", "cdp_port", port)
 		case <-ctx.Done():
 			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
 		case <-ticker.C:

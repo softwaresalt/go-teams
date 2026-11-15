@@ -109,6 +109,7 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 		mopts.DefaultAccount = strings.TrimSpace(opts.DefaultAccount)
 	}
 	cm := newChromeMeeting(mopts)
+	cm.userDataDir = strings.TrimSpace(opts.UserDataDir)
 	if !opts.Headless {
 		optsCopy := opts
 		cm.headedOpts = &optsCopy

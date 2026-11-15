@@ -1278,17 +1278,26 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 		_ = cmd.Wait()
 		close(procDone)
 	}()
+	var wsURL string
 	cleanup := func() {
+		if wsURL != "" {
+			closeCDPBrowser(wsURL)
+		}
 		if cmd.Process != nil {
 			if runtime.GOOS == "windows" {
-				_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+				killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+				cancel()
 			}
 			_ = cmd.Process.Kill()
 			<-procDone
 		}
+		if runtime.GOOS == "windows" && wsURL != "" {
+			terminateSurvivingCDPBrowserOnPort(port, execPath)
+		}
 	}
 
-	wsURL, err := waitForCDPBrowserWS(port, 20*time.Second)
+	wsURL, err = waitForCDPBrowserWS(port, 20*time.Second)
 	if err != nil {
 		cleanup()
 		return 0, "", "", nil, nil, err
@@ -1511,6 +1520,119 @@ func readBoundedCDPMessage(conn io.ReadWriter, limit int64) ([]byte, error) {
 			return message.Bytes(), nil
 		}
 	}
+}
+
+func closeCDPBrowser(wsURL string) {
+	if strings.TrimSpace(wsURL) == "" {
+		return
+	}
+	dialCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, _, _, err := ws.Dial(dialCtx, wsURL)
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	payload, err := json.Marshal(map[string]any{
+		"id":     1,
+		"method": "Browser.close",
+	})
+	if err != nil {
+		return
+	}
+	if err := wsutil.WriteClientText(conn, payload); err != nil {
+		return
+	}
+	_, _, _ = wsutil.ReadServerData(conn)
+}
+
+func isCDPPortStillAlive(port int) bool {
+	if port <= 0 {
+		return false
+	}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/json/version", port))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var v struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return false
+	}
+	return v.WebSocketDebuggerURL != ""
+}
+
+func parseNetstatListeningPID(output string, port int) int {
+	if port <= 0 {
+		return 0
+	}
+	targetAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	for _, rawLine := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(rawLine))
+		if len(fields) < 5 {
+			continue
+		}
+		if !strings.EqualFold(fields[0], "TCP") || fields[1] != targetAddr || !strings.EqualFold(fields[3], "LISTENING") {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[4])
+		if err == nil && pid > 4 {
+			return pid
+		}
+	}
+	return 0
+}
+
+func findListeningPIDOnLoopbackPort(port int) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "netstat", "-ano", "-p", "tcp").Output()
+	if err != nil {
+		return 0
+	}
+	return parseNetstatListeningPID(string(out), port)
+}
+
+func isChromiumProcessImage(pid int, expectedExecPath string) bool {
+	if pid <= 4 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(out))
+	for _, img := range []string{"msedge.exe", "chrome.exe", "chromium.exe", "brave.exe"} {
+		if strings.Contains(lower, img) {
+			return true
+		}
+	}
+	if base := strings.ToLower(strings.TrimSpace(filepath.Base(expectedExecPath))); base != "" && base != "." {
+		if strings.Contains(lower, base) {
+			return true
+		}
+	}
+	return false
+}
+
+func terminateSurvivingCDPBrowserOnPort(port int, execPath string) {
+	time.Sleep(100 * time.Millisecond)
+	if !isCDPPortStillAlive(port) {
+		return
+	}
+	pid := findListeningPIDOnLoopbackPort(port)
+	if pid <= 4 || !isChromiumProcessImage(pid, execPath) {
+		return
+	}
+	killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
 }
 
 // navigateCDPTarget sends a top-level CDP Page.navigate command to wsURL,

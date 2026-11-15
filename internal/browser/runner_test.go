@@ -42,3 +42,15 @@ func TestChromeRunnerJoinRejectsPlainHTTPRemoteURL(t *testing.T) {
 	assert.NotContains(t, err.Error(), "secret")
 	assert.NotContains(t, err.Error(), "chrome-binary")
 }
+
+func TestChromeRunnerAuthenticateRequiresDefaultAccount(t *testing.T) {
+	runner := NewChromeRunner(Options{
+		ExecPath:       "/nonexistent/chrome-binary",
+		DefaultAccount: "   ",
+	})
+
+	err := runner.Authenticate(context.Background())
+
+	require.ErrorIs(t, err, ErrAccountRequired)
+	assert.NotContains(t, err.Error(), "chrome-binary", "Authenticate must fail fast with ErrAccountRequired before launching browser")
+}

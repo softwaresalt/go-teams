@@ -268,11 +268,34 @@ func TestNavigateCDPTargetSendsPageNavigate(t *testing.T) {
 const harnessRecapURL = "https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a"
 
 func TestMain(m *testing.M) {
-	if os.Getenv("GO_TEAMS_RECAP_HEADED_FIXTURE") == "1" {
+	if os.Getenv("GO_TEAMS_EDGE_STUB_PARENT") == "1" {
+		runHeadedEdgeStubParentFixture()
+		return
+	}
+	if os.Getenv("GO_TEAMS_RECAP_HEADED_FIXTURE") == "1" || os.Getenv("GO_TEAMS_EDGE_STUB_CHILD") == "1" {
 		runHeadedRecapFixture()
 		return
 	}
 	os.Exit(m.Run())
+}
+
+func runHeadedEdgeStubParentFixture() {
+	self, err := os.Executable()
+	if err != nil {
+		os.Exit(2)
+	}
+	cmd := exec.Command(self, os.Args[1:]...)
+	cmd.Env = append(os.Environ(), "GO_TEAMS_EDGE_STUB_PARENT=0", "GO_TEAMS_EDGE_STUB_CHILD=1")
+	if err := cmd.Start(); err != nil {
+		os.Exit(2)
+	}
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--remote-debugging-port=") {
+			port, _ := strconv.Atoi(strings.TrimPrefix(arg, "--remote-debugging-port="))
+			_, _ = waitForCDPBrowserWS(port, 5*time.Second)
+		}
+	}
+	os.Exit(0)
 }
 
 func runHeadedRecapFixture() {
@@ -285,6 +308,8 @@ func runHeadedRecapFixture() {
 	if port == "" {
 		os.Exit(2)
 	}
+	delayTranscript := os.Getenv("GO_TEAMS_EDGE_STUB_CHILD") == "1"
+	var evalCount atomic.Int32
 	base := "127.0.0.1:" + port
 	server := &http.Server{Addr: base, ReadHeaderTimeout: time.Second}
 	mux := http.NewServeMux()
@@ -292,6 +317,35 @@ func runHeadedRecapFixture() {
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, _ *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]string{"webSocketDebuggerUrl": "ws://" + base + "/browser"}); err != nil {
 			os.Exit(2)
+		}
+	})
+	mux.HandleFunc("/browser", func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		for {
+			raw, _, err := wsutil.ReadClientData(conn)
+			if err != nil {
+				return
+			}
+			var req struct {
+				ID     int    `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(raw, &req) != nil {
+				return
+			}
+			resp, _ := json.Marshal(map[string]any{"id": req.ID, "result": map[string]any{}})
+			_ = wsutil.WriteServerText(conn, resp)
+			if req.Method == "Browser.close" {
+				go func() {
+					time.Sleep(20 * time.Millisecond)
+					os.Exit(0)
+				}()
+				return
+			}
 		}
 	})
 	mux.HandleFunc("/json/list", func(w http.ResponseWriter, _ *http.Request) {
@@ -321,7 +375,11 @@ func runHeadedRecapFixture() {
 		if req.Method == "Page.getFrameTree" {
 			result = map[string]interface{}{"frameTree": map[string]interface{}{"frame": map[string]string{"id": "owner", "url": harnessRecapURL}}}
 		} else {
+			n := evalCount.Add(1)
 			payload := `{"pageUrl":"` + harnessRecapURL + `","entries":[{"speaker":"Presenter","timestamp":"PT1S","text":"` + port + `"}]}`
+			if delayTranscript && n < 2 {
+				payload = `{"pageUrl":"` + harnessRecapURL + `","entries":[]}`
+			}
 			result = map[string]interface{}{"result": map[string]string{"value": payload}}
 		}
 		response, err := json.Marshal(map[string]interface{}{"id": req.ID, "result": result})
@@ -341,7 +399,7 @@ func TestJoinHeadedPersistsLaunchedCDPPortForRecap(t *testing.T) {
 	}
 	t.Setenv("GO_TEAMS_RECAP_HEADED_FIXTURE", "1")
 	m := &chromeMeeting{
-		opts:       MeetingOptions{MeetingURL: harnessRecapURL},
+		opts:       MeetingOptions{MeetingURL: harnessRecapURL, DefaultAccount: "presenter@example.com"},
 		headedOpts: &Options{ExecPath: self},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1312,3 +1370,64 @@ globalThis.AudioContext = class {
   }
 })().catch(e => { console.error(e.message); process.exitCode = 1; });
 `
+
+func TestJoinColdProfileRequiresDefaultAccount(t *testing.T) {
+	coldProfileDir := t.TempDir()
+
+	// 1. Headed join on a cold profile without DefaultAccount fails fast with ErrAccountRequired.
+	headedMeeting := &chromeMeeting{
+		opts:       MeetingOptions{MeetingURL: harnessRecapURL},
+		headedOpts: &Options{ExecPath: "/nonexistent/browser", UserDataDir: coldProfileDir},
+	}
+	err := headedMeeting.Join(context.Background())
+	require.ErrorIs(t, err, ErrAccountRequired)
+
+	// 2. Headless NewLiveMeeting on a cold profile for a Teams URL without DefaultAccount
+	// also fails fast with ErrAccountRequired in Join before navigating.
+	headlessMeeting, bctx, cleanup, err := NewLiveMeeting(
+		context.Background(),
+		Options{Headless: true, UserDataDir: coldProfileDir, ExecPath: "/nonexistent/browser"},
+		MeetingOptions{MeetingURL: harnessRecapURL},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	err = headlessMeeting.Join(bctx)
+	require.ErrorIs(t, err, ErrAccountRequired)
+}
+
+func TestJoinHeadedSurvivesParentStubExitWhileCDPAlive(t *testing.T) {
+	self, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv("GO_TEAMS_EDGE_STUB_PARENT", "1")
+
+	m := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL:     harnessRecapURL,
+			DefaultAccount: "presenter@example.com",
+		},
+		headedOpts: &Options{ExecPath: self},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	defer m.stopHeadedBrowser()
+
+	require.NoError(t, m.joinHeaded(ctx))
+	require.Len(t, m.recapEntries, 1)
+	// Ensure cleanup closes the surviving child process via Browser.close / port cleanup.
+	m.stopHeadedBrowser()
+}
+
+func TestParseNetstatListeningPID(t *testing.T) {
+	sample := `
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    0.0.0.0:54321          0.0.0.0:0              LISTENING       1111
+  TCP    127.0.0.1:54321        127.0.0.1:60123        ESTABLISHED     2222
+  TCP    127.0.0.1:54321        0.0.0.0:0              LISTENING       4321
+  TCP    127.0.0.1:54322        0.0.0.0:0              LISTENING       4
+`
+	require.Equal(t, 4321, parseNetstatListeningPID(sample, 54321))
+	require.Equal(t, 0, parseNetstatListeningPID(sample, 54322), "PID <= 4 must be rejected")
+	require.Equal(t, 0, parseNetstatListeningPID(sample, 99999))
+}

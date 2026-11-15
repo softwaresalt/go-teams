@@ -41,6 +41,9 @@ func NewChromeRunner(opts Options) *ChromeRunner {
 // Authenticate implements Runner. It forces a headed browser so the user can
 // complete the Microsoft 365 login and MFA challenges manually.
 func (r *ChromeRunner) Authenticate(ctx context.Context) error {
+	if strings.TrimSpace(r.options.DefaultAccount) == "" {
+		return ErrAccountRequired
+	}
 	opts := r.options
 	opts.Headless = false
 	return r.run(ctx, opts, teamsHomeURL)

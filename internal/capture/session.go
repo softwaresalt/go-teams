@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,9 @@ type SessionConfig struct {
 	IdleTimeout time.Duration
 	// PollInterval overrides DefaultPollInterval when > 0.
 	PollInterval time.Duration
+	// DisableAISummary suppresses appending # AI Summary to the Markdown
+	// transcript at the end of a capture session.
+	DisableAISummary bool
 }
 
 // Session orchestrates a single meeting capture end to end: join, then
@@ -201,9 +205,26 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	s.mu.Lock()
 	s.lastTranscriptPath = out.TranscriptPath
 	s.mu.Unlock()
+
+	var (
+		mu              sync.Mutex
+		firstErr        error
+		captionsErr     error
+		audioErr        error
+		watchdogStopped atomic.Bool
+	)
+
 	defer func() {
 		if closeErr := out.Close(); closeErr != nil {
 			err = errors.Join(err, closeErr)
+		}
+		mu.Lock()
+		hadAudioErr := audioErr != nil
+		mu.Unlock()
+		if hadAudioErr && out.AudioPath != "" {
+			if info, statErr := os.Stat(out.AudioPath); statErr == nil && info.Size() == 0 {
+				_ = os.Remove(out.AudioPath) // Best-effort removal of empty 0-byte audio artifact after failed audio capture.
+			}
 		}
 	}()
 	if out.TranscriptPath != "" {
@@ -213,21 +234,35 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var (
-		mu              sync.Mutex
-		firstErr        error
-		watchdogStopped atomic.Bool
-	)
-	setErr := func(e error) {
+	setCaptionsErr := func(e error) {
 		if e == nil {
 			return
 		}
 		mu.Lock()
+		if captionsErr == nil {
+			captionsErr = e
+		}
 		if firstErr == nil {
 			firstErr = e
 		}
 		mu.Unlock()
 		cancel()
+	}
+	setAudioErr := func(e error) {
+		if e == nil {
+			return
+		}
+		mu.Lock()
+		if audioErr == nil {
+			audioErr = e
+		}
+		if firstErr == nil {
+			firstErr = e
+		}
+		mu.Unlock()
+		if !isRecap {
+			cancel()
+		}
 	}
 
 	if !isRecap {
@@ -293,11 +328,11 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 			Speaker:   speaker,
 			Text:      text,
 		}); writeErr != nil {
-			setErr(fmt.Errorf("capture: transcript write: %w", writeErr))
+			setCaptionsErr(fmt.Errorf("capture: transcript write: %w", writeErr))
 			return
 		}
 		if flushErr := out.Transcript.Flush(); flushErr != nil {
-			setErr(fmt.Errorf("capture: transcript flush: %w", flushErr))
+			setCaptionsErr(fmt.Errorf("capture: transcript flush: %w", flushErr))
 		}
 	}
 
@@ -306,7 +341,7 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	go func() {
 		defer wg.Done()
 		if e := m.EnableCaptions(runCtx, sink); e != nil && !isShutdown(ctx, e) && !(watchdogStopped.Load() && isShutdown(runCtx, e)) {
-			setErr(fmt.Errorf("capture: captions: %w", e))
+			setCaptionsErr(fmt.Errorf("capture: captions: %w", e))
 		}
 	}()
 	if !captionsOnly {
@@ -314,7 +349,7 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		go func() {
 			defer wg.Done()
 			if e := m.CaptureAudio(runCtx, out.Audio); e != nil && !isShutdown(ctx, e) && !(watchdogStopped.Load() && isShutdown(runCtx, e)) {
-				setErr(fmt.Errorf("capture: audio: %w", e))
+				setAudioErr(fmt.Errorf("capture: audio: %w", e))
 			}
 		}()
 	}
@@ -322,17 +357,18 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 
 	mu.Lock()
 	result := firstErr
+	capFailed := captionsErr != nil
 	mu.Unlock()
-	if result == nil {
+	if !capFailed {
 		skipSyncSummary := !isRecap && strings.EqualFold(strings.TrimSpace(s.cfg.Mode), "ephemeral-live")
-		if !skipSyncSummary {
+		if !skipSyncSummary && !s.cfg.DisableAISummary {
 			if sp, ok := m.(browser.AISummaryProvider); ok {
 				if summary := sp.AISummary(); summary != "" {
 					if writeErr := out.Transcript.WriteAISummary(summary); writeErr != nil {
-						return fmt.Errorf("capture: write ai summary: %w", writeErr)
+						return errors.Join(result, fmt.Errorf("capture: write ai summary: %w", writeErr))
 					}
 					if flushErr := out.Transcript.Flush(); flushErr != nil {
-						return fmt.Errorf("capture: flush ai summary: %w", flushErr)
+						return errors.Join(result, fmt.Errorf("capture: flush ai summary: %w", flushErr))
 					}
 					slog.Info("capture: appended AI summary to transcript")
 				}

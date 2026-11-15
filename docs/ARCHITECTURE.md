@@ -54,6 +54,7 @@ internal/cli
     |-- internal/capture --+-- internal/browser --+-- internal/audio
     |                      |                      |-- internal/teams
     |                      |                      '-- internal/transcript
+    |                      |-- internal/teams
     |                      '-- internal/transcript
     |-- internal/browser   (direct use for auth, runner, and meeting setup)
     |-- internal/updater ----- internal/version
@@ -82,8 +83,8 @@ Rules the layout enforces:
   loaded configuration and flags into the plain option structs that adapters
   consume (`browser.Options`, `capture.SessionConfig`, `updater.Config`), so
   adapters never read the config file.
-* `internal/capture` depends on `browser` and `transcript`; `browser` never
-  imports `capture`. Capture-specific behavior such as file naming and
+* `internal/capture` depends on `browser`, `teams`, and `transcript`; `browser`
+  never imports `capture`. Capture-specific behavior such as file naming and
   permissions stays out of the browser layer.
 * `internal/updater` is independent of the capture path. Its only internal
   dependency is `internal/version`.
@@ -96,14 +97,16 @@ Rules the layout enforces:
 ### Interactive auth
 
 `teams-cli auth` opens a visible browser with a persistent profile directory
-(`--profile-dir` or the configured `profile_dir`). When `default_account` (or
-`--account`) is set, `ChromeRunner` polls for the Microsoft Entra "Pick an
-account" interstitial (`#tilesHolder`) and clicks the single unambiguously
-matching account tile automatically. You complete any password or MFA prompts
-manually and the session cookies stay in that profile. Headless runs later
-reuse the profile; they can auto-select a cached account tile when
-`default_account` / `--account` is configured, but cannot complete password
-entry, MFA, or lobby admission themselves.
+(`--profile-dir` or the configured `profile_dir`). Initial authentication (and
+cold-profile bootstrap when the profile does not yet contain a Teams session)
+requires `default_account` in `config.yaml` or `--account` on the command line
+(`browser.ErrAccountRequired` when missing); `ChromeRunner` polls for the
+Microsoft Entra "Pick an account" interstitial (`#tilesHolder`) and clicks the
+single unambiguously matching account tile automatically. You complete any
+password or MFA prompts manually and the session cookies stay in that profile.
+Headless runs later reuse the profile; they can auto-select a cached account
+tile when `default_account` / `--account` is configured, but cannot complete
+password entry, MFA, or lobby admission themselves.
 
 ### Live join and captions
 
@@ -250,12 +253,16 @@ never loads a configuration file and ignores the root `--config` flag:
   embedded credentials. It checks the initial URL only; in-browser redirects
   are not intercepted.
 * **Redaction.** `teams.RedactURL` and `teams.RedactArgs` reduce URLs to
-  `scheme://host/path` in navigation errors, logs, and queue output so
-  passcodes, userinfo, and fragments never reach logs. When Microsoft Entra
-  account auto-selection (`default_account` / `--account`) logs a tile
-  selection, `redactAccountIdentifier` masks the configured UPN or display
-  name (`a***@contoso.com` or `A***`) so raw account identifiers never appear
-  in logs, and `selectEntraAccountJS` serializes the target string with
+  `scheme://host/path` in navigation errors, logs, queue output, and the
+  `**Source:**` link in Markdown transcript headers (with `transcript.Writer`
+  additionally enforcing a standard-library `net/url` `scheme://host/path`
+  allowlist that strips userinfo, query parameters, fragments, and SharePoint
+  `/:` sharing tokens) so passcodes, userinfo, and fragments never reach logs
+  or saved transcripts. When Microsoft Entra account auto-selection
+  (`default_account` / `--account`) logs a tile selection,
+  `redactAccountIdentifier` masks the configured UPN or display name
+  (`a***@contoso.com` or `A***`) so raw account identifiers never appear in
+  logs, and `selectEntraAccountJS` serializes the target string with
   `json.Marshal` to prevent DOM/script injection.
 * **Participant text.** `transcript.Writer` defuses Markdown and bare-URL
   autolink syntax in captions and metadata fields so remote participants cannot

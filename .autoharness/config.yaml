@@ -103,9 +103,9 @@ model_routing:
       reasoning_effort: "high"
       context_tier: "long_context"
   ship:
-    model_family: "gpt-6.1-terra"
-    model_provider: "openai"
-    reasoning_effort: "medium"
+    model_family: "gemini-4-hydrogen"
+    model_provider: "google"
+    reasoning_effort: "high"
     context_tier: "long_context" 
     escalation:
       model_family: "gpt-6.1-sol"

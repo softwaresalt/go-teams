@@ -37,6 +37,8 @@ const (
 type chromeMeeting struct {
 	opts                 MeetingOptions
 	headedOpts           *Options
+	managedProfile       bool
+	userDataDir          string
 	cdpPort              int
 	capturePageID        string
 	allowSingleTabRebind bool
@@ -123,7 +125,7 @@ func (m *chromeMeeting) lobbyDeadline() time.Time {
 	if m.opts.LobbyTimeout > 0 {
 		return time.Now().Add(m.opts.LobbyTimeout)
 	}
-	if m.opts.ForceRecap {
+	if m.opts.ForceRecap || m.opts.AISummaryOnly {
 		return time.Now().Add(defaultForceRecapTimeout)
 	}
 	return time.Time{}
@@ -209,6 +211,19 @@ func deriveRecapURLFromMeetingURL(meetingURL string) string {
 	return fmt.Sprintf("https://%s/l/meetingrecap?threadId=%s", host, url.QueryEscape(id.ThreadID))
 }
 
+func isRemoteAuthBackedMeetingURL(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "", "localhost", "127.0.0.1", "::1":
+		return false
+	default:
+		return true
+	}
+}
+
 // Join implements Meeting. It validates the meeting URL, navigates to it, waits
 // for user authentication or launcher interstitial handling as needed, and
 // detects either a Teams Meeting Recap transcript (via xplatplugins.aspx /
@@ -225,8 +240,11 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 		return m.joinHeadedWithDeadline(ctx, deadline)
 	}
 	if m.probePreJoinState == nil {
+		if (m.managedProfile || m.userDataDir != "") && isRemoteAuthBackedMeetingURL(m.opts.MeetingURL) && !hasTeamsSessionInProfile(m.userDataDir) && m.defaultAccount() == "" {
+			return ErrAccountRequired
+		}
 		targetURL := m.opts.MeetingURL
-		if m.opts.ForceRecap {
+		if m.opts.ForceRecap || m.opts.AISummaryOnly {
 			if recapURL := deriveRecapURLFromMeetingURL(targetURL); recapURL != "" {
 				targetURL = recapURL
 			}
@@ -425,8 +443,11 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 
 func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline time.Time) error {
 	coldProfile := !hasTeamsSessionInProfile(m.headedOpts.UserDataDir)
+	if coldProfile && m.defaultAccount() == "" {
+		return ErrAccountRequired
+	}
 	effectiveMeetingURL := m.opts.MeetingURL
-	if m.opts.ForceRecap {
+	if m.opts.ForceRecap || m.opts.AISummaryOnly {
 		if recapURL := deriveRecapURLFromMeetingURL(effectiveMeetingURL); recapURL != "" {
 			effectiveMeetingURL = recapURL
 		}
@@ -457,6 +478,8 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 	clickedLauncher := false
 	consecutiveListFailures := 0
 	missingTargetPolls := 0
+	procExited := false
+	procWait := procDone
 
 	for {
 		if !deadline.IsZero() && !time.Now().Before(deadline) && ctx.Err() == nil {
@@ -465,10 +488,16 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 		targets, err := listCDPTargets(port)
 		if err != nil {
 			consecutiveListFailures++
-			select {
-			case <-procDone:
+			if !procExited {
+				select {
+				case <-procDone:
+					procExited = true
+					procWait = nil
+				default:
+				}
+			}
+			if procExited {
 				return fmt.Errorf("browser: browser process exited before meeting admission: %w", err)
-			default:
 			}
 			if consecutiveListFailures >= 5 {
 				return fmt.Errorf("browser: DevTools endpoint unreachable before meeting admission: %w", err)
@@ -505,37 +534,16 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 				hasRecapIframe := false
 				for i := range targets {
 					t := &targets[i]
-					if !isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) {
-						continue
-					}
-					if isRecapIframeTarget(*t) {
+					if isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) && isRecapIframeTarget(*t) {
 						hasRecapIframe = true
-					}
-
-					// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
-					// has a Meeting Recap transcript list populated for the requested meeting.
-					if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-						if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPage.URL, t.URL); pErr == nil && len(entries) > 0 {
-							m.recapEntries = entries
-							if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
-								m.aiSummary = summary
-								slog.Info("browser: copied AI summary from meeting recap")
-							}
-							enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
-							m.recapMeta = meta
-							m.retainRecapAudioIdentity(mainPage.URL)
-							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
-							return nil
-						}
+						break
 					}
 				}
-				if m.opts.ForceRecap && isOnTargetMeetingOrRecapURL(m.opts.MeetingURL, mainPage.URL, "", "") {
-					if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
-						m.aiSummary = summary
-						m.retainRecapAudioIdentity(mainPage.URL)
-						slog.Info("browser: copied AI summary from meeting recap")
-						return nil
-					}
+				pollCtx, cancelPoll := m.withDeadlineContext(ctx, deadline)
+				extracted := m.extractRecapFromTargets(pollCtx, port, mainPage.URL, targets, ownedFrames)
+				cancelPoll()
+				if extracted {
+					return nil
 				}
 
 				stateRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `JSON.stringify({
@@ -611,7 +619,7 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 						}
 					} else {
 						clickedLauncher = false
-						if !m.opts.ForceRecap && (st.Toolbar || st.Lobby || st.Prejoin) {
+						if !m.opts.ForceRecap && !m.opts.AISummaryOnly && (st.Toolbar || st.Lobby || st.Prejoin) {
 							// Live meeting flow on the open page target; keep allocCtx
 							// derived from the session-lifetime ctx so attachedCtx stays
 							// alive after Join returns.
@@ -639,8 +647,13 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 		}
 
 		select {
-		case <-procDone:
-			return fmt.Errorf("browser: browser process exited before meeting admission")
+		case <-procWait:
+			procExited = true
+			procWait = nil
+			if _, probeErr := listCDPTargets(port); probeErr != nil {
+				return fmt.Errorf("browser: browser process exited before meeting admission")
+			}
+			slog.Debug("browser: initial launcher process exited while DevTools endpoint remains active", "cdp_port", port)
 		case <-ctx.Done():
 			return fmt.Errorf("browser: pre-join not visible: %w", ctx.Err())
 		case <-ticker.C:
@@ -784,7 +797,7 @@ func (m *chromeMeeting) awaitPreJoinOrAdmissionWithDeadline(ctx context.Context,
 		}
 
 		state := classifyPreJoinState(toolbar, lobby, prejoin, launcher)
-		if m.opts.ForceRecap && (state == PreJoinAdmitted || state == PreJoinInLobby || state == PreJoinReady) {
+		if (m.opts.ForceRecap || m.opts.AISummaryOnly) && (state == PreJoinAdmitted || state == PreJoinInLobby || state == PreJoinReady) {
 			// In ForceRecap mode, never enter the live pre-join click flow or
 			// treat a live call toolbar as Recap completion. If the meeting URL
 			// opened live pre-join and carries a threadId, navigate to its
@@ -884,9 +897,15 @@ func (m *chromeMeeting) awaitPreJoinOrAdmissionWithDeadline(ctx context.Context,
 						if coldRecapPolls >= 5 {
 							reNavigateAttempts++
 							coldRecapPolls = 0
+							targetURL := m.opts.MeetingURL
+							if m.opts.ForceRecap || m.opts.AISummaryOnly {
+								if recapURL := deriveRecapURLFromMeetingURL(targetURL); recapURL != "" {
+									targetURL = recapURL
+								}
+							}
 							slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
 							navCtx, cancelNav := m.withDeadlineContext(ctx, deadline)
-							_ = chromedp.Run(navCtx, chromedp.Navigate(m.opts.MeetingURL))
+							_ = chromedp.Run(navCtx, chromedp.Navigate(targetURL))
 							cancelNav()
 						}
 					} else {
@@ -933,26 +952,34 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 		mainPageURL = mainPage.URL
 		ownedFrames = fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
 	}
-	for _, t := range targets {
-		if !isTargetInCaptureScope(t, m.capturePageID, ownedFrames) {
-			continue
-		}
-		if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-			if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPageURL, t.URL); pErr == nil && len(entries) > 0 {
-				m.recapEntries = entries
-				if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
-					m.aiSummary = summary
-					slog.Info("browser: copied AI summary from meeting recap")
+	return m.extractRecapFromTargets(ctx, port, mainPageURL, targets, ownedFrames)
+}
+
+func (m *chromeMeeting) extractRecapFromTargets(ctx context.Context, port int, mainPageURL string, targets []cdpTargetInfo, ownedFrames ownedFrameSet) bool {
+	if !m.opts.AISummaryOnly {
+		for _, t := range targets {
+			if !isTargetInCaptureScope(t, m.capturePageID, ownedFrames) {
+				continue
+			}
+			if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
+				if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPageURL, t.URL); pErr == nil && len(entries) > 0 {
+					m.recapEntries = entries
+					if !m.opts.DisableAISummary {
+						if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
+							m.aiSummary = summary
+							slog.Info("browser: copied AI summary from meeting recap")
+						}
+					}
+					enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
+					m.recapMeta = meta
+					m.retainRecapAudioIdentity(mainPageURL)
+					slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
+					return true
 				}
-				enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
-				m.recapMeta = meta
-				m.retainRecapAudioIdentity(mainPageURL)
-				slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
-				return true
 			}
 		}
 	}
-	if m.opts.ForceRecap && isOnTargetMeetingOrRecapURL(m.opts.MeetingURL, mainPageURL, "", "") {
+	if m.opts.AISummaryOnly && isOnTargetMeetingOrRecapURL(m.opts.MeetingURL, mainPageURL, "", "") {
 		if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
 			m.aiSummary = summary
 			m.retainRecapAudioIdentity(mainPageURL)

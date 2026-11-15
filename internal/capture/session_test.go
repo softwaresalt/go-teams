@@ -500,6 +500,90 @@ func TestSessionRunExtendsOvertimeWhileCaptionOrAudioActivityPersists(t *testing
 	}
 }
 
+func TestSessionRunRecapAudioErrorPreservesAISummaryAndRemovesZeroByteMP3(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:    dir,
+		MeetingURL:   "https://teams.cloud.microsoft/l/meetingrecap?threadId=1",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: false,
+	})
+	s.now = fixedTime
+
+	audioBoom := errors.New("browser: recap audio unavailable: Failed to fetch")
+	fm := &fakeMeeting{
+		isRecap:        true,
+		events:         []captionPair{{"Alice", "Recap utterance before audio failure."}},
+		aiSummary:      "Meeting notes:\nRecap Decision:\nShip the fix.\n",
+		audioErr:       audioBoom,
+		audioReturnNow: true,
+	}
+
+	err := s.Run(context.Background(), fm)
+	if !errors.Is(err, audioBoom) {
+		t.Fatalf("expected audio error to be returned, got %v", err)
+	}
+
+	entries, readDirErr := os.ReadDir(dir)
+	if readDirErr != nil {
+		t.Fatalf("readdir: %v", readDirErr)
+	}
+	var mdContent string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".mp3") {
+			t.Errorf("expected 0-byte .mp3 file %q to be removed after audio capture failure", entry.Name())
+		}
+		if strings.HasSuffix(entry.Name(), ".md") {
+			b, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if readErr != nil {
+				t.Fatalf("read transcript: %v", readErr)
+			}
+			mdContent = string(b)
+		}
+	}
+	if !strings.Contains(mdContent, "Recap utterance before audio failure.") {
+		t.Errorf("transcript missing recap utterance; got:\n%s", mdContent)
+	}
+	if !strings.Contains(mdContent, "# AI Summary") || !strings.Contains(mdContent, "Ship the fix.") {
+		t.Errorf("expected # AI Summary to be written despite audio error; got:\n%s", mdContent)
+	}
+}
+
+func TestSessionRunDisableAISummaryOmitsSummarySection(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(SessionConfig{
+		OutputDir:        dir,
+		MeetingURL:       "https://teams.cloud.microsoft/l/meetingrecap?threadId=1",
+		BotName:          "Bot",
+		Now:              fixedTime(),
+		CaptionsOnly:     true,
+		DisableAISummary: true,
+	})
+	s.now = fixedTime
+
+	fm := &fakeMeeting{
+		isRecap:   true,
+		events:    []captionPair{{"Alice", "Transcript only line."}},
+		aiSummary: "Meeting notes:\nShould Not Appear:\nSuppressed by DisableAISummary.\n",
+	}
+
+	if err := s.Run(context.Background(), fm); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	b, err := os.ReadFile(s.LastTranscriptPath())
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	md := string(b)
+	if !strings.Contains(md, "Transcript only line.") {
+		t.Errorf("expected transcript event in markdown, got:\n%s", md)
+	}
+	if strings.Contains(md, "# AI Summary") || strings.Contains(md, "Suppressed by DisableAISummary") {
+		t.Errorf("DisableAISummary must omit # AI Summary section, got:\n%s", md)
+	}
+}
+
 func TestSessionRunStopsEarlyOnCallEndedSignal(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(SessionConfig{

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/softwaresalt/go-teams/internal/teams"
 	"github.com/softwaresalt/go-teams/internal/transcript"
 )
 
@@ -84,12 +85,13 @@ type OutputConfig struct {
 	Attendees []string
 	// BotName is retained for compatibility with existing callers.
 	BotName string
-	// Now is the capture start time used for output file naming and as the
-	// fallback header start time; a zero value defaults to time.Now.
+	// Now is the capture start time used as the fallback for output file
+	// naming and the transcript header start time when MeetingStart is zero; a
+	// zero value defaults to time.Now.
 	Now time.Time
 	// MeetingStart is the optional discovered meeting start time written to
-	// the transcript header (**Meeting Start:**) when non-zero, keeping Now as
-	// the per-capture timestamp for file naming.
+	// the transcript header (**Meeting Start:**) and used for date/time
+	// placeholders in output file naming when non-zero.
 	MeetingStart time.Time
 	// CaptionsOnly skips creating the MP3 audio output file when only live
 	// captions are being captured to Markdown.
@@ -118,8 +120,12 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	headerStart := now
+	if !cfg.MeetingStart.IsZero() {
+		headerStart = cfg.MeetingStart
+	}
 	id := sanitizeMeetingID(cfg.MeetingURL)
-	mdFilename := FormatTranscriptFilename(cfg.FilenameTemplate, cfg, now, id)
+	mdFilename := FormatTranscriptFilename(cfg.FilenameTemplate, cfg, headerStart, id)
 	base := strings.TrimSuffix(mdFilename, filepath.Ext(mdFilename))
 
 	explicitFile := cfg.FilePath
@@ -174,16 +180,12 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
-	headerStart := now
-	if !cfg.MeetingStart.IsZero() {
-		headerStart = cfg.MeetingStart
-	}
 	w := transcript.NewWriter(mdFile)
 	if err := w.WriteHeader(transcript.Metadata{
 		MeetingID:    id,
 		MeetingTitle: cfg.MeetingTitle,
 		Category:     cfg.Category,
-		SourceURL:    cfg.MeetingURL,
+		SourceURL:    redactSourceURL(cfg.MeetingURL),
 		StartTime:    headerStart,
 		Timezone:     cfg.Timezone,
 		Attendees:    cfg.Attendees,
@@ -251,20 +253,84 @@ func (o *Output) Close() error {
 	return errors.Join(errs...)
 }
 
+func hasSharePointSharingPath(raw string) bool {
+	cur := raw
+	for range 3 {
+		lower := strings.ToLower(cur)
+		if strings.Contains(lower, "/:") || strings.Contains(lower, "/%3a") ||
+			strings.Contains(lower, "%2f:") || strings.Contains(lower, "%2f%3a") {
+			return true
+		}
+		next, err := url.PathUnescape(cur)
+		if err != nil || next == cur {
+			break
+		}
+		cur = next
+	}
+	return false
+}
+
+func redactSourceURL(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	redacted := teams.RedactURL(trimmed)
+	if redacted == "" || redacted == "[invalid-url]" || hasSharePointSharingPath(redacted) {
+		return ""
+	}
+	return redacted
+}
+
+func extractThreadIDMeetingToken(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	for _, rawVal := range u.Query()["threadId"] {
+		if tok := meetingIDToken.FindString(rawVal); tok != "" {
+			return tok
+		}
+	}
+	if idx := strings.Index(u.Fragment, "?"); idx >= 0 {
+		if fragVals, fErr := url.ParseQuery(u.Fragment[idx+1:]); fErr == nil {
+			for _, rawVal := range fragVals["threadId"] {
+				if tok := meetingIDToken.FindString(rawVal); tok != "" {
+					return tok
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // sanitizeMeetingID derives a filesystem-safe identifier from a Teams meeting
 // URL. It prefers the embedded "meeting_..." token when present, lowercases the
 // value, replaces every unsafe run with a single hyphen, and caps the length.
 // The result always matches [a-z0-9-]+ and never contains path separators or
 // "..", so it is safe to join onto the output directory.
 func sanitizeMeetingID(rawURL string) string {
-	candidate := rawURL
-	if decoded, err := url.QueryUnescape(rawURL); err == nil {
-		candidate = decoded
+	if hasSharePointSharingPath(rawURL) {
+		return "meeting"
 	}
-	if token := meetingIDToken.FindString(candidate); token != "" {
+	redacted := redactSourceURL(rawURL)
+	decodedPath := redacted
+	if unescaped, err := url.PathUnescape(redacted); err == nil {
+		decodedPath = unescaped
+	}
+	var candidate string
+	if token := meetingIDToken.FindString(decodedPath); token != "" {
 		candidate = token
-	} else if m := meetPathToken.FindStringSubmatch(candidate); len(m) == 2 {
+	} else if m := meetPathToken.FindStringSubmatch(decodedPath); len(m) == 2 {
 		candidate = "meet-" + m[1]
+	} else if token := extractThreadIDMeetingToken(rawURL); token != "" {
+		candidate = token
+	} else if redacted != "" {
+		candidate = redacted
+	} else if token := meetingIDToken.FindString(rawURL); token != "" && !strings.ContainsAny(rawURL, "?#@") {
+		candidate = token
+	} else {
+		return "meeting"
 	}
 	candidate = strings.ToLower(candidate)
 	candidate = unsafeIDChars.ReplaceAllString(candidate, "-")

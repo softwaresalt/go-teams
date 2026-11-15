@@ -1,6 +1,13 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/softwaresalt/go-teams/internal/browser"
+)
 
 func newAuthCommand(d *deps, configPath *string) *cobra.Command {
 	var flags browserFlags
@@ -15,16 +22,17 @@ func newAuthCommand(d *deps, configPath *string) *cobra.Command {
 			"  --profile-dir (or profile_dir in config.yaml) selects the browser user-data directory.\n" +
 			"  It defaults to %LOCALAPPDATA%\\teams-cli\\profile on Windows when LOCALAPPDATA is set.\n" +
 			"  Reuse the same directory for every command that should share the signed-in session.\n\n" +
-			"Account selection:\n" +
-			"  --account (or default_account in config.yaml) is a Microsoft Entra account (UPN/email\n" +
-			"  or display name) that is auto-selected on the Entra account tile picker.\n\n" +
+			"Account selection (required):\n" +
+			"  --account (or default_account in config.yaml) is required for initial authentication.\n" +
+			"  Supply the Microsoft Entra account (UPN/email or display name) so the Entra account\n" +
+			"  tile picker selects that account deterministically.\n\n" +
 			"Profile locking:\n" +
 			"  A Chromium profile needs exclusive access. Do not run two browsers against the same\n" +
 			"  profile directory at once; close the auth window before starting a headless capture.\n\n" +
 			"Other browser flags: --browser-path selects the Chrome, Edge, or Chromium executable\n" +
 			"(also read from TEAMS_BROWSER_PATH).",
-		Example: "  teams-cli auth\n" +
-			"  teams-cli auth --profile-dir \"%LOCALAPPDATA%\\teams-cli\\profile\"\n" +
+		Example: "  teams-cli auth --account alice@contoso.com\n" +
+			"  teams-cli auth --account alice@contoso.com --profile-dir \"%LOCALAPPDATA%\\teams-cli\\profile\"\n" +
 			"  teams-cli auth --account alice@contoso.com --browser-path \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -33,6 +41,9 @@ func newAuthCommand(d *deps, configPath *string) *cobra.Command {
 				return err
 			}
 			applyBrowserFlags(cmd, &cfg, flags)
+			if strings.TrimSpace(cfg.DefaultAccount) == "" {
+				return fmt.Errorf("cli: %w", browser.ErrAccountRequired)
+			}
 			return d.newRunner(cfg).Authenticate(cmd.Context())
 		},
 	}

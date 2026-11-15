@@ -93,70 +93,159 @@ const extractRecapAudioJS = `(async () => {
 	}
 	const media = document.querySelector('audio, video');
 	const source = media && media.querySelector ? media.querySelector('source') : null;
-	const mediaUrl = String((media && (media.currentSrc || media.src || (source && source.src) || media.getAttribute('data-audio-src'))) ||
-		info.audioUrl || info.mediaUrl || info.downloadUrl || info.streamUrl || '');
-	if (!mediaUrl) return '';
-	checkIdentity(mediaUrl);
-	if (enforceIdentity && !identityMatched) throw new Error('recap audio recording identity unverified');
-	for (const rawDuration of [media && media.duration, info.duration, info.durationSeconds]) {
-		const duration = Number(rawDuration);
-		if (Number.isFinite(duration) && duration > 0 &&
-			(duration > maxRecapAudioDurationSec || Math.ceil(duration * 44100) * 2 > maxRecapAudioPCMBytes)) throw new Error(limitError);
+	const baseIdentityMatched = identityMatched;
+	const rawCandidates = [
+		media && media.getAttribute ? media.getAttribute('data-audio-src') : '',
+		source && source.src,
+		info.audioUrl,
+		info.mediaUrl,
+		info.downloadUrl,
+		info.streamUrl,
+		media && media.currentSrc,
+		media && media.src,
+	];
+	const nonBlobCandidates = [];
+	const blobCandidates = [];
+	const seenCandidates = new Set();
+	for (const raw of rawCandidates) {
+		const u = String(raw || '').trim();
+		if (!u || seenCandidates.has(u)) continue;
+		seenCandidates.add(u);
+		if (/^blob:/i.test(u)) blobCandidates.push(u);
+		else nonBlobCandidates.push(u);
 	}
-	const response = await fetch(mediaUrl, {credentials: 'include', redirect: 'error'});
-	if (!response.ok) throw new Error('recap audio fetch failed: ' + response.status);
-	const length = Number(response.headers.get('Content-Length'));
-	if (Number.isFinite(length) && length > maxRecapAudioSourceBytes) throw new Error(limitError);
-	if (!response.body || !response.body.getReader) throw new Error('recap audio streaming unavailable');
-	const reader = response.body.getReader();
-	const parts = [];
-	let sourceBytes = 0;
-	while (true) {
-		const part = await reader.read();
-		if (part.done) break;
-		sourceBytes += part.value.byteLength;
-		if (sourceBytes > maxRecapAudioSourceBytes) {
-			await reader.cancel();
-			throw new Error(limitError);
+	const candidates = nonBlobCandidates.concat(blobCandidates);
+	if (!candidates.length) return '';
+	let lastFetchErr = null;
+	for (const candidateUrl of candidates) {
+		identityMatched = false;
+		checkIdentity(candidateUrl);
+		const candidateHasIdentity = identityMatched;
+		identityMatched = baseIdentityMatched || candidateHasIdentity;
+		if (enforceIdentity && !identityMatched) {
+			lastFetchErr = new Error('recap audio recording identity unverified');
+			continue;
 		}
-		parts.push(part.value);
-	}
-	const sourceData = new Uint8Array(sourceBytes);
-	let offset = 0;
-	for (const part of parts) { sourceData.set(part, offset); offset += part.byteLength; }
-	const audioContext = new AudioContext();
-	try {
-		const buffer = await audioContext.decodeAudioData(sourceData.buffer);
-		const outputLength = Math.ceil(buffer.length * 44100 / buffer.sampleRate);
-		if (!Number.isFinite(buffer.duration) || buffer.duration > maxRecapAudioDurationSec ||
-			buffer.length * 2 > maxRecapAudioPCMBytes || outputLength * 2 > maxRecapAudioPCMBytes) throw new Error(limitError);
-		const channels = [];
-		for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
-		if (!channels.length) throw new Error('recap audio has no channels');
-		const pcmChunks = [];
-		for (let start = 0; start < outputLength; start += 16384) {
-			const count = Math.min(16384, outputLength - start);
-			const pcm = new Int16Array(count);
-			for (let i = 0; i < count; i++) {
-				const index = Math.min(buffer.length - 1, Math.floor((start + i) * buffer.sampleRate / 44100));
-				let sample = 0;
-				for (const channel of channels) sample += channel[index];
-				sample = Math.max(-1, Math.min(1, sample / channels.length));
-				pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+		for (const rawDuration of [media && media.duration, info.duration, info.durationSeconds]) {
+			const duration = Number(rawDuration);
+			if (Number.isFinite(duration) && duration > 0 &&
+				(duration > maxRecapAudioDurationSec || Math.ceil(duration * 44100) * 2 > maxRecapAudioPCMBytes)) throw new Error(limitError);
+		}
+		let resp = null;
+		try {
+			resp = await fetch(candidateUrl, {credentials: 'include', redirect: 'follow'});
+		} catch (err) {
+			if (err && err.name === 'TypeError' && !/^blob:/i.test(candidateUrl)) {
+				try {
+					resp = await fetch(candidateUrl, {credentials: 'omit', redirect: 'follow'});
+				} catch (retryErr) {
+					lastFetchErr = retryErr;
+					continue;
+				}
+			} else {
+				lastFetchErr = err;
+				continue;
 			}
-			const bytes = new Uint8Array(pcm.buffer);
-			let binary = '';
-			for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-			pcmChunks.push(btoa(binary));
 		}
-		return JSON.stringify({pageUrl, itemId, fileName, mediaUrl, sourceBytes, durationSec: buffer.duration, pcmChunks});
-	} finally { await audioContext.close(); }
+		if (!resp || !resp.ok) {
+			lastFetchErr = new Error('recap audio fetch failed: ' + (resp ? resp.status : 'network error'));
+			continue;
+		}
+		let respHasIdentity = false;
+		if (resp.url) {
+			identityMatched = false;
+			checkIdentity(resp.url);
+			respHasIdentity = identityMatched;
+		}
+		identityMatched = baseIdentityMatched || candidateHasIdentity || respHasIdentity;
+		if (enforceIdentity && !identityMatched) {
+			lastFetchErr = new Error('recap audio recording identity unverified');
+			continue;
+		}
+		const selectedUrl = (resp.url && respHasIdentity) ? resp.url : (candidateHasIdentity ? candidateUrl : (resp.url || candidateUrl));
+		const length = Number(resp.headers.get('Content-Length'));
+		if (Number.isFinite(length) && length > maxRecapAudioSourceBytes) throw new Error(limitError);
+		if (!resp.body || !resp.body.getReader) {
+			lastFetchErr = new Error('recap audio streaming unavailable');
+			continue;
+		}
+		const reader = resp.body.getReader();
+		const parts = [];
+		let sourceBytes = 0;
+		let readErr = null;
+		while (true) {
+			let part;
+			try {
+				part = await reader.read();
+			} catch (err) {
+				readErr = err;
+				break;
+			}
+			if (part.done) break;
+			sourceBytes += part.value.byteLength;
+			if (sourceBytes > maxRecapAudioSourceBytes) {
+				await reader.cancel();
+				throw new Error(limitError);
+			}
+			parts.push(part.value);
+		}
+		if (readErr) {
+			lastFetchErr = readErr;
+			continue;
+		}
+		const sourceData = new Uint8Array(sourceBytes);
+		let offset = 0;
+		for (const part of parts) { sourceData.set(part, offset); offset += part.byteLength; }
+		const audioContext = new AudioContext({sampleRate: 44100});
+		try {
+			let buffer = null;
+			try {
+				buffer = await audioContext.decodeAudioData(sourceData.buffer);
+			} catch (decodeErr) {
+				if (decodeErr && String(decodeErr.message || decodeErr).includes(limitError)) throw decodeErr;
+				lastFetchErr = decodeErr;
+				continue;
+			}
+			const outputLength = Math.ceil(buffer.length * 44100 / buffer.sampleRate);
+			const sampleRateRatio = buffer.sampleRate > 0 ? Math.max(1, buffer.sampleRate / 44100) : 1;
+			if (!Number.isFinite(buffer.duration) || buffer.duration > maxRecapAudioDurationSec ||
+				!Number.isFinite(outputLength) || outputLength <= 0 ||
+				buffer.length * 2 > maxRecapAudioPCMBytes * sampleRateRatio ||
+				outputLength * 2 > maxRecapAudioPCMBytes) throw new Error(limitError);
+			const channels = [];
+			for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+			if (!channels.length) {
+				lastFetchErr = new Error('recap audio has no channels');
+				continue;
+			}
+			const pcmChunks = [];
+			for (let start = 0; start < outputLength; start += 16384) {
+				const count = Math.min(16384, outputLength - start);
+				const pcm = new Int16Array(count);
+				for (let i = 0; i < count; i++) {
+					const index = Math.min(buffer.length - 1, Math.floor((start + i) * buffer.sampleRate / 44100));
+					let sample = 0;
+					for (const channel of channels) sample += channel[index];
+					sample = Math.max(-1, Math.min(1, sample / channels.length));
+					pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+				}
+				const bytes = new Uint8Array(pcm.buffer);
+				let binary = '';
+				for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+				pcmChunks.push(btoa(binary));
+			}
+			return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: selectedUrl, sourceBytes, durationSec: buffer.duration, pcmChunks});
+		} finally { await audioContext.close(); }
+	}
+	throw (lastFetchErr || new Error('recap audio fetch failed'));
 })()`
 
+const maxCDPDOMMessageBytes = 16 * 1024 * 1024
+
 var (
-	maxRecapAudioSourceBytes = 64 * 1024 * 1024
-	maxRecapAudioDurationSec = 1800
-	maxRecapAudioPCMBytes    = 128 * 1024 * 1024
+	maxRecapAudioSourceBytes = 256 * 1024 * 1024
+	maxRecapAudioDurationSec = 4200
+	maxRecapAudioPCMBytes    = 360 * 1024 * 1024
 )
 
 func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetingURL string, w io.Writer) error {
@@ -714,6 +803,9 @@ func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID stri
 				if ownerPageID != "" && t.ID != ownerPageID {
 					continue
 				}
+				if isAuthRedirectURL(t.URL) {
+					return ""
+				}
 				if raw, err := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, copyAISummaryJS); err == nil && strings.TrimSpace(raw) != "" {
 					return strings.TrimSpace(raw)
 				}
@@ -1221,17 +1313,25 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 		_ = cmd.Wait()
 		close(procDone)
 	}()
+	var wsURL string
 	cleanup := func() {
+		if wsURL != "" {
+			closeCDPBrowser(wsURL)
+		}
 		if cmd.Process != nil {
-			if runtime.GOOS == "windows" {
-				_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+			select {
+			case <-procDone:
+			default:
+				_ = cmd.Process.Kill() // Best-effort handle-based termination when launcher has not yet exited.
+				<-procDone
 			}
-			_ = cmd.Process.Kill()
-			<-procDone
+		}
+		if runtime.GOOS == "windows" {
+			terminateSurvivingCDPBrowserOnPort(port, execPath)
 		}
 	}
 
-	wsURL, err := waitForCDPBrowserWS(port, 20*time.Second)
+	wsURL, err = waitForCDPBrowserWS(port, 20*time.Second)
 	if err != nil {
 		cleanup()
 		return 0, "", "", nil, nil, err
@@ -1316,13 +1416,19 @@ var cdpEvalTimeout = 10 * time.Second
 var recapAudioEvalTimeout = 5 * time.Minute
 
 func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
-	return evalInCDPTargetWithin(ctx, wsURL, expr, cdpEvalTimeout)
+	audioLimit := int64(maxRecapAudioPCMBytes)*2 + 65536
+	limit := min(int64(maxCDPDOMMessageBytes), audioLimit)
+	return evalInCDPTargetWithLimit(ctx, wsURL, expr, cdpEvalTimeout, limit)
 }
 
 // evalInCDPTargetWithin evaluates expr in the CDP target and waits up to
 // timeout for the result. Cancelling ctx closes the connection so a blocked
 // read returns promptly.
 func evalInCDPTargetWithin(ctx context.Context, wsURL, expr string, timeout time.Duration) (string, error) {
+	return evalInCDPTargetWithLimit(ctx, wsURL, expr, timeout, int64(maxRecapAudioPCMBytes)*2+65536)
+}
+
+func evalInCDPTargetWithLimit(ctx context.Context, wsURL, expr string, timeout time.Duration, limit int64) (string, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	conn, _, _, err := ws.Dial(dialCtx, wsURL)
@@ -1351,7 +1457,7 @@ func evalInCDPTargetWithin(ctx context.Context, wsURL, expr string, timeout time
 		return "", err
 	}
 	for {
-		msg, err := readBoundedCDPMessage(conn, int64(maxRecapAudioPCMBytes)*2+65536)
+		msg, err := readBoundedCDPMessage(conn, limit)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return "", ctxErr
@@ -1448,6 +1554,123 @@ func readBoundedCDPMessage(conn io.ReadWriter, limit int64) ([]byte, error) {
 			return message.Bytes(), nil
 		}
 	}
+}
+
+func closeCDPBrowser(wsURL string) {
+	if strings.TrimSpace(wsURL) == "" {
+		return
+	}
+	dialCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, _, _, err := ws.Dial(dialCtx, wsURL)
+	if err != nil {
+		return
+	}
+	defer func() {
+		_ = conn.Close() // Best-effort CDP websocket close during teardown.
+	}()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second)) // Best-effort deadline on teardown socket.
+	payload, err := json.Marshal(map[string]any{
+		"id":     1,
+		"method": "Browser.close",
+	})
+	if err != nil {
+		return
+	}
+	if err := wsutil.WriteClientText(conn, payload); err != nil {
+		return
+	}
+	_, _, _ = wsutil.ReadServerData(conn) // Best-effort wait for Browser.close ack; browser may close socket immediately.
+}
+
+func isCDPPortStillAlive(port int) bool {
+	if port <= 0 {
+		return false
+	}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/json/version", port))
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of local DevTools version probe response body.
+	}()
+	var v struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return false
+	}
+	return v.WebSocketDebuggerURL != ""
+}
+
+func parseNetstatListeningPID(output string, port int) int {
+	if port <= 0 {
+		return 0
+	}
+	targetAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	for _, rawLine := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(rawLine))
+		if len(fields) < 5 {
+			continue
+		}
+		if !strings.EqualFold(fields[0], "TCP") || fields[1] != targetAddr || !strings.EqualFold(fields[3], "LISTENING") {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[4])
+		if err == nil && pid > 4 {
+			return pid
+		}
+	}
+	return 0
+}
+
+func findListeningPIDOnLoopbackPort(port int) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "netstat", "-ano", "-p", "tcp").Output()
+	if err != nil {
+		return 0
+	}
+	return parseNetstatListeningPID(string(out), port)
+}
+
+func isChromiumProcessImage(pid int, expectedExecPath string) bool {
+	if pid <= 4 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(out))
+	for _, img := range []string{"msedge.exe", "chrome.exe", "chromium.exe", "brave.exe"} {
+		if strings.Contains(lower, img) {
+			return true
+		}
+	}
+	if base := strings.ToLower(strings.TrimSpace(filepath.Base(expectedExecPath))); base != "" && base != "." {
+		if strings.Contains(lower, base) {
+			return true
+		}
+	}
+	return false
+}
+
+func terminateSurvivingCDPBrowserOnPort(port int, execPath string) {
+	time.Sleep(100 * time.Millisecond)
+	if !isCDPPortStillAlive(port) {
+		return
+	}
+	pid := findListeningPIDOnLoopbackPort(port)
+	if pid <= 4 || !isChromiumProcessImage(pid, execPath) {
+		return
+	}
+	killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run() // Best-effort termination of verified surviving Chromium child process on the ephemeral CDP port.
 }
 
 // navigateCDPTarget sends a top-level CDP Page.navigate command to wsURL,

@@ -268,11 +268,34 @@ func TestNavigateCDPTargetSendsPageNavigate(t *testing.T) {
 const harnessRecapURL = "https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a"
 
 func TestMain(m *testing.M) {
-	if os.Getenv("GO_TEAMS_RECAP_HEADED_FIXTURE") == "1" {
+	if os.Getenv("GO_TEAMS_EDGE_STUB_PARENT") == "1" {
+		runHeadedEdgeStubParentFixture()
+		return
+	}
+	if os.Getenv("GO_TEAMS_RECAP_HEADED_FIXTURE") == "1" || os.Getenv("GO_TEAMS_EDGE_STUB_CHILD") == "1" {
 		runHeadedRecapFixture()
 		return
 	}
 	os.Exit(m.Run())
+}
+
+func runHeadedEdgeStubParentFixture() {
+	self, err := os.Executable()
+	if err != nil {
+		os.Exit(2)
+	}
+	cmd := exec.Command(self, os.Args[1:]...)
+	cmd.Env = append(os.Environ(), "GO_TEAMS_EDGE_STUB_PARENT=0", "GO_TEAMS_EDGE_STUB_CHILD=1")
+	if err := cmd.Start(); err != nil {
+		os.Exit(2)
+	}
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--remote-debugging-port=") {
+			port, _ := strconv.Atoi(strings.TrimPrefix(arg, "--remote-debugging-port="))
+			_, _ = waitForCDPBrowserWS(port, 5*time.Second)
+		}
+	}
+	os.Exit(0)
 }
 
 func runHeadedRecapFixture() {
@@ -285,6 +308,8 @@ func runHeadedRecapFixture() {
 	if port == "" {
 		os.Exit(2)
 	}
+	delayTranscript := os.Getenv("GO_TEAMS_EDGE_STUB_CHILD") == "1"
+	var evalCount atomic.Int32
 	base := "127.0.0.1:" + port
 	server := &http.Server{Addr: base, ReadHeaderTimeout: time.Second}
 	mux := http.NewServeMux()
@@ -292,6 +317,35 @@ func runHeadedRecapFixture() {
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, _ *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]string{"webSocketDebuggerUrl": "ws://" + base + "/browser"}); err != nil {
 			os.Exit(2)
+		}
+	})
+	mux.HandleFunc("/browser", func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		for {
+			raw, _, err := wsutil.ReadClientData(conn)
+			if err != nil {
+				return
+			}
+			var req struct {
+				ID     int    `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(raw, &req) != nil {
+				return
+			}
+			resp, _ := json.Marshal(map[string]any{"id": req.ID, "result": map[string]any{}})
+			_ = wsutil.WriteServerText(conn, resp)
+			if req.Method == "Browser.close" {
+				go func() {
+					time.Sleep(20 * time.Millisecond)
+					os.Exit(0)
+				}()
+				return
+			}
 		}
 	})
 	mux.HandleFunc("/json/list", func(w http.ResponseWriter, _ *http.Request) {
@@ -321,7 +375,11 @@ func runHeadedRecapFixture() {
 		if req.Method == "Page.getFrameTree" {
 			result = map[string]interface{}{"frameTree": map[string]interface{}{"frame": map[string]string{"id": "owner", "url": harnessRecapURL}}}
 		} else {
+			n := evalCount.Add(1)
 			payload := `{"pageUrl":"` + harnessRecapURL + `","entries":[{"speaker":"Presenter","timestamp":"PT1S","text":"` + port + `"}]}`
+			if delayTranscript && n < 2 {
+				payload = `{"pageUrl":"` + harnessRecapURL + `","entries":[]}`
+			}
 			result = map[string]interface{}{"result": map[string]string{"value": payload}}
 		}
 		response, err := json.Marshal(map[string]interface{}{"id": req.ID, "result": result})
@@ -341,7 +399,7 @@ func TestJoinHeadedPersistsLaunchedCDPPortForRecap(t *testing.T) {
 	}
 	t.Setenv("GO_TEAMS_RECAP_HEADED_FIXTURE", "1")
 	m := &chromeMeeting{
-		opts:       MeetingOptions{MeetingURL: harnessRecapURL},
+		opts:       MeetingOptions{MeetingURL: harnessRecapURL, DefaultAccount: "presenter@example.com"},
 		headedOpts: &Options{ExecPath: self},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1024,4 +1082,393 @@ func TestRetainRecapAudioIdentity(t *testing.T) {
 	if specific.recapAudioURL != "" {
 		t.Errorf("requested identity must stay authoritative, got %q", specific.recapAudioURL)
 	}
+}
+
+func TestTryExtractRecapViaCDPWaitsForTranscriptUnlessAISummaryOnly(t *testing.T) {
+	var transcriptReady atomic.Bool
+	var summaryCalls atomic.Int32
+	var serverURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/json/list" {
+			wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+			targets := []cdpTargetInfo{
+				{
+					ID:                   "owner",
+					Type:                 "page",
+					URL:                  harnessRecapURL,
+					WebSocketDebuggerURL: wsBase + "/owner",
+				},
+				{
+					ID:                   "frame",
+					ParentID:             "owner",
+					Type:                 "iframe",
+					URL:                  "https://example.sharepoint.com/xplatplugins.aspx",
+					WebSocketDebuggerURL: wsBase + "/frame",
+				},
+			}
+			require.NoError(t, json.NewEncoder(w).Encode(targets))
+			return
+		}
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		reqBytes, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			t.Errorf("read: %v", err)
+			return
+		}
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Expression string `json:"expression"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(reqBytes, &req)
+		if req.Method == "Page.getFrameTree" {
+			resp := map[string]any{
+				"id": req.ID,
+				"result": map[string]any{
+					"frameTree": map[string]any{
+						"frame": map[string]any{"id": "owner", "url": harnessRecapURL},
+					},
+				},
+			}
+			b, _ := json.Marshal(resp)
+			_ = wsutil.WriteServerText(conn, b)
+			return
+		}
+		value := ""
+		switch {
+		case strings.Contains(req.Params.Expression, "Copy all"):
+			summaryCalls.Add(1)
+			value = "Outer page AI summary ready early"
+		case strings.Contains(req.Params.Expression, ".ms-List"):
+			if r.URL.Path == "/frame" && transcriptReady.Load() {
+				value = `{"pageUrl":"` + harnessRecapURL + `","entries":[{"speaker":"Alice","timestamp":"PT2S","text":"Actual recap utterance"}]}`
+			} else {
+				value = `{"pageUrl":"` + harnessRecapURL + `","entries":[]}`
+			}
+		}
+		resp, _ := json.Marshal(map[string]any{
+			"id":     req.ID,
+			"result": map[string]any{"result": map[string]string{"value": value}},
+		})
+		_ = wsutil.WriteServerText(conn, resp)
+	}))
+	defer srv.Close()
+	serverURL = srv.URL
+	_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// 1. ForceRecap: true, AISummaryOnly: false (i.e. --mode past-recap) must NOT
+	// return early when only the AI summary is present and .ms-List is still empty.
+	recapMeeting := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL: harnessRecapURL,
+			ForceRecap: true,
+		},
+		capturePageID: "owner",
+	}
+	require.False(t, recapMeeting.tryExtractRecapViaCDP(ctx, port),
+		"ForceRecap without AISummaryOnly must wait for .ms-List transcript entries")
+	require.Empty(t, recapMeeting.recapEntries)
+
+	// Once .ms-List populates, ForceRecap extracts both transcript and AI summary.
+	transcriptReady.Store(true)
+	require.True(t, recapMeeting.tryExtractRecapViaCDP(ctx, port))
+	require.Len(t, recapMeeting.recapEntries, 1)
+	require.Equal(t, "Actual recap utterance", recapMeeting.recapEntries[0].Text)
+	require.Equal(t, "Outer page AI summary ready early", recapMeeting.AISummary())
+
+	// 2. DisableAISummary: true must skip captureAISummaryFromTargets during Recap extraction.
+	summaryCalls.Store(0)
+	noSummaryMeeting := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL:       harnessRecapURL,
+			ForceRecap:       true,
+			DisableAISummary: true,
+		},
+		capturePageID: "owner",
+	}
+	require.True(t, noSummaryMeeting.tryExtractRecapViaCDP(ctx, port))
+	require.Len(t, noSummaryMeeting.recapEntries, 1)
+	require.Empty(t, noSummaryMeeting.AISummary(), "DisableAISummary must suppress AI summary extraction")
+	require.Equal(t, int32(0), summaryCalls.Load(), "DisableAISummary must not evaluate copyAISummaryJS")
+
+	// 3. AISummaryOnly: true (e.g. --append-ai-summary) skips .ms-List early return
+	// and succeeds as soon as the AI summary is copied even when .ms-List is empty.
+	transcriptReady.Store(false)
+	summaryOnlyMeeting := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL:    harnessRecapURL,
+			ForceRecap:    true,
+			AISummaryOnly: true,
+		},
+		capturePageID: "owner",
+	}
+	require.True(t, summaryOnlyMeeting.tryExtractRecapViaCDP(ctx, port))
+	require.Empty(t, summaryOnlyMeeting.recapEntries, "AISummaryOnly must skip .ms-List transcript extraction")
+	require.Equal(t, "Outer page AI summary ready early", summaryOnlyMeeting.AISummary())
+}
+
+func TestRecapAudioJSHandlesBlobFallbackRedirectsCredentialsRetryAndOneHour48kHz(t *testing.T) {
+	require.Equal(t, 4200, maxRecapAudioDurationSec, "default Recap audio duration cap should support 1-hour+ meetings (4200s)")
+	require.Equal(t, 256*1024*1024, maxRecapAudioSourceBytes, "default Recap audio source cap should be 256 MiB")
+	require.Equal(t, 360*1024*1024, maxRecapAudioPCMBytes, "default Recap audio PCM cap should be 360 MiB")
+
+	for _, scenario := range []string{
+		"prefers-non-blob-and-retries-omit",
+		"resets-identity-per-candidate",
+		"skips-unverified-early-candidate-and-uses-later-verified-url",
+		"preserves-candidate-identity-on-opaque-redirect-and-falls-back-on-decode-error",
+		"rejects-redirect-identity-mismatch",
+		"accepts-one-hour-48khz-resampled",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "node", "-e", recapAudioSharePointHardeningProbeJS, scenario)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("JavaScript SharePoint audio hardening probe (%s): %v: %s", scenario, err, output)
+			}
+		})
+	}
+}
+
+const recapAudioSharePointHardeningProbeJS = `
+const fs = require('fs');
+const scenario = process.argv[1];
+const maxRecapAudioSourceBytes = 256 * 1024 * 1024;
+const maxRecapAudioDurationSec = 4200;
+const maxRecapAudioPCMBytes = 360 * 1024 * 1024;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+
+const isResetScenario = scenario === 'resets-identity-per-candidate';
+const isSkipUnverifiedScenario = scenario === 'skips-unverified-early-candidate-and-uses-later-verified-url';
+const isDecodeFallbackScenario = scenario === 'preserves-candidate-identity-on-opaque-redirect-and-falls-back-on-decode-error';
+const pageUrl = (isResetScenario || isSkipUnverifiedScenario || isDecodeFallbackScenario)
+  ? 'https://teams.cloud.microsoft/l/meetingrecap'
+  : 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a';
+
+const media = {
+  currentSrc: 'blob:https://tenant-my.sharepoint.com/550e8400-e29b-41d4-a716-446655440000',
+  src: 'blob:https://tenant-my.sharepoint.com/550e8400-e29b-41d4-a716-446655440000',
+  getAttribute: (name) => {
+    if (name !== 'data-audio-src') return null;
+    if (isResetScenario) return 'https://tenant-my.sharepoint.com/stream?driveItemId=recording-a';
+    if (isSkipUnverifiedScenario) return 'https://tenant-my.sharepoint.com/opaque-unverified-source';
+    if (isDecodeFallbackScenario) return 'https://tenant-my.sharepoint.com/manifest?driveItemId=recording-a';
+    return null;
+  },
+  querySelector: () => null,
+};
+globalThis.g_fileInfo = isResetScenario
+  ? { streamUrl: 'https://tenant-my.sharepoint.com/unverified-fallback' }
+  : { streamUrl: 'https://tenant-my.sharepoint.com/streamContent?driveItemId=recording-a' };
+globalThis.location = { href: pageUrl };
+globalThis.window = globalThis;
+globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+globalThis.btoa = s => Buffer.from(s, 'binary').toString('base64');
+
+const fetchCalls = [];
+let audioContextOpts = null;
+let decodeAttempts = 0;
+globalThis.fetch = async (url, opts) => {
+  fetchCalls.push({ url, opts });
+  if (isResetScenario) {
+    throw new TypeError('Failed to fetch');
+  }
+  if (String(url).startsWith('blob:')) {
+    throw new Error('blob URL should not be fetched before non-blob streamUrl');
+  }
+  if (!isDecodeFallbackScenario && opts && opts.credentials === 'include') {
+    throw new TypeError('Failed to fetch');
+  }
+  const redirectedUrl = scenario === 'rejects-redirect-identity-mismatch'
+    ? 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-b'
+    : (isDecodeFallbackScenario
+      ? 'https://cdn.sharepoint.com/opaque-signed-blob-without-id'
+      : 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-a');
+  let read = false;
+  return {
+    ok: true,
+    status: 200,
+    url: redirectedUrl,
+    headers: { get: () => '4' },
+    body: {
+      getReader: () => ({
+        read: async () => read ? { done: true } : (read = true, { done: false, value: new Uint8Array(4) }),
+        cancel: async () => {},
+      }),
+    },
+  };
+};
+
+globalThis.AudioContext = class {
+  constructor(opts) {
+    audioContextOpts = opts || null;
+  }
+  async decodeAudioData() {
+    decodeAttempts++;
+    if (isDecodeFallbackScenario && decodeAttempts === 1) {
+      throw new Error('Unable to decode audio data');
+    }
+    if (scenario === 'accepts-one-hour-48khz-resampled') {
+      // Simulate metadata of a 1-hour (3600s) 48 kHz buffer while keeping
+      // getChannelData small via a Proxy so the test finishes in milliseconds.
+      const proxyChannel = new Proxy(new Float32Array(1), {
+        get(target, prop) {
+          if (typeof prop === 'string' && !Number.isNaN(Number(prop))) return 0;
+          return target[prop];
+        }
+      });
+      return {
+        duration: 3600,
+        length: 48000,
+        sampleRate: 48000,
+        numberOfChannels: 1,
+        getChannelData: () => proxyChannel,
+      };
+    }
+    return {
+      duration: 1,
+      length: 1,
+      sampleRate: 44100,
+      numberOfChannels: 1,
+      getChannelData: () => new Float32Array(1),
+    };
+  }
+  async close() {}
+};
+
+(async () => {
+  let result, failure;
+  try { result = await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (scenario === 'prefers-non-blob-and-retries-omit') {
+    if (failure) throw new Error('unexpected failure: ' + String(failure.message || failure));
+    const parsed = JSON.parse(result);
+    if (fetchCalls.length !== 2) throw new Error('expected 2 fetch calls (include then omit), got ' + fetchCalls.length);
+    if (fetchCalls[0].opts.redirect !== 'follow' || fetchCalls[1].opts.redirect !== 'follow') {
+      throw new Error('expected redirect: follow on fetch calls');
+    }
+    if (fetchCalls[0].opts.credentials !== 'include' || fetchCalls[1].opts.credentials !== 'omit') {
+      throw new Error('expected credentials include then omit');
+    }
+    if (parsed.mediaUrl !== 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-a') {
+      throw new Error('expected post-redirect mediaUrl, got ' + parsed.mediaUrl);
+    }
+    if (!audioContextOpts || audioContextOpts.sampleRate !== 44100) {
+      throw new Error('expected AudioContext({sampleRate: 44100})');
+    }
+  } else if (scenario === 'resets-identity-per-candidate') {
+    if (!failure || !String(failure.message || failure).includes('identity unverified')) {
+      throw new Error('expected second unverified candidate to fail identity check after reset, got: ' + String(failure || result));
+    }
+  } else if (scenario === 'skips-unverified-early-candidate-and-uses-later-verified-url') {
+    if (failure) throw new Error('expected later verified candidate to succeed after skipping unverified early candidate: ' + String(failure.message || failure));
+    if (fetchCalls.some(c => String(c.url).includes('opaque-unverified-source'))) {
+      throw new Error('unverified early candidate must not be fetched');
+    }
+    const parsed = JSON.parse(result);
+    if (!parsed.mediaUrl.includes('driveItemId=recording-a')) {
+      throw new Error('expected verified candidate mediaUrl, got ' + parsed.mediaUrl);
+    }
+  } else if (scenario === 'preserves-candidate-identity-on-opaque-redirect-and-falls-back-on-decode-error') {
+    if (failure) throw new Error('expected second candidate to succeed after decode error on first candidate: ' + String(failure.message || failure));
+    if (decodeAttempts !== 2) throw new Error('expected 2 decode attempts, got ' + decodeAttempts);
+    const parsed = JSON.parse(result);
+    if (parsed.mediaUrl !== 'https://tenant-my.sharepoint.com/streamContent?driveItemId=recording-a') {
+      throw new Error('expected verified candidateUrl preserved when redirect URL is opaque, got ' + parsed.mediaUrl);
+    }
+  } else if (scenario === 'rejects-redirect-identity-mismatch') {
+    if (!failure || !String(failure.message || failure).includes('identity mismatch')) {
+      throw new Error('expected post-redirect identity mismatch error, got: ' + String(failure || result));
+    }
+  } else if (scenario === 'accepts-one-hour-48khz-resampled') {
+    if (failure) throw new Error('1-hour 48kHz recording rejected: ' + String(failure.message || failure));
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`
+
+func TestJoinColdProfileRequiresDefaultAccount(t *testing.T) {
+	coldProfileDir := t.TempDir()
+
+	// 1. Headed join on a cold profile without DefaultAccount fails fast with ErrAccountRequired.
+	headedMeeting := &chromeMeeting{
+		opts:       MeetingOptions{MeetingURL: harnessRecapURL},
+		headedOpts: &Options{ExecPath: "/nonexistent/browser", UserDataDir: coldProfileDir},
+	}
+	err := headedMeeting.Join(context.Background())
+	require.ErrorIs(t, err, ErrAccountRequired)
+
+	// 2. Headless NewLiveMeeting on a cold profile for a Teams URL without DefaultAccount
+	// also fails fast with ErrAccountRequired in Join before navigating.
+	headlessMeeting, bctx, cleanup, err := NewLiveMeeting(
+		context.Background(),
+		Options{Headless: true, UserDataDir: coldProfileDir, ExecPath: "/nonexistent/browser"},
+		MeetingOptions{MeetingURL: harnessRecapURL},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	err = headlessMeeting.Join(bctx)
+	require.ErrorIs(t, err, ErrAccountRequired)
+
+	// 3. Headless NewLiveMeeting for a SharePoint Stream Recap URL or with an empty
+	// UserDataDir also fails fast with ErrAccountRequired when DefaultAccount is empty.
+	spMeeting, spCtx, spCleanup, err := NewLiveMeeting(
+		context.Background(),
+		Options{Headless: true, ExecPath: "/nonexistent/browser"},
+		MeetingOptions{MeetingURL: "https://tenant-my.sharepoint.com/personal/user/_layouts/15/stream.aspx?id=rec.mp4"},
+	)
+	require.NoError(t, err)
+	defer spCleanup()
+	err = spMeeting.Join(spCtx)
+	require.ErrorIs(t, err, ErrAccountRequired)
+}
+
+func TestJoinHeadedSurvivesParentStubExitWhileCDPAlive(t *testing.T) {
+	self, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv("GO_TEAMS_EDGE_STUB_PARENT", "1")
+
+	m := &chromeMeeting{
+		opts: MeetingOptions{
+			MeetingURL:     harnessRecapURL,
+			DefaultAccount: "presenter@example.com",
+		},
+		headedOpts: &Options{ExecPath: self},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	defer m.stopHeadedBrowser()
+
+	require.NoError(t, m.joinHeaded(ctx))
+	require.Len(t, m.recapEntries, 1)
+	// Ensure cleanup closes the surviving child process via Browser.close / port cleanup.
+	m.stopHeadedBrowser()
+}
+
+func TestParseNetstatListeningPID(t *testing.T) {
+	sample := `
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    0.0.0.0:54321          0.0.0.0:0              LISTENING       1111
+  TCP    127.0.0.1:54321        127.0.0.1:60123        ESTABLISHED     2222
+  TCP    127.0.0.1:54321        0.0.0.0:0              LISTENING       4321
+  TCP    127.0.0.1:54322        0.0.0.0:0              LISTENING       4
+`
+	require.Equal(t, 4321, parseNetstatListeningPID(sample, 54321))
+	require.Equal(t, 0, parseNetstatListeningPID(sample, 54322), "PID <= 4 must be rejected")
+	require.Equal(t, 0, parseNetstatListeningPID(sample, 99999))
 }

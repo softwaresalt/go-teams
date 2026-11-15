@@ -213,3 +213,51 @@ func TestRunCaptureLiveWithSummaryWritesQueueFallbackAndAppendsAfterDelay(t *tes
 	err = runCmd(context.Background(), dEph, "join", "https://teams.microsoft.com/meet/123", "--duration=-1m")
 	require.ErrorIs(t, err, config.ErrInvalidDuration)
 }
+
+func TestDefaultNewMeetingAndNewSessionWireAISummaryFlags(t *testing.T) {
+	// 1. --mode past-recap without --no-ai-summary sets ForceRecap=true, AISummaryOnly=false, DisableAISummary=false.
+	recapOpts := buildMeetingOptions(config.Config{
+		CaptureMode: config.CaptureModePastRecap,
+	}, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1")
+	assert.True(t, recapOpts.ForceRecap)
+	assert.False(t, recapOpts.AISummaryOnly, "--mode past-recap must not set AISummaryOnly")
+	assert.False(t, recapOpts.DisableAISummary)
+
+	// 2. --no-ai-summary (AISummaryDelay="0s") sets DisableAISummary=true.
+	noSummaryCfg := config.Config{
+		CaptureMode:    config.CaptureModePastRecap,
+		AISummaryDelay: "0s",
+	}
+	assert.True(t, isAISummaryDisabled(noSummaryCfg))
+	noSummaryOpts := buildMeetingOptions(noSummaryCfg, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1")
+	assert.True(t, noSummaryOpts.ForceRecap)
+	assert.False(t, noSummaryOpts.AISummaryOnly)
+	assert.True(t, noSummaryOpts.DisableAISummary)
+
+	// 3. --append-ai-summary sets ForceRecap=true, AISummaryOnly=true, DisableAISummary=false.
+	appendCfg := config.Config{
+		CaptureMode:     config.CaptureModePastRecap,
+		AppendAISummary: "C:\\out\\call.md",
+		AISummaryDelay:  "0s",
+	}
+	assert.False(t, isAISummaryDisabled(appendCfg), "--append-ai-summary must never disable AI summary extraction")
+	appendOpts := buildMeetingOptions(appendCfg, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1")
+	assert.True(t, appendOpts.ForceRecap)
+	assert.True(t, appendOpts.AISummaryOnly)
+	assert.False(t, appendOpts.DisableAISummary)
+
+	// 4. runAppendAISummary forwards AppendAISummary on recapCfg so newMeeting sees AISummaryOnly=true.
+	dir := t.TempDir()
+	mdPath := filepath.Join(dir, "existing.md")
+	require.NoError(t, os.WriteFile(mdPath, []byte("# Meeting Transcript\n\n> **Alice:** Hi.\n"), 0o600))
+	var gotAppendCfg config.Config
+	d := &deps{
+		newMeeting: func(ctx context.Context, c config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			gotAppendCfg = c
+			return &fakeSummaryMeeting{summary: "Meeting notes:\nAppended item."}, ctx, func() {}, nil
+		},
+	}
+	require.NoError(t, runAppendAISummary(context.Background(), d, config.Config{AISummaryDelay: "0s"}, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", mdPath))
+	assert.Equal(t, mdPath, gotAppendCfg.AppendAISummary)
+	assert.True(t, buildMeetingOptions(gotAppendCfg, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1").AISummaryOnly)
+}

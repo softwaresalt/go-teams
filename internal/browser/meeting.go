@@ -17,6 +17,11 @@ import (
 // MeetingOptions.LobbyTimeout.
 var ErrLobbyTimeout = errors.New("browser: lobby admission timed out")
 
+// ErrAccountRequired is returned when initial authentication or cold-profile
+// browser bootstrap is invoked without a DefaultAccount (--account or
+// default_account in config.yaml).
+var ErrAccountRequired = errors.New("browser: initial authentication requires --account or default_account in config.yaml")
+
 // CaptionSink receives finalized caption utterances (speaker and text) as the
 // in-meeting observer emits them. Implementations should return promptly; a
 // slow sink causes fragments to be dropped under backpressure rather than
@@ -36,8 +41,11 @@ type MeetingOptions struct {
 	MeetingURL string
 	// BotName is the display name injected on the pre-join screen.
 	BotName string
-	// DefaultAccount is the optional Microsoft Entra account (UPN/email or
-	// display name) to auto-select on the Entra account picker interstitial.
+	// DefaultAccount is the Microsoft Entra account (UPN/email or display name)
+	// to auto-select on the Entra account picker interstitial. It is required
+	// for initial authentication (Authenticate) and cold-profile bootstrap
+	// (ErrAccountRequired) and optional when reusing an already-authenticated
+	// browser profile.
 	DefaultAccount string
 	// LobbyTimeout bounds how long Join waits in pre-join or the meeting lobby
 	// before aborting with ErrLobbyTimeout. Zero means no lobby timeout.
@@ -45,6 +53,14 @@ type MeetingOptions struct {
 	// ForceRecap forces Join to use the Meeting Recap discovery and extraction
 	// path and never enter the live pre-join click flow.
 	ForceRecap bool
+	// AISummaryOnly indicates that Join is being run solely to extract the
+	// Meeting Recap AI Summary (e.g. via --append-ai-summary) and may return as
+	// soon as the AI Summary is copied without waiting for the .ms-List
+	// transcript iframe.
+	AISummaryOnly bool
+	// DisableAISummary suppresses AI Summary extraction during Meeting Recap
+	// capture (e.g. when --no-ai-summary or ai_summary_delay: 0s is set).
+	DisableAISummary bool
 	// VoiceRMSThreshold overrides DefaultVoiceRMSThreshold when > 0.
 	VoiceRMSThreshold float64
 	// OnCaptionActivity is invoked when non-empty live caption DOM activity is
@@ -96,6 +112,8 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 		mopts.DefaultAccount = strings.TrimSpace(opts.DefaultAccount)
 	}
 	cm := newChromeMeeting(mopts)
+	cm.managedProfile = true
+	cm.userDataDir = strings.TrimSpace(opts.UserDataDir)
 	if !opts.Headless {
 		optsCopy := opts
 		cm.headedOpts = &optsCopy

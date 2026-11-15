@@ -184,11 +184,67 @@ func TestWriterHeader(t *testing.T) {
 	assert.Contains(t, out, "**Meeting Start:** 2026-10-23 09:00 America/Los_Angeles\n\n")
 	assert.Contains(t, out, "**Meeting:** NVD Pacific TZ Sync\n\n")
 	assert.Contains(t, out, "**Category:** WSP\n\n")
-	assert.Contains(t, out, "**Source:** [Teams meeting recap](https://teams.microsoft.com/l/meetingrecap?threadId=1)\n\n")
+	assert.Contains(t, out, "**Source:** [Teams meeting recap](https://teams.microsoft.com/l/meetingrecap)\n\n")
+	assert.NotContains(t, out, "threadId=1")
 	assert.Contains(t, out, "## Attendee List\n\n- Alice Example\n- Bob Example\n- Charlie Example\n\n---\n\n## Transcript\n\n")
 	assert.NotContains(t, out, "Speakers identified in the transcript")
 	assert.NotContains(t, out, "generated_by:")
 	assert.NotContains(t, out, "bot_name:")
+}
+
+func TestWriterHeaderSanitizesSourceURLSecrets(t *testing.T) {
+	start := time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		sourceURL  string
+		wantSource string
+		absent     []string
+	}{
+		{
+			name:       "strips meet passcode query and fragment",
+			sourceURL:  "https://teams.live.com/meet/9367043528176?p=SecretPasscode123#access_token=tok",
+			wantSource: "**Source:** [Teams meeting recap](https://teams.live.com/meet/9367043528176)\n\n",
+			absent:     []string{"SecretPasscode123", "p=", "access_token", "tok"},
+		},
+		{
+			name:       "strips recap query parameters and userinfo",
+			sourceURL:  "https://user:pw@teams.cloud.microsoft/l/meetingrecap?driveId=b!SecretDrive&sitePath=SecretSite&threadId=19:abc",
+			wantSource: "**Source:** [Teams meeting recap](https://teams.cloud.microsoft/l/meetingrecap)\n\n",
+			absent:     []string{"user", "pw", "SecretDrive", "SecretSite", "driveId", "sitePath", "threadId"},
+		},
+		{
+			name:       "omits SharePoint sharing link with path token",
+			sourceURL:  "https://tenant-my.sharepoint.com/:v:/g/personal/user/EabcSecretSharingToken",
+			wantSource: "",
+			absent:     []string{"EabcSecretSharingToken", "**Source:**"},
+		},
+		{
+			name:       "omits percent-encoded SharePoint sharing link",
+			sourceURL:  "https://tenant-my.sharepoint.com/%3Av%3A/g/personal/user/EabcSecretSharingToken",
+			wantSource: "",
+			absent:     []string{"EabcSecretSharingToken", "**Source:**"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			w := NewWriter(&buf)
+			require.NoError(t, w.WriteHeader(Metadata{
+				MeetingID:    "19:meeting_abc",
+				MeetingTitle: "Security Sync",
+				SourceURL:    tc.sourceURL,
+				StartTime:    start,
+			}))
+			require.NoError(t, w.Flush())
+			out := buf.String()
+			if tc.wantSource != "" {
+				assert.Contains(t, out, tc.wantSource)
+			}
+			for _, secret := range tc.absent {
+				assert.NotContains(t, out, secret)
+			}
+		})
+	}
 }
 
 func TestWriterEvent(t *testing.T) {

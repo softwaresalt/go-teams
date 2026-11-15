@@ -41,8 +41,11 @@ type MeetingOptions struct {
 	MeetingURL string
 	// BotName is the display name injected on the pre-join screen.
 	BotName string
-	// DefaultAccount is the optional Microsoft Entra account (UPN/email or
-	// display name) to auto-select on the Entra account picker interstitial.
+	// DefaultAccount is the Microsoft Entra account (UPN/email or display name)
+	// to auto-select on the Entra account picker interstitial. It is required
+	// for initial authentication (Authenticate) and cold-profile bootstrap
+	// (ErrAccountRequired) and optional when reusing an already-authenticated
+	// browser profile.
 	DefaultAccount string
 	// LobbyTimeout bounds how long Join waits in pre-join or the meeting lobby
 	// before aborting with ErrLobbyTimeout. Zero means no lobby timeout.

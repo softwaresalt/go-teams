@@ -262,10 +262,10 @@ enable and record live captions to a local Markdown file:
 
 ```bash
 # Open Teams in a browser window, sign in, join any call, and save captions to ./transcripts:
-go run ./cmd/teams-cli captions --output-dir ./transcripts
+go run ./cmd/teams-cli captions --account alice@contoso.com --output-dir ./transcripts
 
 # Or navigate directly to a specific Teams meeting URL:
-go run ./cmd/teams-cli captions "https://teams.microsoft.com/meet/synthetic" --output-dir ./transcripts
+go run ./cmd/teams-cli captions "https://teams.microsoft.com/meet/synthetic" --account alice@contoso.com --output-dir ./transcripts
 ```
 
 ## Compiled executable and explicit output file
@@ -309,7 +309,7 @@ Flags for the root command, `captions`, and `join`:
 * `--duration`: nominal scheduled live capture window (for example `30m`, `1h`, `1h30m`) before post-duration inactivity monitoring begins
 * `--idle-timeout`: silence/inactivity grace period after `--duration` or in-browser call-end teardown before stopping live capture (default `3m`)
 * `--ai-summary-delay`: delay after a live call ends before reopening the meeting in Recap mode to fetch and append `# AI Summary` (default `30m` for `live-with-summary`)
-* `--no-ai-summary`: disable delayed post-call AI Summary capture (`--ai-summary-delay=0s`)
+* `--no-ai-summary`: disable AI Summary capture for both Meeting Recaps and delayed post-call enrichment (`--ai-summary-delay=0s`)
 * `--lobby-timeout`: maximum time to wait in pre-join or the meeting lobby before aborting
 * `--append-ai-summary`: existing Markdown transcript file to append the Meeting Recap AI Summary into without overwriting live captions
 * `--not-before`: RFC 3339 timestamp before which a queued `--append-ai-summary` entry is skipped and left uncommented
@@ -608,7 +608,7 @@ schtasks /Create /SC ONCE /TN "TeamsCapture-ArchReview" /ST 14:00 /SD 11/15/2026
 Sign in using a visible capture session first and reuse that profile:
 
 ```powershell
-.\bin\teams-cli.exe captions --profile-dir ".\bin\profile"
+.\bin\teams-cli.exe captions --account alice@contoso.com --profile-dir ".\bin\profile"
 .\bin\teams-cli.exe captions --url "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --output-file ".\transcripts\recap.md" --profile-dir ".\bin\profile" --headless
 ```
 

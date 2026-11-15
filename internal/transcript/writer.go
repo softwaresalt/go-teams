@@ -164,6 +164,23 @@ func (w *Writer) WriteHeader(meta Metadata) error {
 	return nil
 }
 
+func hasSharePointSharingPath(raw string) bool {
+	cur := raw
+	for range 3 {
+		lower := strings.ToLower(cur)
+		if strings.Contains(lower, "/:") || strings.Contains(lower, "/%3a") ||
+			strings.Contains(lower, "%2f:") || strings.Contains(lower, "%2f%3a") {
+			return true
+		}
+		next, err := url.PathUnescape(cur)
+		if err != nil || next == cur {
+			break
+		}
+		cur = next
+	}
+	return false
+}
+
 func sanitizeSourceURL(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -174,7 +191,7 @@ func sanitizeSourceURL(raw string) string {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
 		return ""
 	}
-	if u.Hostname() == "" || strings.Contains(u.Host, "@") || strings.Contains(u.Path, "/:") {
+	if u.Hostname() == "" || strings.Contains(u.Host, "@") || hasSharePointSharingPath(u.EscapedPath()) || hasSharePointSharingPath(u.Path) {
 		return ""
 	}
 	u.User = nil

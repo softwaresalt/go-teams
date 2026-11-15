@@ -771,6 +771,9 @@ func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID stri
 				if ownerPageID != "" && t.ID != ownerPageID {
 					continue
 				}
+				if isAuthRedirectURL(t.URL) {
+					return ""
+				}
 				if raw, err := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, copyAISummaryJS); err == nil && strings.TrimSpace(raw) != "" {
 					return strings.TrimSpace(raw)
 				}
@@ -1286,10 +1289,10 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 		if cmd.Process != nil {
 			if runtime.GOOS == "windows" {
 				killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+				_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run() // Best-effort Windows process-tree termination before Process.Kill.
 				cancel()
 			}
-			_ = cmd.Process.Kill()
+			_ = cmd.Process.Kill() // Best-effort process kill; Process may have already exited.
 			<-procDone
 		}
 		if runtime.GOOS == "windows" && wsURL != "" {
@@ -1532,8 +1535,10 @@ func closeCDPBrowser(wsURL string) {
 	if err != nil {
 		return
 	}
-	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	defer func() {
+		_ = conn.Close() // Best-effort CDP websocket close during teardown.
+	}()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second)) // Best-effort deadline on teardown socket.
 	payload, err := json.Marshal(map[string]any{
 		"id":     1,
 		"method": "Browser.close",
@@ -1544,7 +1549,7 @@ func closeCDPBrowser(wsURL string) {
 	if err := wsutil.WriteClientText(conn, payload); err != nil {
 		return
 	}
-	_, _, _ = wsutil.ReadServerData(conn)
+	_, _, _ = wsutil.ReadServerData(conn) // Best-effort wait for Browser.close ack; browser may close socket immediately.
 }
 
 func isCDPPortStillAlive(port int) bool {
@@ -1556,7 +1561,9 @@ func isCDPPortStillAlive(port int) bool {
 	if err != nil {
 		return false
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of local DevTools version probe response body.
+	}()
 	var v struct {
 		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 	}
@@ -1632,7 +1639,7 @@ func terminateSurvivingCDPBrowserOnPort(port int, execPath string) {
 	}
 	killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
+	_ = exec.CommandContext(killCtx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run() // Best-effort termination of verified surviving Chromium child process on the ephemeral CDP port.
 }
 
 // navigateCDPTarget sends a top-level CDP Page.navigate command to wsURL,

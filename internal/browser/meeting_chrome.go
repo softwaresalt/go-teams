@@ -520,42 +520,16 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 				hasRecapIframe := false
 				for i := range targets {
 					t := &targets[i]
-					if !isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) {
-						continue
-					}
-					if isRecapIframeTarget(*t) {
+					if isTargetInCaptureScope(*t, m.capturePageID, ownedFrames) && isRecapIframeTarget(*t) {
 						hasRecapIframe = true
-					}
-					if m.opts.AISummaryOnly {
-						continue
-					}
-
-					// Check if this target (e.g. xplatplugins.aspx iframe or recap page)
-					// has a Meeting Recap transcript list populated for the requested meeting.
-					if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
-						if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPage.URL, t.URL); pErr == nil && len(entries) > 0 {
-							m.recapEntries = entries
-							if !m.opts.DisableAISummary {
-								if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
-									m.aiSummary = summary
-									slog.Info("browser: copied AI summary from meeting recap")
-								}
-							}
-							enrichRecapMetadataFromPage(ctx, port, m.capturePageID, &meta)
-							m.recapMeta = meta
-							m.retainRecapAudioIdentity(mainPage.URL)
-							slog.Info("browser: extracted meeting recap transcript", "entries", len(entries), "title", meta.Title, "attendees", len(meta.Attendees))
-							return nil
-						}
+						break
 					}
 				}
-				if m.opts.AISummaryOnly && isOnTargetMeetingOrRecapURL(m.opts.MeetingURL, mainPage.URL, "", "") {
-					if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
-						m.aiSummary = summary
-						m.retainRecapAudioIdentity(mainPage.URL)
-						slog.Info("browser: copied AI summary from meeting recap")
-						return nil
-					}
+				pollCtx, cancelPoll := m.withDeadlineContext(ctx, deadline)
+				extracted := m.extractRecapFromTargets(pollCtx, port, mainPage.URL, targets, ownedFrames)
+				cancelPoll()
+				if extracted {
+					return nil
 				}
 
 				stateRaw, evalErr := evalInCDPTarget(ctx, mainPage.WebSocketDebuggerURL, `JSON.stringify({
@@ -909,9 +883,15 @@ func (m *chromeMeeting) awaitPreJoinOrAdmissionWithDeadline(ctx context.Context,
 						if coldRecapPolls >= 5 {
 							reNavigateAttempts++
 							coldRecapPolls = 0
+							targetURL := m.opts.MeetingURL
+							if m.opts.ForceRecap || m.opts.AISummaryOnly {
+								if recapURL := deriveRecapURLFromMeetingURL(targetURL); recapURL != "" {
+									targetURL = recapURL
+								}
+							}
 							slog.Info("browser: re-applying original meeting URL after authentication", "attempt", reNavigateAttempts)
 							navCtx, cancelNav := m.withDeadlineContext(ctx, deadline)
-							_ = chromedp.Run(navCtx, chromedp.Navigate(m.opts.MeetingURL))
+							_ = chromedp.Run(navCtx, chromedp.Navigate(targetURL))
 							cancelNav()
 						}
 					} else {
@@ -958,6 +938,10 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 		mainPageURL = mainPage.URL
 		ownedFrames = fetchOwnedFrames(ctx, mainPage.WebSocketDebuggerURL)
 	}
+	return m.extractRecapFromTargets(ctx, port, mainPageURL, targets, ownedFrames)
+}
+
+func (m *chromeMeeting) extractRecapFromTargets(ctx context.Context, port int, mainPageURL string, targets []cdpTargetInfo, ownedFrames ownedFrameSet) bool {
 	if !m.opts.AISummaryOnly {
 		for _, t := range targets {
 			if !isTargetInCaptureScope(t, m.capturePageID, ownedFrames) {

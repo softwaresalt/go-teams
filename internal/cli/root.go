@@ -117,7 +117,7 @@ func applyBrowserFlags(cmd *cobra.Command, cfg *config.Config, f browserFlags) {
 }
 
 func buildMeetingOptions(c config.Config, meetingURL string) browser.MeetingOptions {
-	lobbyTimeout, _ := parseOptionalDuration(c.LobbyTimeout)
+	lobbyTimeout, _ := parseOptionalDuration(c.LobbyTimeout) // Validated beforehand by validateCaptureLifecycles; invalid values fall back to 0.
 	aiSummaryOnly := strings.TrimSpace(c.AppendAISummary) != ""
 	return browser.MeetingOptions{
 		MeetingURL:       meetingURL,

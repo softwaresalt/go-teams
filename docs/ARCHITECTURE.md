@@ -54,6 +54,7 @@ internal/cli
     |-- internal/capture --+-- internal/browser --+-- internal/audio
     |                      |                      |-- internal/teams
     |                      |                      '-- internal/transcript
+    |                      |-- internal/teams
     |                      '-- internal/transcript
     |-- internal/browser   (direct use for auth, runner, and meeting setup)
     |-- internal/updater ----- internal/version
@@ -82,8 +83,8 @@ Rules the layout enforces:
   loaded configuration and flags into the plain option structs that adapters
   consume (`browser.Options`, `capture.SessionConfig`, `updater.Config`), so
   adapters never read the config file.
-* `internal/capture` depends on `browser` and `transcript`; `browser` never
-  imports `capture`. Capture-specific behavior such as file naming and
+* `internal/capture` depends on `browser`, `teams`, and `transcript`; `browser`
+  never imports `capture`. Capture-specific behavior such as file naming and
   permissions stays out of the browser layer.
 * `internal/updater` is independent of the capture path. Its only internal
   dependency is `internal/version`.

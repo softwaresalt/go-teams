@@ -253,16 +253,55 @@ func (o *Output) Close() error {
 	return errors.Join(errs...)
 }
 
+func hasSharePointSharingPath(raw string) bool {
+	cur := raw
+	for range 3 {
+		lower := strings.ToLower(cur)
+		if strings.Contains(lower, "/:") || strings.Contains(lower, "/%3a") ||
+			strings.Contains(lower, "%2f:") || strings.Contains(lower, "%2f%3a") {
+			return true
+		}
+		next, err := url.PathUnescape(cur)
+		if err != nil || next == cur {
+			break
+		}
+		cur = next
+	}
+	return false
+}
+
 func redactSourceURL(rawURL string) string {
 	trimmed := strings.TrimSpace(rawURL)
 	if trimmed == "" {
 		return ""
 	}
 	redacted := teams.RedactURL(trimmed)
-	if redacted == "" || redacted == "[invalid-url]" || strings.Contains(redacted, "/:") {
+	if redacted == "" || redacted == "[invalid-url]" || hasSharePointSharingPath(redacted) {
 		return ""
 	}
 	return redacted
+}
+
+func extractThreadIDMeetingToken(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	for _, rawVal := range u.Query()["threadId"] {
+		if tok := meetingIDToken.FindString(rawVal); tok != "" {
+			return tok
+		}
+	}
+	if idx := strings.Index(u.Fragment, "?"); idx >= 0 {
+		if fragVals, fErr := url.ParseQuery(u.Fragment[idx+1:]); fErr == nil {
+			for _, rawVal := range fragVals["threadId"] {
+				if tok := meetingIDToken.FindString(rawVal); tok != "" {
+					return tok
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // sanitizeMeetingID derives a filesystem-safe identifier from a Teams meeting
@@ -271,21 +310,24 @@ func redactSourceURL(rawURL string) string {
 // The result always matches [a-z0-9-]+ and never contains path separators or
 // "..", so it is safe to join onto the output directory.
 func sanitizeMeetingID(rawURL string) string {
-	candidate := rawURL
-	if decoded, err := url.QueryUnescape(rawURL); err == nil {
-		candidate = decoded
+	redacted := redactSourceURL(rawURL)
+	decodedPath := redacted
+	if unescaped, err := url.PathUnescape(redacted); err == nil {
+		decodedPath = unescaped
 	}
-	pathCandidate := strings.SplitN(candidate, "?", 2)[0]
-	if token := meetingIDToken.FindString(candidate); token != "" {
+	var candidate string
+	if token := meetingIDToken.FindString(decodedPath); token != "" {
 		candidate = token
-	} else if m := meetPathToken.FindStringSubmatch(pathCandidate); len(m) == 2 {
+	} else if m := meetPathToken.FindStringSubmatch(decodedPath); len(m) == 2 {
 		candidate = "meet-" + m[1]
-	} else {
-		redacted := teams.RedactURL(strings.TrimSpace(rawURL))
-		if redacted == "" || redacted == "[invalid-url]" || strings.Contains(redacted, "/:") {
-			return "meeting"
-		}
+	} else if token := extractThreadIDMeetingToken(rawURL); token != "" {
+		candidate = token
+	} else if redacted != "" {
 		candidate = redacted
+	} else if token := meetingIDToken.FindString(rawURL); token != "" && !strings.ContainsAny(rawURL, "?#@") {
+		candidate = token
+	} else {
+		return "meeting"
 	}
 	candidate = strings.ToLower(candidate)
 	candidate = unsafeIDChars.ReplaceAllString(candidate, "-")

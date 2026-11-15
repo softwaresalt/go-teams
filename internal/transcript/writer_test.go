@@ -218,6 +218,12 @@ func TestWriterHeaderSanitizesSourceURLSecrets(t *testing.T) {
 			wantSource: "",
 			absent:     []string{"EabcSecretSharingToken", "**Source:**"},
 		},
+		{
+			name:       "omits percent-encoded SharePoint sharing link",
+			sourceURL:  "https://tenant-my.sharepoint.com/%3Av%3A/g/personal/user/EabcSecretSharingToken",
+			wantSource: "",
+			absent:     []string{"EabcSecretSharingToken", "**Source:**"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

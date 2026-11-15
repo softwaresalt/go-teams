@@ -42,6 +42,16 @@ func TestSanitizeMeetingID(t *testing.T) {
 			url:  "https://teams.cloud.microsoft/l/meetingrecap?driveId=SecretDrive999&sitePath=SecretSite&p=SecretPasscode123",
 			want: "https-teams-cloud-microsoft-l-meetingrecap",
 		},
+		{
+			name: "passcode containing meeting_ prefix in query or fragment never leaks into meeting id",
+			url:  "https://teams.live.com/meet/234567890?p=meeting_SecretPasscode123#access_token=meeting_FragSecret",
+			want: "meet-234567890",
+		},
+		{
+			name: "percent-encoded SharePoint sharing link falls back to meeting",
+			url:  "https://tenant-my.sharepoint.com/%3Av%3A/g/personal/user/EabcSecretSharingToken",
+			want: "meeting",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

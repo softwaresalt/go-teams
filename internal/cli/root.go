@@ -332,22 +332,28 @@ func findDirectSubcommand(root *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
+// redactedHelpArg is echoed in place of a rejected argument whose shape could
+// carry credentials but is not a well-formed http(s) URL.
+const redactedHelpArg = "[redacted]"
+
 // redactHelpArg redacts a rejected help argument for echo in the Note banner.
-// teams.RedactArgs only recognizes scheme-bearing URLs, so schemeless or
-// protocol-relative inputs ("host/meet/1?p=secret", "user:pw@host/x") get an
-// additional conservative pass that drops userinfo, query, and fragment.
+// The original argument is inspected first. Only an input that starts with a
+// well-formed http:// or https:// scheme is delegated to teams.RedactArgs,
+// which strips userinfo, query, and fragment. Any other input containing a
+// credential-bearing delimiter (userinfo "@", query "?", fragment "#", a
+// scheme separator, or an embedded http: token) is suppressed entirely: a
+// passcode or password may itself contain those delimiters, so truncating or
+// partially redacting such text could still echo a secret prefix.
 func redactHelpArg(raw string) string {
-	redacted := teams.RedactArgs([]string{raw})
-	if !strings.ContainsAny(redacted, "?#@") {
-		return redacted
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return teams.RedactArgs([]string{raw})
 	}
-	if i := strings.IndexAny(redacted, "?#"); i >= 0 {
-		redacted = redacted[:i]
+	if strings.ContainsAny(raw, "@?#") || strings.Contains(lower, "://") ||
+		strings.Contains(lower, "http:") || strings.Contains(lower, "https:") {
+		return redactedHelpArg
 	}
-	if at := strings.LastIndex(redacted, "@"); at >= 0 {
-		redacted = redacted[at+1:]
-	}
-	return redacted
+	return raw
 }
 
 // loadConfigFrom resolves the effective config path (falling back to the

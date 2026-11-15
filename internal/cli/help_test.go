@@ -228,13 +228,24 @@ func TestRootHelpPlaceholderAndUnknownCommandGuidance(t *testing.T) {
 			"teams.microsoft.com/meet/123?p=secretpass",
 			"user:secret@teams.microsoft.com/meet/123",
 			"//user:secret@teams.microsoft.com/meet/123#secretpass",
+			"//user:secret?pw@teams.microsoft.com/meet/123",
+			"user:secret-https:pw@teams.microsoft.com/meet/123",
+			"secret-http:pw",
+			"teams.microsoft.com/meet/123?p=secretpass#secretfrag",
 		} {
 			out := runHelp(t, raw, "--help")
 			assert.Contains(t, out, helpNoteMarker, "raw %q", raw)
-			assert.NotContains(t, out, "secretpass", "raw %q", raw)
+			assert.Contains(t, out, `Note: "`+redactedHelpArg+`" `, "raw %q", raw)
 			assert.NotContains(t, out, "secret", "raw %q", raw)
 			assert.NotContains(t, out, "?p=", "raw %q", raw)
 		}
+	})
+
+	t.Run("benign rejected arguments are still echoed", func(t *testing.T) {
+		assert.Equal(t, "[command]", redactHelpArg("[command]"))
+		assert.Equal(t, "unknown-subcmd", redactHelpArg("unknown-subcmd"))
+		assert.Equal(t, "http://teams.microsoft.com/meet/123",
+			redactHelpArg("http://user:secret@teams.microsoft.com/meet/123?p=secretpass"))
 	})
 
 	t.Run("rejected URL is redacted", func(t *testing.T) {

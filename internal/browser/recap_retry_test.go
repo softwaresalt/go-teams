@@ -1228,6 +1228,7 @@ func TestRecapAudioJSHandlesBlobFallbackRedirectsCredentialsRetryAndOneHour48kHz
 		"prefers-non-blob-and-retries-omit",
 		"resets-identity-per-candidate",
 		"skips-unverified-early-candidate-and-uses-later-verified-url",
+		"preserves-candidate-identity-on-opaque-redirect-and-falls-back-on-decode-error",
 		"rejects-redirect-identity-mismatch",
 		"accepts-one-hour-48khz-resampled",
 	} {
@@ -1254,7 +1255,8 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 
 const isResetScenario = scenario === 'resets-identity-per-candidate';
 const isSkipUnverifiedScenario = scenario === 'skips-unverified-early-candidate-and-uses-later-verified-url';
-const pageUrl = (isResetScenario || isSkipUnverifiedScenario)
+const isDecodeFallbackScenario = scenario === 'preserves-candidate-identity-on-opaque-redirect-and-falls-back-on-decode-error';
+const pageUrl = (isResetScenario || isSkipUnverifiedScenario || isDecodeFallbackScenario)
   ? 'https://teams.cloud.microsoft/l/meetingrecap'
   : 'https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a';
 
@@ -1265,6 +1267,7 @@ const media = {
     if (name !== 'data-audio-src') return null;
     if (isResetScenario) return 'https://tenant-my.sharepoint.com/stream?driveItemId=recording-a';
     if (isSkipUnverifiedScenario) return 'https://tenant-my.sharepoint.com/opaque-unverified-source';
+    if (isDecodeFallbackScenario) return 'https://tenant-my.sharepoint.com/manifest?driveItemId=recording-a';
     return null;
   },
   querySelector: () => null,
@@ -1279,6 +1282,7 @@ globalThis.btoa = s => Buffer.from(s, 'binary').toString('base64');
 
 const fetchCalls = [];
 let audioContextOpts = null;
+let decodeAttempts = 0;
 globalThis.fetch = async (url, opts) => {
   fetchCalls.push({ url, opts });
   if (isResetScenario) {
@@ -1287,12 +1291,14 @@ globalThis.fetch = async (url, opts) => {
   if (String(url).startsWith('blob:')) {
     throw new Error('blob URL should not be fetched before non-blob streamUrl');
   }
-  if (opts && opts.credentials === 'include') {
+  if (!isDecodeFallbackScenario && opts && opts.credentials === 'include') {
     throw new TypeError('Failed to fetch');
   }
   const redirectedUrl = scenario === 'rejects-redirect-identity-mismatch'
     ? 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-b'
-    : 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-a';
+    : (isDecodeFallbackScenario
+      ? 'https://cdn.sharepoint.com/opaque-signed-blob-without-id'
+      : 'https://tenant-my.sharepoint.com/redirected?driveItemId=recording-a');
   let read = false;
   return {
     ok: true,
@@ -1313,6 +1319,10 @@ globalThis.AudioContext = class {
     audioContextOpts = opts || null;
   }
   async decodeAudioData() {
+    decodeAttempts++;
+    if (isDecodeFallbackScenario && decodeAttempts === 1) {
+      throw new Error('Unable to decode audio data');
+    }
     if (scenario === 'accepts-one-hour-48khz-resampled') {
       // Simulate metadata of a 1-hour (3600s) 48 kHz buffer while keeping
       // getChannelData small via a Proxy so the test finishes in milliseconds.
@@ -1372,6 +1382,13 @@ globalThis.AudioContext = class {
     const parsed = JSON.parse(result);
     if (!parsed.mediaUrl.includes('driveItemId=recording-a')) {
       throw new Error('expected verified candidate mediaUrl, got ' + parsed.mediaUrl);
+    }
+  } else if (scenario === 'preserves-candidate-identity-on-opaque-redirect-and-falls-back-on-decode-error') {
+    if (failure) throw new Error('expected second candidate to succeed after decode error on first candidate: ' + String(failure.message || failure));
+    if (decodeAttempts !== 2) throw new Error('expected 2 decode attempts, got ' + decodeAttempts);
+    const parsed = JSON.parse(result);
+    if (parsed.mediaUrl !== 'https://tenant-my.sharepoint.com/streamContent?driveItemId=recording-a') {
+      throw new Error('expected verified candidateUrl preserved when redirect URL is opaque, got ' + parsed.mediaUrl);
     }
   } else if (scenario === 'rejects-redirect-identity-mismatch') {
     if (!failure || !String(failure.message || failure).includes('identity mismatch')) {

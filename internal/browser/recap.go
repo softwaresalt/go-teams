@@ -116,12 +116,12 @@ const extractRecapAudioJS = `(async () => {
 	}
 	const candidates = nonBlobCandidates.concat(blobCandidates);
 	if (!candidates.length) return '';
-	let response = null;
-	let selectedUrl = '';
 	let lastFetchErr = null;
 	for (const candidateUrl of candidates) {
-		identityMatched = baseIdentityMatched;
+		identityMatched = false;
 		checkIdentity(candidateUrl);
+		const candidateHasIdentity = identityMatched;
+		identityMatched = baseIdentityMatched || candidateHasIdentity;
 		if (enforceIdentity && !identityMatched) {
 			lastFetchErr = new Error('recap audio recording identity unverified');
 			continue;
@@ -151,67 +151,93 @@ const extractRecapAudioJS = `(async () => {
 			lastFetchErr = new Error('recap audio fetch failed: ' + (resp ? resp.status : 'network error'));
 			continue;
 		}
+		let respHasIdentity = false;
 		if (resp.url) {
+			identityMatched = false;
 			checkIdentity(resp.url);
-			if (enforceIdentity && !identityMatched) {
-				lastFetchErr = new Error('recap audio recording identity unverified');
+			respHasIdentity = identityMatched;
+		}
+		identityMatched = baseIdentityMatched || candidateHasIdentity || respHasIdentity;
+		if (enforceIdentity && !identityMatched) {
+			lastFetchErr = new Error('recap audio recording identity unverified');
+			continue;
+		}
+		const selectedUrl = (resp.url && respHasIdentity) ? resp.url : (candidateHasIdentity ? candidateUrl : (resp.url || candidateUrl));
+		const length = Number(resp.headers.get('Content-Length'));
+		if (Number.isFinite(length) && length > maxRecapAudioSourceBytes) throw new Error(limitError);
+		if (!resp.body || !resp.body.getReader) {
+			lastFetchErr = new Error('recap audio streaming unavailable');
+			continue;
+		}
+		const reader = resp.body.getReader();
+		const parts = [];
+		let sourceBytes = 0;
+		let readErr = null;
+		while (true) {
+			let part;
+			try {
+				part = await reader.read();
+			} catch (err) {
+				readErr = err;
+				break;
+			}
+			if (part.done) break;
+			sourceBytes += part.value.byteLength;
+			if (sourceBytes > maxRecapAudioSourceBytes) {
+				await reader.cancel();
+				throw new Error(limitError);
+			}
+			parts.push(part.value);
+		}
+		if (readErr) {
+			lastFetchErr = readErr;
+			continue;
+		}
+		const sourceData = new Uint8Array(sourceBytes);
+		let offset = 0;
+		for (const part of parts) { sourceData.set(part, offset); offset += part.byteLength; }
+		const audioContext = new AudioContext({sampleRate: 44100});
+		try {
+			let buffer = null;
+			try {
+				buffer = await audioContext.decodeAudioData(sourceData.buffer);
+			} catch (decodeErr) {
+				if (decodeErr && String(decodeErr.message || decodeErr).includes(limitError)) throw decodeErr;
+				lastFetchErr = decodeErr;
 				continue;
 			}
-		}
-		response = resp;
-		selectedUrl = resp.url || candidateUrl;
-		break;
-	}
-	if (!response) throw (lastFetchErr || new Error('recap audio fetch failed'));
-	const length = Number(response.headers.get('Content-Length'));
-	if (Number.isFinite(length) && length > maxRecapAudioSourceBytes) throw new Error(limitError);
-	if (!response.body || !response.body.getReader) throw new Error('recap audio streaming unavailable');
-	const reader = response.body.getReader();
-	const parts = [];
-	let sourceBytes = 0;
-	while (true) {
-		const part = await reader.read();
-		if (part.done) break;
-		sourceBytes += part.value.byteLength;
-		if (sourceBytes > maxRecapAudioSourceBytes) {
-			await reader.cancel();
-			throw new Error(limitError);
-		}
-		parts.push(part.value);
-	}
-	const sourceData = new Uint8Array(sourceBytes);
-	let offset = 0;
-	for (const part of parts) { sourceData.set(part, offset); offset += part.byteLength; }
-	const audioContext = new AudioContext({sampleRate: 44100});
-	try {
-		const buffer = await audioContext.decodeAudioData(sourceData.buffer);
-		const outputLength = Math.ceil(buffer.length * 44100 / buffer.sampleRate);
-		const sampleRateRatio = buffer.sampleRate > 0 ? Math.max(1, buffer.sampleRate / 44100) : 1;
-		if (!Number.isFinite(buffer.duration) || buffer.duration > maxRecapAudioDurationSec ||
-			!Number.isFinite(outputLength) || outputLength <= 0 ||
-			buffer.length * 2 > maxRecapAudioPCMBytes * sampleRateRatio ||
-			outputLength * 2 > maxRecapAudioPCMBytes) throw new Error(limitError);
-		const channels = [];
-		for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
-		if (!channels.length) throw new Error('recap audio has no channels');
-		const pcmChunks = [];
-		for (let start = 0; start < outputLength; start += 16384) {
-			const count = Math.min(16384, outputLength - start);
-			const pcm = new Int16Array(count);
-			for (let i = 0; i < count; i++) {
-				const index = Math.min(buffer.length - 1, Math.floor((start + i) * buffer.sampleRate / 44100));
-				let sample = 0;
-				for (const channel of channels) sample += channel[index];
-				sample = Math.max(-1, Math.min(1, sample / channels.length));
-				pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+			const outputLength = Math.ceil(buffer.length * 44100 / buffer.sampleRate);
+			const sampleRateRatio = buffer.sampleRate > 0 ? Math.max(1, buffer.sampleRate / 44100) : 1;
+			if (!Number.isFinite(buffer.duration) || buffer.duration > maxRecapAudioDurationSec ||
+				!Number.isFinite(outputLength) || outputLength <= 0 ||
+				buffer.length * 2 > maxRecapAudioPCMBytes * sampleRateRatio ||
+				outputLength * 2 > maxRecapAudioPCMBytes) throw new Error(limitError);
+			const channels = [];
+			for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+			if (!channels.length) {
+				lastFetchErr = new Error('recap audio has no channels');
+				continue;
 			}
-			const bytes = new Uint8Array(pcm.buffer);
-			let binary = '';
-			for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-			pcmChunks.push(btoa(binary));
-		}
-		return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: selectedUrl, sourceBytes, durationSec: buffer.duration, pcmChunks});
-	} finally { await audioContext.close(); }
+			const pcmChunks = [];
+			for (let start = 0; start < outputLength; start += 16384) {
+				const count = Math.min(16384, outputLength - start);
+				const pcm = new Int16Array(count);
+				for (let i = 0; i < count; i++) {
+					const index = Math.min(buffer.length - 1, Math.floor((start + i) * buffer.sampleRate / 44100));
+					let sample = 0;
+					for (const channel of channels) sample += channel[index];
+					sample = Math.max(-1, Math.min(1, sample / channels.length));
+					pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+				}
+				const bytes = new Uint8Array(pcm.buffer);
+				let binary = '';
+				for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+				pcmChunks.push(btoa(binary));
+			}
+			return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: selectedUrl, sourceBytes, durationSec: buffer.duration, pcmChunks});
+		} finally { await audioContext.close(); }
+	}
+	throw (lastFetchErr || new Error('recap audio fetch failed'));
 })()`
 
 const maxCDPDOMMessageBytes = 16 * 1024 * 1024

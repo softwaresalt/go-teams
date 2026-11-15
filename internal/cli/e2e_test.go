@@ -18,7 +18,7 @@ import (
 )
 
 // TestCaptionsCommandEndToEndWritesMarkdownFile exercises the full CLI MVP:
-// running `teams-cli captions <url>` opens the browser, waits for user
+// running `go-teams captions <url>` opens the browser, waits for user
 // authentication, navigates into the Teams call UI, enables live captions,
 // reads caption mutations from the DOM, and saves them to a local Markdown
 // transcript file.

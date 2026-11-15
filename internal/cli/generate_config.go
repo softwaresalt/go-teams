@@ -38,10 +38,10 @@ func newGenerateConfigCommand(d *deps) *cobra.Command {
 			"is treated as the full file path. An existing file is never overwritten unless\n" +
 			"--force is set.\n\n" +
 			"Aliases: init-config, gen-config.",
-		Example: "  teams-cli generate-config\n" +
-			"  teams-cli generate-config C:\\teams\\team.yaml\n" +
-			"  teams-cli generate-config -d \"%LOCALAPPDATA%\\teams-cli\" --force\n" +
-			"  teams-cli init-config -d . -n wsp.yaml",
+		Example: "  go-teams generate-config\n" +
+			"  go-teams generate-config C:\\teams\\team.yaml\n" +
+			"  go-teams generate-config -d \"%LOCALAPPDATA%\\go-teams\" --force\n" +
+			"  go-teams init-config -d . -n wsp.yaml",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dest := destination{dir: outputDir, name: name}

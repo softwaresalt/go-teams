@@ -67,14 +67,14 @@ func TestUpdateCommandAppliesUpdate(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, rec.called)
 	assert.Equal(t, updateOptions{}, rec.opts)
-	assert.Contains(t, out, "Updated teams-cli from 1.0.0 to 1.2.0")
+	assert.Contains(t, out, "Updated go-teams from 1.0.0 to 1.2.0")
 }
 
 func TestUpdateCommandAlreadyUpToDate(t *testing.T) {
 	rec := &updateRecorder{res: updater.Result{CurrentVersion: "1.2.0", LatestVersion: "1.2.0"}}
 	out, err := runCapturing(updateDeps(rec), "update")
 	require.NoError(t, err)
-	assert.Contains(t, out, "already up to date (1.2.0)")
+	assert.Contains(t, out, "go-teams is already up to date (1.2.0)")
 	assert.Contains(t, out, "--force")
 }
 
@@ -85,13 +85,13 @@ func TestUpdateCommandCheckHintKeepsRequestedVersion(t *testing.T) {
 	out, err := runCapturing(updateDeps(rec), "update", "--check", "--version", "v2.0.0-rc.1")
 	require.NoError(t, err)
 	assert.Equal(t, updateOptions{CheckOnly: true, TargetVersion: "v2.0.0-rc.1"}, rec.opts)
-	assert.Contains(t, out, "`teams-cli update --version v2.0.0-rc.1`",
+	assert.Contains(t, out, "`go-teams update --version v2.0.0-rc.1`",
 		"the install hint must target the inspected release, not the latest stable one")
 
 	rec = &updateRecorder{res: updater.Result{CurrentVersion: "1.0.0", LatestVersion: "1.2.0", TagName: "v1.2.0", UpdateAvailable: true}}
 	out, err = runCapturing(updateDeps(rec), "update", "--check")
 	require.NoError(t, err)
-	assert.Contains(t, out, "`teams-cli update`")
+	assert.Contains(t, out, "`go-teams update`")
 	assert.NotContains(t, out, "--version")
 }
 
@@ -104,7 +104,9 @@ func TestUpdateCommandCheckReportsAvailability(t *testing.T) {
 		{"available", updater.Result{CurrentVersion: "1.0.0", LatestVersion: "1.2.0", UpdateAvailable: true},
 			"Update available: 1.0.0 -> 1.2.0"},
 		{"current", updater.Result{CurrentVersion: "1.2.0", LatestVersion: "1.2.0"},
-			"up to date (1.2.0)"},
+			"go-teams is up to date (1.2.0)"},
+		{"downgrade", updater.Result{CurrentVersion: "1.2.0", LatestVersion: "1.1.0", TagName: "v1.1.0", Downgrade: true},
+			"Use `go-teams update --version v1.1.0 --force` to downgrade."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,7 +116,8 @@ func TestUpdateCommandCheckReportsAvailability(t *testing.T) {
 			assert.True(t, rec.opts.CheckOnly)
 			assert.False(t, rec.opts.Force)
 			assert.Contains(t, out, tt.want)
-			assert.NotContains(t, out, "Updated teams-cli", "--check must never claim an install")
+			assert.NotContains(t, out, "Updated go-teams", "--check must never claim an install")
+			assert.NotContains(t, out, "teams-cli")
 		})
 	}
 }
@@ -126,7 +129,7 @@ func TestUpdateCommandForwardsVersionAndForce(t *testing.T) {
 	out, err := runCapturing(updateDeps(rec), "update", "--version", "v1.2.0", "--force")
 	require.NoError(t, err)
 	assert.Equal(t, updateOptions{TargetVersion: "v1.2.0", Force: true}, rec.opts)
-	assert.Contains(t, out, "Updated teams-cli from 1.3.0 to 1.2.0")
+	assert.Contains(t, out, "Updated go-teams from 1.3.0 to 1.2.0")
 }
 
 func TestUpdateCommandPropagatesErrors(t *testing.T) {
@@ -219,7 +222,7 @@ func e2eDepsWithHooks(srv *httptest.Server, exe, current string, hooks *updater.
 
 func newExe(t *testing.T) string {
 	t.Helper()
-	exe := filepath.Join(t.TempDir(), "teams-cli")
+	exe := filepath.Join(t.TempDir(), "go-teams")
 	require.NoError(t, os.WriteFile(exe, []byte("OLD"), 0o755))
 	return exe
 }
@@ -229,7 +232,7 @@ func newVersionedExe(t *testing.T, installed string) string {
 	t.Helper()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "fixture.go")
-	exe := filepath.Join(dir, "teams-cli")
+	exe := filepath.Join(dir, "go-teams")
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}
@@ -260,7 +263,7 @@ func TestUpdateEndToEndReplacesBinary(t *testing.T) {
 
 	out, err = runCapturing(e2eDeps(srv, exe, "1.0.0"), "update")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Updated teams-cli from 1.0.0 to 1.2.0")
+	assert.Contains(t, out, "Updated go-teams from 1.0.0 to 1.2.0")
 	assert.Equal(t, "NEW", readFile(t, exe))
 }
 
@@ -298,7 +301,7 @@ func TestUpdateEndToEndDowngradeRequiresForce(t *testing.T) {
 
 	out, err := runCapturing(e2eDeps(srv, exe, "1.2.0"), "update", "--version", "v1.1.0", "--force")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Updated teams-cli from 1.2.0 to 1.1.0")
+	assert.Contains(t, out, "Updated go-teams from 1.2.0 to 1.1.0")
 	assert.Equal(t, "OLDER", readFile(t, exe))
 }
 
@@ -388,7 +391,7 @@ func TestUpdateEndToEndConcurrentUpdatesSerialize(t *testing.T) {
 			t.Fatal("updates did not finish after the holder resumed")
 		}
 		assert.NoError(t, result.err)
-		assert.Contains(t, result.out, "Updated teams-cli")
+		assert.Contains(t, result.out, "Updated go-teams")
 	}
 	assert.Equal(t, "NEW", readFile(t, exe))
 	entries, err := os.ReadDir(filepath.Dir(exe))

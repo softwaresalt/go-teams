@@ -60,7 +60,7 @@ Default: <category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md`
   entries are rejected and a failing line does not stop the remaining lines.`
 
 	configAndUsageHelp = `Quote URLs (especially those containing &) and paths that contain spaces. Use synthetic or
-authorized meeting URLs only. Run "teams-cli generate-config" to create a commented config file.`
+authorized meeting URLs only. Run "go-teams generate-config" to create a commented config file.`
 )
 
 // captureHelpBody joins the shared capture help sections.
@@ -324,11 +324,11 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 			"or meeting_url in config.yaml), and writes the captured transcript to a Markdown file. " +
 			"A positional <meeting-url> overrides --url, which overrides meeting_url. Without a URL, " +
 			"join fails with an error.\n\n" + captureHelpBody(),
-		Example: "  teams-cli join \"https://teams.microsoft.com/meet/synthetic\" --headless\n" +
-			"  teams-cli join \"https://teams.microsoft.com/meet/synthetic\" \"C:\\out\\call.md\"\n" +
-			"  teams-cli join --url \"https://teams.microsoft.com/meet/synthetic\" --mode ephemeral-live --duration 45m --audio\n" +
-			"  teams-cli join --mode live-with-summary --duration 30m --ai-summary-delay 30m --category ENG \"https://teams.microsoft.com/meet/synthetic\"\n" +
-			"  teams-cli join --queue transcript-queue.txt --output-folder transcripts --headless",
+		Example: "  go-teams join \"https://teams.microsoft.com/meet/synthetic\" --headless\n" +
+			"  go-teams join \"https://teams.microsoft.com/meet/synthetic\" \"C:\\out\\call.md\"\n" +
+			"  go-teams join --url \"https://teams.microsoft.com/meet/synthetic\" --mode ephemeral-live --duration 45m --audio\n" +
+			"  go-teams join --mode live-with-summary --duration 30m --ai-summary-delay 30m --category ENG \"https://teams.microsoft.com/meet/synthetic\"\n" +
+			"  go-teams join --queue transcript-queue.txt --output-folder transcripts --headless",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {
@@ -377,10 +377,10 @@ func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 			"The [meeting-url] argument is optional. When omitted, the URL comes from --url, then meeting_url " +
 			"in config.yaml, and finally defaults to " + defaultTeamsCaptureURL + " so you can sign in and " +
 			"join a call manually while live captions are recorded.\n\n" + captureHelpBody(),
-		Example: "  teams-cli captions --output-dir transcripts\n" +
-			"  teams-cli captions \"https://teams.microsoft.com/meet/synthetic\" -o \"C:\\out\\transcript.md\" --headless\n" +
-			"  teams-cli captions \"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic\" --mode past-recap --audio\n" +
-			"  teams-cli captions --queue transcript-queue.txt --output-folder transcripts",
+		Example: "  go-teams captions --output-dir transcripts\n" +
+			"  go-teams captions \"https://teams.microsoft.com/meet/synthetic\" -o \"C:\\out\\transcript.md\" --headless\n" +
+			"  go-teams captions \"https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic\" --mode past-recap --audio\n" +
+			"  go-teams captions --queue transcript-queue.txt --output-folder transcripts",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flags.queueFile != "" {

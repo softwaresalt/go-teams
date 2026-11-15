@@ -13,9 +13,9 @@ import (
 const (
 	helpNoteMarker = "is not a subcommand or a valid Teams meeting URL"
 	helpNoteTail   = ". Replace [command] with one of the subcommands below " +
-		"(for example: teams-cli join --help, teams-cli captions --help, " +
-		"teams-cli schedule --help, teams-cli auth --help, " +
-		"teams-cli generate-config --help, or teams-cli update --help).\n\n"
+		"(for example: go-teams join --help, go-teams captions --help, " +
+		"go-teams schedule --help, go-teams auth --help, " +
+		"go-teams generate-config --help, or go-teams update --help).\n\n"
 )
 
 var (
@@ -71,7 +71,8 @@ func TestAllSubcommandsProvideComprehensiveHelpAndExamples(t *testing.T) {
 			name: "root",
 			sub:  "",
 			phrases: concat(captureProtocols, []string{
-				"./config.yaml", "config.yaml next to the executable", "teams-cli join --help",
+				"./config.yaml", "config.yaml next to the executable", "go-teams join --help",
+				`%APPDATA%\go-teams\config.yaml`, "~/.config/go-teams/config.yaml",
 			}),
 		},
 		{
@@ -95,7 +96,7 @@ func TestAllSubcommandsProvideComprehensiveHelpAndExamples(t *testing.T) {
 			name: "auth",
 			sub:  "auth",
 			phrases: []string{
-				"--profile-dir", `%LOCALAPPDATA%\teams-cli\profile`, "MFA",
+				"--profile-dir", `%LOCALAPPDATA%\go-teams\profile`, "MFA",
 				"--account", "default_account", "exclusive access",
 			},
 		},
@@ -114,7 +115,7 @@ func TestAllSubcommandsProvideComprehensiveHelpAndExamples(t *testing.T) {
 			name: "update",
 			sub:  "update",
 			phrases: []string{
-				"teams-cli-<goos>-<goarch>", "SHA256SUMS", "<exe>.old",
+				"go-teams-<goos>-<goarch>", "SHA256SUMS", "<exe>.old",
 				"<exe>.lock", "<exe>.lock.ctl", "--check", "--version", "--force",
 				"Manual lock recovery",
 			},
@@ -139,6 +140,7 @@ func TestAllSubcommandsProvideComprehensiveHelpAndExamples(t *testing.T) {
 			}
 
 			root := newRootCommand(depsWith(&fakeRunner{}))
+			assert.Equal(t, "go-teams [meeting-url] [output-markdown-path]", root.Use)
 			cmd := root
 			if tc.sub != "" {
 				found, _, err := root.Find([]string{tc.sub})
@@ -147,6 +149,7 @@ func TestAllSubcommandsProvideComprehensiveHelpAndExamples(t *testing.T) {
 			}
 			require.Greater(t, len(cmd.Long), len(cmd.Short)+200, "Long must be richer than Short")
 			require.NotEmpty(t, cmd.Example, "Example must be populated")
+			assert.Contains(t, cmd.Example, "go-teams")
 			assert.NotContains(t, cmd.Long, "Examples:", "Long must not carry its own Examples label")
 			assert.False(t, strings.HasPrefix(strings.TrimSpace(cmd.Example), "Examples:"),
 				"Example must not repeat the Examples: label")
@@ -162,6 +165,7 @@ func TestAllSubcommandsProvideComprehensiveHelpAndExamples(t *testing.T) {
 				assert.Equal(t, 1, strings.Count(out, "Examples:"), "args %v: exactly one Examples: header", args)
 				assert.NotContains(t, out, "Examples:\nExamples:")
 				assert.NotContains(t, out, helpNoteMarker, "args %v: no placeholder banner", args)
+				assert.NotContains(t, out, "teams-cli", "args %v: help must not contain legacy binary name", args)
 				for _, phrase := range tc.phrases {
 					assert.Contains(t, out, phrase, "args %v", args)
 				}

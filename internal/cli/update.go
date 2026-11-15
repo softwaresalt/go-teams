@@ -26,12 +26,12 @@ func newUpdateCommand(d *deps) *cobra.Command {
 	var opts updateOptions
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update teams-cli to the latest release version",
-		Long: "Update replaces the running teams-cli executable with a GitHub Release build.\n" +
+		Short: "Update go-teams to the latest release version",
+		Long: "Update replaces the running go-teams executable with a GitHub Release build.\n" +
 			"The download is verified against the release's SHA256SUMS before the\n" +
 			"executable is replaced; the previous binary is kept as <exe>.old until the\n" +
 			"swap succeeds and is restored automatically if it fails.\n\n" +
-			"Release asset: teams-cli-<goos>-<goarch> (with an .exe suffix on Windows) for linux,\n" +
+			"Release asset: go-teams-<goos>-<goarch> (with an .exe suffix on Windows) for linux,\n" +
 			"darwin, and windows on amd64 and arm64. A missing SHA256SUMS file, a missing entry for\n" +
 			"your platform, or a digest mismatch aborts the update and leaves the current binary untouched.\n\n" +
 			"Flags:\n" +
@@ -41,23 +41,23 @@ func newUpdateCommand(d *deps) *cobra.Command {
 			"Locking: two updates cannot swap the same executable at once. Each update takes <exe>.lock\n" +
 			"(JSON owner metadata: pid, token, created_at) plus a short-lived <exe>.lock.ctl control lock,\n" +
 			"waiting up to 15 seconds before failing with a locked error. The lock fails closed:\n" +
-			"teams-cli never evicts another process's lock on its own.\n\n" +
+			"go-teams never evicts another process's lock on its own.\n\n" +
 			"Manual lock recovery (never delete <exe>.lock while an update might still be running):\n" +
-			"  1. Confirm every teams-cli update process has exited. The recorded pid in <exe>.lock may be\n" +
+			"  1. Confirm every go-teams update process has exited. The recorded pid in <exe>.lock may be\n" +
 			"     stale because the OS can reuse a pid after a crash, so check for running updates, not\n" +
 			"     just that pid.\n" +
 			"  2. If <exe> is missing and <exe>.old exists, restore the backup by renaming <exe>.old back\n" +
 			"     to <exe>.\n" +
 			"  3. Remove <exe>.lock and any <exe>.lock.ctl (taken briefly during lock release).\n" +
-			"  4. Rerun teams-cli update.\n" +
+			"  4. Rerun go-teams update.\n" +
 			"Executable names ending in .lock or .lock.ctl are rejected.\n\n" +
 			"The executable's directory must be writable by the current user; an install under a\n" +
 			"privileged folder such as C:\\Program Files needs an elevated shell. Local builds report\n" +
 			"the version dev and treat any release as an upgrade.",
-		Example: "  teams-cli update --check\n" +
-			"  teams-cli update\n" +
-			"  teams-cli update --version v1.2.0\n" +
-			"  teams-cli update --version v1.1.0 --force",
+		Example: "  go-teams update --check\n" +
+			"  go-teams update\n" +
+			"  go-teams update --version v1.2.0\n" +
+			"  go-teams update --version v1.1.0 --force",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if d.runUpdate == nil {
@@ -83,20 +83,20 @@ func newUpdateCommand(d *deps) *cobra.Command {
 func printUpdateResult(w io.Writer, opts updateOptions, res updater.Result) {
 	switch {
 	case opts.CheckOnly && res.UpdateAvailable:
-		install := "teams-cli update"
+		install := "go-teams update"
 		if opts.TargetVersion != "" {
 			install += " --version " + res.TagName
 		}
 		_, _ = fmt.Fprintf(w, "Update available: %s -> %s. Run `%s` to install it.\n",
 			res.CurrentVersion, res.LatestVersion, install)
 	case opts.CheckOnly && res.Downgrade:
-		_, _ = fmt.Fprintf(w, "Release %s is older than the running version %s. Use `teams-cli update --version %s --force` to downgrade.\n",
+		_, _ = fmt.Fprintf(w, "Release %s is older than the running version %s. Use `go-teams update --version %s --force` to downgrade.\n",
 			res.LatestVersion, res.CurrentVersion, res.TagName)
 	case opts.CheckOnly:
-		_, _ = fmt.Fprintf(w, "teams-cli is up to date (%s).\n", res.CurrentVersion)
+		_, _ = fmt.Fprintf(w, "go-teams is up to date (%s).\n", res.CurrentVersion)
 	case res.Updated:
-		_, _ = fmt.Fprintf(w, "Updated teams-cli from %s to %s.\n", res.CurrentVersion, res.LatestVersion)
+		_, _ = fmt.Fprintf(w, "Updated go-teams from %s to %s.\n", res.CurrentVersion, res.LatestVersion)
 	default:
-		_, _ = fmt.Fprintf(w, "teams-cli is already up to date (%s). Use --force to reinstall.\n", res.CurrentVersion)
+		_, _ = fmt.Fprintf(w, "go-teams is already up to date (%s). Use --force to reinstall.\n", res.CurrentVersion)
 	}
 }

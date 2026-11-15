@@ -346,7 +346,7 @@ func TestCLIOutputFileFlagAndPositionalArg(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `C:\out\call.md`, gotCfg.OutputFile)
 
-	// 3. Direct root command invocation: teams-cli <url> <output.md>
+	// 3. Direct root command invocation: go-teams <url> <output.md>
 	gotCfg = config.Config{}
 	err = runCmd(context.Background(), d, "https://teams.cloud.microsoft/l/meetingrecap?threadId=2", `C:\out\direct.md`)
 	require.NoError(t, err)

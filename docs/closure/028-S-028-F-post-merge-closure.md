@@ -89,7 +89,7 @@ Blocking findings: `P0=0, P1=0`. Outcome: `READY`.
 | Artifact | Disposition | Result |
 |---|---|---|
 | Stash `ED249B2F` | Already archived by Stage at harvest; absent from active stash | skipped |
-| Deliberation `017-DL` | `archive` in `pre_close.linked_deliberation_disposition` (`docs/closure/evidence/028-S-028-F-close-evidence.json`); retained in `.backlogit/queue/` after `cascade-close` and archived via `backlogit archive 017-DL` | archived (`.backlogit/archive/017-DL.md`) |
+| Deliberation `017-DL` | `archive` in `pre_close.linked_deliberation_disposition` (`docs/closure/evidence/028-S-028-F-close-evidence.json`); retained in `.backlogit/queue/` after `cascade-close` and archived via `backlogit archive 017-DL` (upstream verifier set-construction alignment deferred to stash `9BDFB275` per P-021 C1/C2) | archived (`.backlogit/archive/017-DL.md`) |
 
 ### Compaction (P-020) and compound refresh
 
@@ -125,4 +125,4 @@ superseded by `028-S`). `compaction_status` is `done`.
 * **Monitoring and validation window (7 days / Option C `3EB89E2D` pass, owner: `softwaresalt`)**:
   * **Healthy signals**: 100% pass rate on `CI` (`Detect code changes`, `Build, vet, lint & test`, `Build, vet & test (Windows)`) and `go test -race ./...` with 0 secret-hygiene findings; operator's local `.env.local.test` loads cleanly with `GO_TEAMS_BINARY="./bin/go-teams.exe"` (note: an existing local `.env.local.test` from `2026-11-14` on the dev host should update `GO_TEAMS_BINARY` from legacy `teams-cli.exe` to `go-teams.exe`).
   * **Failure signals and rollback triggers**: Any failure in `Secret hygiene check (tracked files)`, `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`, `TestEnvExampleTemplateContainsOnlySyntheticPlaceholders`, `TestChromeMeetingEndToEnd`, or `TestCompiledBinaryCapturesRecapToExplicitOutput`.
-* **Readiness verdict**: `READY` (all local checks, multi-persona and Copilot reviews, and `ubuntu-latest` + `windows-latest` CI jobs passed; stash `3EB89E2D` remains active for the subsequent Option C live-tenant validation stage).
+* **Readiness verdict**: `READY` (all local checks, multi-persona and Copilot reviews, and `ubuntu-latest` + `windows-latest` CI jobs passed; stash `3EB89E2D` remains active for the subsequent Option C live-tenant validation stage, and PR #71 Copilot thread `PRRT_kwDOTStvas63wO0K` regarding external `autoharness shipment cascade-close` verifier set construction was deferred out of scope per P-021 C1/C2 to stash `9BDFB275`).

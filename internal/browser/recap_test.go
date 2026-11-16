@@ -600,6 +600,33 @@ func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
 	assert.Equal(t, repoLocalProfile, resolveExistingProfileDir(repoLocalProfile))
 }
 
+func TestNewLiveMeetingExpandsProfileOncePreservingLiteralVarTokens(t *testing.T) {
+	base := t.TempDir()
+	literalDir := filepath.Join(base, "$CACHE")
+	legacyProfile := filepath.Join(literalDir, "teams-cli", "profile")
+	leveldbDir := filepath.Join(legacyProfile, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(leveldbDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(leveldbDir, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+
+	t.Setenv("PROFILE_BASE", literalDir)
+	t.Setenv("CACHE", "wrong-cache-dir")
+
+	m, _, cleanup, err := NewLiveMeeting(context.Background(),
+		Options{Headless: true, UserDataDir: "%PROFILE_BASE%/go-teams/profile"},
+		MeetingOptions{MeetingURL: "https://teams.cloud.microsoft/l/meetingrecap?threadId=19%3Ameeting_x%40thread.v2", BotName: "Agent"})
+	require.NoError(t, err)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	cm, ok := m.(*chromeMeeting)
+	require.True(t, ok)
+	require.NotNil(t, cm.headedOpts)
+	assert.Equal(t, legacyProfile, cm.userDataDir)
+	assert.Equal(t, legacyProfile, cm.headedOpts.UserDataDir)
+	assert.True(t, cm.managedProfile)
+	assert.True(t, hasTeamsSessionInExpandedProfile(cm.headedOpts.UserDataDir))
+}
+
 func TestNewLiveMeetingRemoteHeadlessUsesCleanLauncherAndJoinOnWebSel(t *testing.T) {
 	assert.Contains(t, joinOnWebSel, "#openTeamsClientInBrowser")
 

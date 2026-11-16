@@ -240,7 +240,11 @@ func (m *chromeMeeting) Join(ctx context.Context) error {
 		return m.joinHeadedWithDeadline(ctx, deadline)
 	}
 	if m.probePreJoinState == nil {
-		if (m.managedProfile || m.userDataDir != "") && isRemoteAuthBackedMeetingURL(m.opts.MeetingURL) && !hasTeamsSessionInProfile(m.userDataDir) && m.defaultAccount() == "" {
+		hasSession := hasTeamsSessionInProfile(m.userDataDir)
+		if m.managedProfile {
+			hasSession = hasTeamsSessionInExpandedProfile(m.userDataDir)
+		}
+		if (m.managedProfile || m.userDataDir != "") && isRemoteAuthBackedMeetingURL(m.opts.MeetingURL) && !hasSession && m.defaultAccount() == "" {
 			return ErrAccountRequired
 		}
 		targetURL := m.opts.MeetingURL
@@ -442,7 +446,11 @@ func (m *chromeMeeting) joinHeaded(ctx context.Context) error {
 }
 
 func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline time.Time) error {
-	coldProfile := !hasTeamsSessionInProfile(m.headedOpts.UserDataDir)
+	hasSession := hasTeamsSessionInProfile(m.headedOpts.UserDataDir)
+	if m.managedProfile {
+		hasSession = hasTeamsSessionInExpandedProfile(m.headedOpts.UserDataDir)
+	}
+	coldProfile := !hasSession
 	if coldProfile && m.defaultAccount() == "" {
 		return ErrAccountRequired
 	}
@@ -456,7 +464,7 @@ func (m *chromeMeeting) joinHeadedWithDeadline(ctx context.Context, deadline tim
 	if initialURL != effectiveMeetingURL {
 		slog.Info("browser: new or unauthenticated profile detected; bootstrapping Teams session at /v2/ before opening meeting recap")
 	}
-	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, initialURL)
+	port, wsURL, targetID, procDone, cleanupProc, err := launchCleanHeadedBrowser(*m.headedOpts, initialURL, m.managedProfile)
 	if err != nil {
 		return err
 	}

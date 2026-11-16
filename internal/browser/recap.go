@@ -1418,14 +1418,17 @@ func parseRecapStartTimeInLocation(raw, tz string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, string, <-chan struct{}, func(), error) {
+func launchCleanHeadedBrowser(opts Options, initialURL string, profileResolved bool) (int, string, string, <-chan struct{}, func(), error) {
 	execPath := ResolveExecPath(opts.ExecPath)
 	if execPath == "" {
 		return 0, "", "", nil, nil, fmt.Errorf("browser: no Chromium-based browser executable found")
 	}
 	var absProfile string
 	if opts.UserDataDir != "" {
-		resolvedProfile := resolveExistingProfileDir(opts.UserDataDir)
+		resolvedProfile := opts.UserDataDir
+		if !profileResolved {
+			resolvedProfile = resolveExistingProfileDir(opts.UserDataDir)
+		}
 		abs, err := filepath.Abs(resolvedProfile)
 		if err != nil {
 			return 0, "", "", nil, nil, fmt.Errorf("browser: resolve profile dir: %w", err)

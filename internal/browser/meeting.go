@@ -126,7 +126,7 @@ func NewLiveMeeting(ctx context.Context, opts Options, mopts MeetingOptions) (Me
 		}
 		return cm, browserCtx, cleanup, nil
 	}
-	allocOpts := cleanHeadlessAllocatorOptions(opts)
+	allocOpts := cleanHeadlessAllocatorOptionsResolved(opts)
 	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
 		port := ln.Addr().(*net.TCPAddr).Port
 		_ = ln.Close()
@@ -165,12 +165,17 @@ func cleanHeadlessFlags(opts Options) []Flag {
 }
 
 func cleanHeadlessAllocatorOptions(opts Options) []chromedp.ExecAllocatorOption {
+	opts.UserDataDir = resolveExistingProfileDir(opts.UserDataDir)
+	return cleanHeadlessAllocatorOptionsResolved(opts)
+}
+
+func cleanHeadlessAllocatorOptionsResolved(opts Options) []chromedp.ExecAllocatorOption {
 	out := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	for _, f := range cleanHeadlessFlags(opts) {
 		out = append(out, chromedp.Flag(f.Name, f.Value))
 	}
 	if opts.UserDataDir != "" {
-		dir := resolveExistingProfileDir(opts.UserDataDir)
+		dir := opts.UserDataDir
 		if abs, err := filepath.Abs(dir); err == nil {
 			dir = abs
 		}

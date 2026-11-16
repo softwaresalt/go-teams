@@ -282,6 +282,9 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		if hasDriveExpanded && !filepath.IsAbs(expanded) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
+		if isBrowserPath && !strings.HasPrefix(expanded, ".") && !strings.HasPrefix(expanded, "~") && !strings.ContainsAny(expanded, `/\%$:`) {
+			return expanded
+		}
 		if filepath.IsAbs(expanded) {
 			resolved := filepath.Clean(expanded)
 			if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
@@ -736,6 +739,16 @@ func TestLoadCLITestEnvPrecedenceAndPaths(t *testing.T) {
 		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_PROFILE_DIR"))
 		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_TEST_PROFILE_DIR"))
 		assert.Equal(t, goTeamsBin, os.Getenv("GO_TEAMS_BINARY"))
+	})
+
+	t.Run("expands $BROWSER to bare executable", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("CLI_TEST_BROWSER_NAME", "msedge")
+		bRoot := t.TempDir()
+		bEnv := filepath.Join(bRoot, ".env.local.test")
+		require.NoError(t, os.WriteFile(bEnv, []byte("TEAMS_BROWSER_PATH=$CLI_TEST_BROWSER_NAME\n"), 0o600))
+		loadCLITestEnvFromFile(t, bEnv, bRoot)
+		assert.Equal(t, "msedge", os.Getenv("TEAMS_BROWSER_PATH"))
 	})
 }
 

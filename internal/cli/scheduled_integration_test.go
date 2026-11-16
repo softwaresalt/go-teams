@@ -75,12 +75,15 @@ func requireCLIIntegration(t *testing.T) string {
 	realCur, err := filepath.EvalSymlinks(cur)
 	require.NoError(t, err, "evaluate TEAMS_PROFILE_DIR symlinks")
 	realProfile := filepath.Join(append([]string{realCur}, trailing...)...)
+	relRoot, relErr := filepath.Rel(realProfile, realRoot)
+	require.False(t, relErr == nil && filepath.IsLocal(relRoot), "TEAMS_PROFILE_DIR must not contain repository root")
 	relProfile, err := filepath.Rel(realRoot, realProfile)
-	require.True(t, err == nil && filepath.IsLocal(relProfile) && relProfile != ".", "TEAMS_PROFILE_DIR must resolve within repository root")
-
-	ignoreCmd := exec.Command("git", "check-ignore", "-q", "--", filepath.ToSlash(relProfile))
-	ignoreCmd.Dir = realRoot
-	require.NoError(t, ignoreCmd.Run(), "TEAMS_PROFILE_DIR must be ignored by git")
+	if err == nil && filepath.IsLocal(relProfile) {
+		require.NotEqual(t, ".", relProfile, "TEAMS_PROFILE_DIR must not be the repository root")
+		ignoreCmd := exec.Command("git", "check-ignore", "-q", "--", filepath.ToSlash(relProfile))
+		ignoreCmd.Dir = realRoot
+		require.NoError(t, ignoreCmd.Run(), "TEAMS_PROFILE_DIR must be ignored by git")
+	}
 
 	return realProfile
 }
@@ -108,6 +111,53 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 		filepath.ToSlash(queuePath),
 	)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgYAML), 0o600))
+
+	if strings.Contains(strings.ToLower(rawURL), "meetingrecap") {
+		recapArgs := []string{
+			"join",
+			rawURL,
+			"--config", cfgPath,
+			"--mode", config.CaptureModePastRecap,
+			"--lobby-timeout", "2m",
+			"--category", "LIVE",
+			"--output-dir", outDir,
+			"--profile-dir", profile,
+			"--headless",
+		}
+		if bPath := strings.TrimSpace(os.Getenv("TEAMS_BROWSER_PATH")); bPath != "" {
+			recapArgs = append(recapArgs, "--browser-path", bPath)
+		}
+		if acct := strings.TrimSpace(os.Getenv("TEAMS_ACCOUNT")); acct != "" {
+			recapArgs = append(recapArgs, "--account", acct)
+		}
+		recapCtx, cancelRecap := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancelRecap()
+		root := NewRootCommand()
+		root.SetArgs(recapArgs)
+		require.NoError(t, root.ExecuteContext(recapCtx))
+		require.NoError(t, recapCtx.Err())
+
+		entries, err := os.ReadDir(outDir)
+		require.NoError(t, err)
+		var mdPath string
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+				mdPath = filepath.Join(outDir, e.Name())
+				break
+			}
+		}
+		require.NotEmpty(t, mdPath, "expected flushed Markdown recap transcript in output directory")
+		mdInfo, err := os.Stat(mdPath)
+		require.NoError(t, err)
+		require.NotZero(t, mdInfo.Size(), "expected non-empty Markdown recap transcript file")
+		mdBytes, err := os.ReadFile(mdPath)
+		require.NoError(t, err)
+		mdText := string(mdBytes)
+		require.True(t, strings.Contains(mdText, "## Transcript"), "expected transcript body section in saved Markdown")
+		require.True(t, strings.Contains(mdText, "\n> "), "expected at least one captured caption utterance in saved Markdown")
+		require.True(t, strings.Contains(mdText, "# AI Summary"), "expected appended # AI Summary section in saved Markdown")
+		return
+	}
 
 	args := []string{
 		"join",

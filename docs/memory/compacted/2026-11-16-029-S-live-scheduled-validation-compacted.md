@@ -5,6 +5,9 @@ feature: 029-F
 shipment: 029-S
 deliberation: 018-DL
 source_stash: 3EB89E2D
+pull_request: 72
+merge_commit: eb40cc71247d4aecd6cd41205e240399fede583e
+closure_status: READY_WITH_CONDITIONS
 status: compacted
 ---
 
@@ -13,6 +16,7 @@ status: compacted
 * **Dual-tier verification (`029-F`, `018-DL`)**: Implemented Tier 2 headless real-Chromium E2E tests (`TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd` in `internal/browser/meeting_e2e_test.go` and `TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd` in `internal/cli/e2e_test.go`) alongside Tier 5 `-tags=integration` live-tenant test suites (`internal/browser/scheduled_lifecycle_integration_test.go` and `internal/cli/scheduled_integration_test.go`) powered by `028-S`'s `.env.local.test` loaders (`browser.LoadTestEnv` and `loadCLITestEnv`).
 * **Zero overlap with `010-S`**: Placed new browser integration tests in `internal/browser/scheduled_lifecycle_integration_test.go` so `internal/browser/meeting_integration_test.go` remained untouched (`028-S -> 029-S -> 010-S`).
 * **Zero production `.go` changes**: Confined all changes to `*_test.go`, `docs/`, and `.backlogit/`.
+* **Post-merge closure (`PR #72`, merge `eb40cc71247d4aecd6cd41205e240399fede583e`)**: Closed via `cascade` (`docs/closure/029-S-029-F-post-merge-closure.md`) with status `READY_WITH_CONDITIONS` (Tier 2 E2E and Tier 5 compile gates `PASS`; Tier 5 live-tenant human checkpoints `BLOCKED` while AFK in `docs/closure/browser-automation/2026-11-15-scheduled-call-and-recap-validation-runbook.md`). Deferred stash `560B0C44` captured under P-021 C2 for PR #72 Copilot thread `PRRT_kwDOTStvas63xJru`; pre-existing stash `9BDFB275` left untouched.
 
 ## Delivered Artifacts
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ type chromeMeeting struct {
 	// URL carries no recording identity (interactive Recap selection), so audio
 	// validation still binds to the recording that supplied the transcript.
 	recapAudioURL string
+	recapItemID   string
 	aiSummary     string
 
 	activityMu        sync.Mutex
@@ -963,6 +965,8 @@ func (m *chromeMeeting) tryExtractRecapViaCDP(ctx context.Context, port int) boo
 	return m.extractRecapFromTargets(ctx, port, mainPageURL, targets, ownedFrames)
 }
 
+var recapItemIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 func (m *chromeMeeting) extractRecapFromTargets(ctx context.Context, port int, mainPageURL string, targets []cdpTargetInfo, ownedFrames ownedFrameSet) bool {
 	if !m.opts.AISummaryOnly {
 		for _, t := range targets {
@@ -972,6 +976,12 @@ func (m *chromeMeeting) extractRecapFromTargets(ctx context.Context, port int, m
 			if raw, evalErr := evalInCDPTarget(ctx, t.WebSocketDebuggerURL, extractRecapTranscriptJS); evalErr == nil && raw != "" {
 				if entries, meta, pErr := parseRecapPayloadForMeeting(raw, m.opts.MeetingURL, mainPageURL, t.URL); pErr == nil && len(entries) > 0 {
 					m.recapEntries = entries
+					var rawPayload rawRecapPayload
+					if json.Unmarshal([]byte(raw), &rawPayload) == nil {
+						if trimmedID := strings.TrimSpace(rawPayload.ItemID); recapItemIDRe.MatchString(trimmedID) {
+							m.recapItemID = trimmedID
+						}
+					}
 					if !m.opts.DisableAISummary {
 						if summary := captureAISummaryFromTargets(ctx, port, m.capturePageID); summary != "" {
 							m.aiSummary = summary
@@ -1422,6 +1432,14 @@ func (m *chromeMeeting) CaptureAudio(ctx context.Context, w io.Writer) (err erro
 		meetingURL := m.opts.MeetingURL
 		if m.recapAudioURL != "" {
 			meetingURL = m.recapAudioURL
+		}
+		if ExtractMeetingIdentity(meetingURL).DriveItemID == "" && m.recapItemID != "" {
+			if u, parseErr := url.Parse(meetingURL); parseErr == nil {
+				q := u.Query()
+				q.Set("driveItemId", m.recapItemID)
+				u.RawQuery = q.Encode()
+				meetingURL = u.String()
+			}
 		}
 		return captureRecapAudioFromTargets(ctx, m.cdpPort, m.capturePageID, meetingURL, w)
 	}

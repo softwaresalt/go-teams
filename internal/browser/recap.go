@@ -36,6 +36,7 @@ const RecapOffsetSeparator = "\x00"
 
 const extractRecapAudioJS = `(async () => {
 	const limitError = 'recap audio exceeds maximum supported size/duration';
+	const maxRecapAudioSegments = 2400;
 	try { delete window.__goTeamsRecapAudioTransfer; } catch (_) {}
 	const enforceIdentity = typeof recapExpectedIdentity !== 'undefined';
 	const expected = enforceIdentity ? recapExpectedIdentity : {};
@@ -104,7 +105,7 @@ const extractRecapAudioJS = `(async () => {
 		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', decodeURIComponent(u.pathname.split('/').pop()), true, state);
 	}
 	const playBtnSelector = 'button[aria-label="Play video"], button[title="Play video"], button[data-automationid="playButton"], button[aria-label="Play"], .vjs-big-play-button, [role="button"][aria-label="Play video"]';
-	function validateFrameContext(win, doc, ancestorMatched, ancestorItemId) {
+	function validateFrameContext(win, doc) {
 		const state = { matched: false };
 		const fUrl = String((win.location && win.location.href) || '');
 		const fi = win.g_fileInfo || {};
@@ -118,9 +119,9 @@ const extractRecapAudioJS = `(async () => {
 		matchField('RecordingName', fi.name, true, state);
 		let fItemId = '';
 		try {
-			fItemId = String(fi.itemId || fi.driveItemId || fi.VroomItemID || fi.VroomItemId || (fUrl ? new URL(fUrl).searchParams.get('driveItemId') : '') || ancestorItemId || '');
+			fItemId = String(fi.itemId || fi.driveItemId || fi.VroomItemID || fi.VroomItemId || (fUrl ? new URL(fUrl).searchParams.get('driveItemId') : '') || '');
 		} catch (_) {
-			fItemId = String(fi.itemId || fi.driveItemId || fi.VroomItemID || fi.VroomItemId || ancestorItemId || '');
+			fItemId = String(fi.itemId || fi.driveItemId || fi.VroomItemID || fi.VroomItemId || '');
 		}
 		const fFileName = String(fi.fileName || fi.name || '');
 		return {
@@ -130,7 +131,7 @@ const extractRecapAudioJS = `(async () => {
 			pageUrl: fUrl,
 			itemId: fItemId,
 			fileName: fFileName,
-			baseIdentityMatched: state.matched || Boolean(ancestorMatched)
+			baseIdentityMatched: state.matched
 		};
 	}
 	function hasPlayableStreamSurface(ctx) {
@@ -162,7 +163,7 @@ const extractRecapAudioJS = `(async () => {
 	function collectPlayerWindows() {
 		const visited = new Set();
 		const contexts = [];
-		function walk(win, doc, depth, ancestorMatched, ancestorItemId) {
+		function walk(win, doc, depth) {
 			if (!win || depth > 3 || visited.has(win)) return;
 			visited.add(win);
 			let href = '';
@@ -173,7 +174,7 @@ const extractRecapAudioJS = `(async () => {
 				try { targetDoc = win.document; } catch (_) { return; }
 			}
 			if (!targetDoc) return;
-			const frameCtx = validateFrameContext(win, targetDoc, ancestorMatched, ancestorItemId);
+			const frameCtx = validateFrameContext(win, targetDoc);
 			contexts.push(frameCtx);
 			if (depth === 3) return;
 			let iframes = [];
@@ -191,18 +192,18 @@ const extractRecapAudioJS = `(async () => {
 					const cd = iframe.contentDocument || cw.document;
 					if (!cd) continue;
 					void String(cw.location && cw.location.href);
-					walk(cw, cd, depth + 1, frameCtx.baseIdentityMatched, frameCtx.itemId);
+					walk(cw, cd, depth + 1);
 				} catch (_) {
 					// Cross-origin iframe; evaluated via separate CDP target.
 				}
 			}
 		}
-		walk(window, document, 0, false, '');
+		walk(window, document, 0);
 		try {
 			if (window.parent && window.parent !== window && !visited.has(window.parent)) {
 				const pHref = String((window.parent.location && window.parent.location.href) || '');
 				if (pHref && !isAuthRedirectURL(pHref)) {
-					validateFrameContext(window.parent, window.parent.document, false, '');
+					validateFrameContext(window.parent, window.parent.document);
 				}
 			}
 		} catch (_) {}
@@ -298,7 +299,25 @@ const extractRecapAudioJS = `(async () => {
 	}
 	const candidates = nonBlobCandidates.concat(blobCandidates);
 	const streamSurface = hasPlayableStreamSurface(playerCtx);
-	if (!candidates.length && !streamSurface) return '';
+	if (!candidates.length && !streamSurface) {
+		if (info.isDownloadBlocked) {
+			throw new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+		}
+		return '';
+	}
+
+	function sanitizeMediaUrl(raw) {
+		if (!raw) return '';
+		try {
+			const u = new URL(String(raw), pageUrl || String((typeof location !== 'undefined' && location.href) || ''));
+			for (const k of ['tempauth', 'access_token', 'sig', 'se', 'sp', 'sv', 'auth']) {
+				u.searchParams.delete(k);
+			}
+			return u.toString();
+		} catch (_) {
+			return '';
+		}
+	}
 
 	let blockedErr = null;
 	let lastFetchErr = null;
@@ -434,7 +453,7 @@ const extractRecapAudioJS = `(async () => {
 				lastFetchErr = pcmErr;
 				continue;
 			}
-			return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: selectedUrl, sourceBytes, durationSec: pcmState.totalDurationSec, pcmChunks: pcmState.pcmChunks});
+			return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: sanitizeMediaUrl(selectedUrl), sourceBytes, durationSec: pcmState.totalDurationSec, pcmChunks: pcmState.pcmChunks});
 		} finally { await audioContext.close(); }
 	}
 
@@ -594,18 +613,6 @@ const extractRecapAudioJS = `(async () => {
 		walkBox(0, copy.length);
 		return copy;
 	}
-	function sanitizeMediaUrl(raw) {
-		if (!raw) return '';
-		try {
-			const u = new URL(String(raw), pageUrl || String((typeof location !== 'undefined' && location.href) || ''));
-			for (const k of ['tempauth', 'access_token', 'sig', 'se', 'sp', 'sv', 'auth']) {
-				u.searchParams.delete(k);
-			}
-			return u.toString();
-		} catch (_) {
-			return '';
-		}
-	}
 
 	async function captureStreamEmbedAudio() {
 		for (const rawDuration of [media && media.duration, info.duration, info.durationSeconds]) {
@@ -623,11 +630,18 @@ const extractRecapAudioJS = `(async () => {
 		let pathAFailed = false;
 		let activityObserved = false;
 		let transcodeAudioTemplateUrl = info.transcodeUrl ? String(info.transcodeUrl) : '';
-		let transcodeOrigin = '';
 		let transcodeWsd = 0;
 		let transcodePpd = 0;
-		const capturedAuthHeaders = {};
-		const allowlistedHeaderNames = ['accept', 'authorization', 'prefer'];
+		const capturedAuthHeadersByOrigin = Object.create(null);
+		const allowlistedHeaderNames = [
+			'accept',
+			'authorization',
+			'prefer',
+			'x-ms-client-request-id',
+			'x-ms-correlation-id',
+			'x-ms-user-agent',
+			'x-ms-request-id'
+		];
 		let cryptoInitSegment = null;
 		let audioCryptoKeyInfo = null;
 		let fallbackCryptoKeyInfo = null;
@@ -705,6 +719,12 @@ const extractRecapAudioJS = `(async () => {
 			if (mseSegments.has(key)) {
 				activityObserved = true;
 				mseLastAppendAt = Date.now();
+				return;
+			}
+			if (mseSegments.size >= maxRecapAudioSegments) {
+				fatalErr = new Error(limitError);
+				if (abortCtrl) abortCtrl.abort();
+				signalWake();
 				return;
 			}
 			if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
@@ -813,17 +833,21 @@ const extractRecapAudioJS = `(async () => {
 			if (!isTranscode) return { isVideoSegment: false };
 			let winOrigin = '';
 			try {
-				winOrigin = (hookWin && hookWin.location && hookWin.location.origin) || new URL(pageUrl).origin;
+				winOrigin = (hookWin && hookWin.location && hookWin.location.origin) ||
+					new URL((hookWin && hookWin.location && hookWin.location.href) || pageUrl).origin;
 			} catch (_) {
 				winOrigin = '';
 			}
-			const sameOrigin = Boolean(winOrigin) && u.origin === winOrigin && (u.protocol === 'https:' || u.protocol === 'http:');
+			const allowedProto = u.protocol === 'https:' ||
+				(u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]' || u.hostname === '::1'));
+			const sameOrigin = Boolean(winOrigin) && u.origin === winOrigin && allowedProto;
 			if (!sameOrigin) return { isVideoSegment: false };
 			if (headersObj) {
+				const originHdrs = capturedAuthHeadersByOrigin[u.origin] || (capturedAuthHeadersByOrigin[u.origin] = Object.create(null));
 				for (const [k, v] of Object.entries(headersObj)) {
 					const kl = String(k).toLowerCase();
-					if (v && (allowlistedHeaderNames.includes(kl) || kl.startsWith('x-ms-'))) {
-						capturedAuthHeaders[kl] = String(v);
+					if (v && allowlistedHeaderNames.includes(kl)) {
+						originHdrs[kl] = String(v);
 					}
 				}
 			}
@@ -846,7 +870,6 @@ const extractRecapAudioJS = `(async () => {
 				tmpl.searchParams.delete('segmentTime');
 				tmpl.searchParams.delete('part');
 				transcodeAudioTemplateUrl = tmpl.toString();
-				transcodeOrigin = tmpl.origin;
 			}
 			activityObserved = true;
 			signalWake();
@@ -884,18 +907,27 @@ const extractRecapAudioJS = `(async () => {
 				return null;
 			});
 		}
-		async function fetchBytesWithCap(urlStr, origFetchFn, hookWin) {
+		async function fetchBytesWithCap(urlStr, origFetchFn, hookWin, signal) {
 			if (fatalErr) throw fatalErr;
+			const activeSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
+			if (activeSignal && activeSignal.aborted) {
+				throw new Error('transcode fetch aborted');
+			}
 			const u = new URL(urlStr);
-			const hdrs = (transcodeOrigin && u.origin === transcodeOrigin && Object.keys(capturedAuthHeaders).length)
-				? Object.assign({}, capturedAuthHeaders)
+			const originHdrs = capturedAuthHeadersByOrigin[u.origin];
+			const hdrs = (originHdrs && Object.keys(originHdrs).length)
+				? Object.assign({}, originHdrs)
 				: undefined;
 			const fetchOpts = {
 				credentials: 'include',
-				signal: abortCtrl ? abortCtrl.signal : undefined,
+				signal: activeSignal,
 				headers: hdrs
 			};
 			const resp = await origFetchFn.call(hookWin, urlStr, fetchOpts);
+			if (fatalErr) throw fatalErr;
+			if (activeSignal && activeSignal.aborted) {
+				throw new Error('transcode fetch aborted');
+			}
 			if (!resp || !resp.ok) {
 				throw new Error('transcode fetch failed: ' + (resp ? resp.status : 'network error'));
 			}
@@ -907,6 +939,10 @@ const extractRecapAudioJS = `(async () => {
 			}
 			if (!resp.body || !resp.body.getReader) {
 				const ab = await resp.arrayBuffer();
+				if (fatalErr) throw fatalErr;
+				if (activeSignal && activeSignal.aborted) {
+					throw new Error('transcode fetch aborted');
+				}
 				const u8 = new Uint8Array(ab);
 				if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
 					fatalErr = new Error(limitError);
@@ -920,7 +956,15 @@ const extractRecapAudioJS = `(async () => {
 			const chunks = [];
 			let total = 0;
 			while (true) {
+				if (fatalErr || (activeSignal && activeSignal.aborted)) {
+					try { await reader.cancel(); } catch (_) {}
+					throw (fatalErr || new Error('transcode fetch aborted'));
+				}
 				const part = await reader.read();
+				if (fatalErr || (activeSignal && activeSignal.aborted)) {
+					try { await reader.cancel(); } catch (_) {}
+					throw (fatalErr || new Error('transcode fetch aborted'));
+				}
 				if (part.done) break;
 				const v = part.value;
 				if (!v || !v.byteLength) continue;
@@ -979,60 +1023,88 @@ const extractRecapAudioJS = `(async () => {
 				throw new Error(limitError);
 			}
 			const totalSegments = Math.ceil(transcodePpd / transcodeWsd);
-			if (!Number.isFinite(totalSegments) || totalSegments < 1 || totalSegments > 2400) {
-				throw new Error('transcode segment count out of bounds');
+			if (!Number.isFinite(totalSegments) || totalSegments < 1 || totalSegments > maxRecapAudioSegments) {
+				throw new Error(limitError);
 			}
 			pathAActive = true;
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 			if (m && typeof m.pause === 'function') {
 				try { m.pause(); } catch (_) {}
 			}
-			let initSeg = null;
-			if (cryptoInitSegment) {
-				if (streamSourceBytes + cryptoInitSegment.byteLength > maxRecapAudioSourceBytes) {
-					throw new Error(limitError);
+			const pathAAbortCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+			const pathASignal = pathAAbortCtrl ? pathAAbortCtrl.signal : undefined;
+			const onOuterAbort = () => {
+				if (pathAAbortCtrl) {
+					try { pathAAbortCtrl.abort(); } catch (_) {}
 				}
-				streamSourceBytes += cryptoInitSegment.byteLength;
-				initSeg = cryptoInitSegment;
-			} else if (mseInitSegment) {
-				initSeg = mseInitSegment;
-			} else {
-				const initUrl = new URL(transcodeAudioTemplateUrl);
-				initUrl.searchParams.set('part', 'initsegment');
-				initUrl.searchParams.set('track', 'audio');
-				initUrl.searchParams.set('quality', 'audcopy');
-				const rawInit = await fetchBytesWithCap(initUrl.toString(), origPlayerFetch, origPlayerFetchWin);
-				const decInit = await decryptSegmentBytes(rawInit, keyInfo, origPlayerDecrypt, origPlayerSubtle);
-				if (!isFMP4InitSegment(decInit) || classifyInitSegmentTrack(decInit) === 'video') {
-					throw new Error('transcode initsegment is not audio fMP4');
-				}
-				initSeg = decInit;
-			}
-			const segments = new Array(totalSegments);
-			let nextIdx = 0;
-			async function worker() {
-				while (nextIdx < totalSegments) {
-					if (fatalErr || (abortCtrl && abortCtrl.signal.aborted)) return;
-					const k = nextIdx++;
-					const segUrl = new URL(transcodeAudioTemplateUrl);
-					segUrl.searchParams.set('part', 'mediasegment');
-					segUrl.searchParams.set('track', 'audio');
-					segUrl.searchParams.set('quality', 'audcopy');
-					segUrl.searchParams.set('segmentTime', String(k * transcodeWsd));
-					const rawSeg = await fetchBytesWithCap(segUrl.toString(), origPlayerFetch, origPlayerFetchWin);
-					const decSeg = await decryptSegmentBytes(rawSeg, keyInfo, origPlayerDecrypt, origPlayerSubtle);
-					if (!isFMP4MediaSegment(decSeg)) {
-						throw new Error('transcode mediasegment is not fMP4');
-					}
-					segments[k] = decSeg;
+			};
+			if (abortCtrl && abortCtrl.signal) {
+				if (abortCtrl.signal.aborted) onOuterAbort();
+				else if (typeof abortCtrl.signal.addEventListener === 'function') {
+					abortCtrl.signal.addEventListener('abort', onOuterAbort, { once: true });
 				}
 			}
 			const workers = [];
-			for (let i = 0; i < Math.min(16, totalSegments); i++) workers.push(worker());
-			await Promise.all(workers);
-			if (fatalErr) throw fatalErr;
-			if (segments.some(s => !s)) throw new Error('incomplete Path A segment set');
-			return { initSegment: initSeg, mediaSegments: segments, selectedMediaUrl: transcodeAudioTemplateUrl };
+			try {
+				let initSeg = null;
+				if (cryptoInitSegment) {
+					if (streamSourceBytes + cryptoInitSegment.byteLength > maxRecapAudioSourceBytes) {
+						throw new Error(limitError);
+					}
+					streamSourceBytes += cryptoInitSegment.byteLength;
+					initSeg = cryptoInitSegment;
+				} else if (mseInitSegment) {
+					initSeg = mseInitSegment;
+				} else {
+					const initUrl = new URL(transcodeAudioTemplateUrl);
+					initUrl.searchParams.set('part', 'initsegment');
+					initUrl.searchParams.set('track', 'audio');
+					initUrl.searchParams.set('quality', 'audcopy');
+					const rawInit = await fetchBytesWithCap(initUrl.toString(), origPlayerFetch, origPlayerFetchWin, pathASignal);
+					const decInit = await decryptSegmentBytes(rawInit, keyInfo, origPlayerDecrypt, origPlayerSubtle);
+					if (!isFMP4InitSegment(decInit) || classifyInitSegmentTrack(decInit) === 'video') {
+						throw new Error('transcode initsegment is not audio fMP4');
+					}
+					initSeg = decInit;
+				}
+				const segments = new Array(totalSegments);
+				let nextIdx = 0;
+				async function worker() {
+					while (nextIdx < totalSegments) {
+						if (fatalErr || (abortCtrl && abortCtrl.signal.aborted) || (pathASignal && pathASignal.aborted)) return;
+						const k = nextIdx++;
+						const segUrl = new URL(transcodeAudioTemplateUrl);
+						segUrl.searchParams.set('part', 'mediasegment');
+						segUrl.searchParams.set('track', 'audio');
+						segUrl.searchParams.set('quality', 'audcopy');
+						segUrl.searchParams.set('segmentTime', String(k * transcodeWsd));
+						const rawSeg = await fetchBytesWithCap(segUrl.toString(), origPlayerFetch, origPlayerFetchWin, pathASignal);
+						const decSeg = await decryptSegmentBytes(rawSeg, keyInfo, origPlayerDecrypt, origPlayerSubtle);
+						if (!isFMP4MediaSegment(decSeg)) {
+							throw new Error('transcode mediasegment is not fMP4');
+						}
+						segments[k] = decSeg;
+					}
+				}
+				for (let i = 0; i < Math.min(16, totalSegments); i++) workers.push(worker());
+				await Promise.all(workers);
+				if (fatalErr) throw fatalErr;
+				if (segments.some(s => !s)) throw new Error('incomplete Path A segment set');
+				return { initSegment: initSeg, mediaSegments: segments, selectedMediaUrl: transcodeAudioTemplateUrl };
+			} catch (err) {
+				if (pathAAbortCtrl) {
+					try { pathAAbortCtrl.abort(); } catch (_) {}
+				}
+				if (workers.length) {
+					await Promise.allSettled(workers);
+				}
+				if (fatalErr) throw fatalErr;
+				throw err;
+			} finally {
+				if (abortCtrl && abortCtrl.signal && typeof abortCtrl.signal.removeEventListener === 'function') {
+					abortCtrl.signal.removeEventListener('abort', onOuterAbort);
+				}
+			}
 		}
 
 		function installWindowHooks(w) {
@@ -1318,8 +1390,11 @@ const extractRecapAudioJS = `(async () => {
 					})();
 					if (mseInitSegment && mseSegments.size > 0) {
 						if (m && m.ended) break;
-						if (targetDur > 0 && mseMaxBufferedEnd >= targetDur - 0.5 && Date.now() - mseLastAppendAt >= 150) break;
-						if (mseLastAppendAt > 0 && Date.now() - mseLastAppendAt >= 3000) break;
+						if (targetDur > 0) {
+							if (mseMaxBufferedEnd >= targetDur - 0.5 && Date.now() - mseLastAppendAt >= 150) break;
+						} else if (mseLastAppendAt > 0 && Date.now() - mseLastAppendAt >= 3000) {
+							break;
+						}
 					}
 				}
 			}
@@ -1355,9 +1430,26 @@ const extractRecapAudioJS = `(async () => {
 			if (!initSegment || !orderedSegments.length) {
 				throw (blockedErr || lastFetchErr || new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)'));
 			}
+			if (!pathAResult && enforceIdentity && !baseIdentityMatched) {
+				const tState = { matched: false };
+				if (transcodeAudioTemplateUrl) {
+					checkIdentityAgainst(transcodeAudioTemplateUrl, pageUrl, tState);
+				}
+				if (!tState.matched) {
+					throw new Error('recap audio recording identity unverified');
+				}
+			}
 			const totalSourceBytes = initSegment.byteLength + orderedSegments.reduce((n, s) => n + s.byteLength, 0);
 			if (totalSourceBytes > maxRecapAudioSourceBytes) {
 				throw new Error(limitError);
+			}
+			const curMedia = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			for (const rawDuration of [curMedia && curMedia.duration, info.duration, info.durationSeconds, mseMaxBufferedEnd]) {
+				const d = Number(rawDuration);
+				if (Number.isFinite(d) && d > 0 &&
+					(d > maxRecapAudioDurationSec || Math.ceil(d * 44100) * 2 > maxRecapAudioPCMBytes)) {
+					throw new Error(limitError);
+				}
 			}
 			const combined = new Uint8Array(totalSourceBytes);
 			combined.set(initSegment, 0);

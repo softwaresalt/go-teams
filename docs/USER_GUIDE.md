@@ -885,7 +885,21 @@ golangci-lint run     # Lint
 
 Live browser and meeting behavior is covered by an `integration`-tagged harness.
 The tests skip by default and only run when explicitly enabled, so they never
-launch a browser in unattended CI:
+launch a browser in unattended CI.
+
+Integration and end-to-end test helpers automatically load a gitignored
+`.env.local.test` file at the repository root (when present) for any test
+variable not already set in the process environment. Copy the tracked
+[`.env.example`](../.env.example) template to get started:
+
+```bash
+cp .env.example .env.local.test
+```
+
+Process environment variables always take precedence over `.env.local.test`
+across both primary and alias names, and unedited `synthetic-placeholder`
+values from `.env.example` are ignored. Never commit `.env.local.test` or real
+credentials.
 
 ```bash
 # Compile the harness (CI runs this to prevent bit-rot):
@@ -899,10 +913,16 @@ GO_TEAMS_INTEGRATION=1 TEAMS_MEETING_URL="https://teams.microsoft.com/l/meetup-j
   go test -tags=integration ./internal/browser/
 ```
 
-| Env var | Purpose |
-|---|---|
-| `GO_TEAMS_INTEGRATION` | Set to any non-empty value to enable integration tests |
-| `TEAMS_MEETING_URL` | A joinable Teams meeting URL for the live meeting tests |
+| Env var | Alias | Purpose |
+|---|---|---|
+| `GO_TEAMS_INTEGRATION` | | Set to `1` (or any value other than `""`, `"0"`, or `"false"`) to enable integration tests |
+| `TEAMS_ACCOUNT` | `TEAMS_TEST_ACCOUNT` | Microsoft Entra account (UPN/email or display name) passed as `DefaultAccount` in browser integration tests |
+| `TEAMS_MEETING_URL` | `TEAMS_TEST_MEETING_URL` | Joinable Teams meeting URL for the live meeting tests |
+| `TEAMS_RECAP_URL` | `TEAMS_TEST_RECAP_URL` | Teams Meeting Recap URL for live recap tests |
+| `TEAMS_PROFILE_DIR` | `TEAMS_TEST_PROFILE_DIR` | Authenticated Chromium profile directory for live integration tests (relative paths resolve from the repository root) |
+| `TEAMS_BROWSER_PATH` | `TEAMS_TEST_BROWSER_PATH` | Chromium/Edge/Chrome executable path or binary name (relative paths resolve from the repository root) |
+| `GO_TEAMS_BINARY` | | Compiled `go-teams` executable path for `TestCompiledBinaryCapturesRecapToExplicitOutput` (relative paths resolve from the repository root) |
+| `TEAMS_DISABLE_SANDBOX` | | Set to `1` or `true` in container environments without user namespaces where Chromium requires `--no-sandbox` |
 
 The local synthetic-page end-to-end harness verifies browser caption delivery.
 The opt-in compiled-executable harness also verifies recap and AI summary

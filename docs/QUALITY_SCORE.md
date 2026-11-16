@@ -64,22 +64,26 @@ the Windows commit limit.
 
 ### Tier 2: synthetic browser and compiled-binary end to end
 
-* `TestChromeMeetingEndToEnd` in `internal/browser/meeting_e2e_test.go:25`
+* `TestChromeMeetingEndToEnd` in `internal/browser/meeting_e2e_test.go`
   drives a real Chromium against a simulated Teams single-page app served over
   `httptest`. It covers the sign-in wait, the launcher interstitial, pre-join
   (mute, bot name, Join), lobby admission, the caption menu, and the live
-  caption `MutationObserver`. It skips unless the host is Windows and a
-  Chromium-based browser is installed (`ResolveExecPath("")` must find one).
-  The `test-windows` job in `ci.yml` and `release.yml` runs it in a dedicated
-  step that fails if the test skips, so CI enforces a non-skipped pass on
-  `windows-latest`.
+  caption `MutationObserver`. It falls back to gitignored root `.env.local.test`
+  (seeded from `.env.example`) when environment variables such as
+  `TEAMS_BROWSER_PATH` are not already set in the process environment, and
+  skips unless the host is Windows and a Chromium-based browser is installed
+  (`ResolveExecPath("")` must find one). The `test-windows` job in `ci.yml`
+  and `release.yml` runs it in a dedicated step that fails if the test skips,
+  so CI enforces a non-skipped pass on `windows-latest`.
 * `TestCompiledBinaryCapturesRecapToExplicitOutput` in
-  `internal/cli/binary_automation_test.go:16` runs a freshly built
-  `go-teams` executable against a synthetic Meeting Recap page and checks the
-  transcript and AI Summary output across the root, `captions`, short-flag,
-  `join`, output-file, and output-directory invocation forms. It skips unless
-  `GO_TEAMS_BINARY` points at a built executable, and CI does not set that
-  variable, so this test remains a local check.
+  `internal/cli/binary_automation_test.go` runs a freshly built `go-teams`
+  executable against a synthetic Meeting Recap page and checks the transcript
+  and AI Summary output across the root, `captions`, short-flag, `join`,
+  output-file, and output-directory invocation forms. It loads gitignored root
+  `.env.local.test` (seeded from `.env.example`) when `GO_TEAMS_BINARY` is not
+  already set in the process environment, and skips unless `GO_TEAMS_BINARY`
+  points at a built executable; CI does not set that variable, so this test
+  remains a local check.
 
 ### Tier 3: deterministic golden MP3 regression
 
@@ -105,9 +109,11 @@ documentation-only pull requests.
 ### Tier 5: integration-tagged live harness
 
 Tests behind the `integration` build tag launch a real browser and, with
-`TEAMS_MEETING_URL`, a real meeting. They run only when `GO_TEAMS_INTEGRATION`
-is set. CI compiles them with `go vet -tags=integration ./...` to prevent
-bit-rot but never runs them.
+`TEAMS_MEETING_URL`, a real meeting. Test helpers load gitignored root
+`.env.local.test` (seeded from `.env.example`) when environment variables are
+not already set in the process environment. They run only when
+`GO_TEAMS_INTEGRATION` is set (and not `"0"` or `"false"`). CI compiles them
+with `go vet -tags=integration ./...` to prevent bit-rot but never runs them.
 
 ## Live-verification gaps
 

@@ -148,6 +148,8 @@ for the full precedence rules.
 * [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md): step-by-step setup, complete
   command and flag reference, and the YAML configuration manual
 * [`config.example.yaml`](config.example.yaml): commented configuration template
+* [`.env.example`](.env.example): tracked synthetic template for gitignored
+  `.env.local.test` integration and E2E test environment overrides
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): package map and dependency
   direction
 * [`docs/QUALITY_SCORE.md`](docs/QUALITY_SCORE.md): per-package quality grades
@@ -166,5 +168,6 @@ gofmt -l .            # Format check
 golangci-lint run     # Lint
 ```
 
-Integration-test setup is covered in the
+Integration and E2E test setup (including copying [`.env.example`](.env.example)
+to gitignored `.env.local.test`) is covered in the
 [user guide](docs/USER_GUIDE.md#development).

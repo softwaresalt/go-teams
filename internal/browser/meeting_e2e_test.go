@@ -23,6 +23,7 @@ import (
 //  5. Caption menu navigation (#callingButtons-showMoreBtn -> #LanguageSpeechMenuControl-id -> #closed-captions-button)
 //  6. Live caption DOM MutationObserver (rolling text + multi-turn same-speaker + settled unpunctuated caption)
 func TestChromeMeetingEndToEnd(t *testing.T) {
+	LoadTestEnv(t)
 	if runtime.GOOS != "windows" {
 		t.Skip("live browser e2e test targets Windows consumer hosts only")
 	}

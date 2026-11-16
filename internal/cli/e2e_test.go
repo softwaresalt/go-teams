@@ -23,6 +23,7 @@ import (
 // reads caption mutations from the DOM, and saves them to a local Markdown
 // transcript file.
 func TestCaptionsCommandEndToEndWritesMarkdownFile(t *testing.T) {
+	loadCLITestEnv(t)
 	if runtime.GOOS != "windows" {
 		t.Skip("live browser e2e test targets Windows consumer hosts only")
 	}

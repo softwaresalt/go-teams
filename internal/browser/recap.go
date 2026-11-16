@@ -629,7 +629,37 @@ const extractRecapAudioJS = `(async () => {
 		let pathAStarted = false;
 		let pathAFailed = false;
 		let activityObserved = false;
-		let transcodeAudioTemplateUrl = info.transcodeUrl ? String(info.transcodeUrl) : '';
+		function isAllowedSameOriginTranscodeURL(rawUrl, hookWin) {
+			if (!rawUrl) return false;
+			const targetWin = hookWin || playerWin;
+			let u;
+			try {
+				const base = (targetWin && targetWin.location && targetWin.location.href) || pageUrl || String((typeof location !== 'undefined' && location.href) || '');
+				u = new URL(String(rawUrl), base);
+			} catch (_) {
+				return false;
+			}
+			let winOrigin = '';
+			try {
+				winOrigin = (targetWin && targetWin.location && targetWin.location.origin) ||
+					new URL((targetWin && targetWin.location && targetWin.location.href) || pageUrl).origin;
+			} catch (_) {
+				winOrigin = '';
+			}
+			if (!winOrigin || winOrigin === 'null') return false;
+			const allowedProto = u.protocol === 'https:' ||
+				(u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]' || u.hostname === '::1'));
+			return u.origin === winOrigin && allowedProto;
+		}
+		let transcodeAudioTemplateUrl = '';
+		if (info.transcodeUrl && isAllowedSameOriginTranscodeURL(info.transcodeUrl, playerWin)) {
+			try {
+				const base = (playerWin && playerWin.location && playerWin.location.href) || pageUrl || String((typeof location !== 'undefined' && location.href) || '');
+				transcodeAudioTemplateUrl = new URL(String(info.transcodeUrl), base).toString();
+			} catch (_) {
+				transcodeAudioTemplateUrl = '';
+			}
+		}
 		let transcodeWsd = 0;
 		let transcodePpd = 0;
 		const capturedAuthHeadersByOrigin = Object.create(null);
@@ -647,6 +677,7 @@ const extractRecapAudioJS = `(async () => {
 		let fallbackCryptoKeyInfo = null;
 		let mseInitSegment = null;
 		const mseSegments = new Map();
+		const sbTrackMap = new WeakMap();
 		let mseSeq = 0;
 		let mseLastAppendAt = 0;
 		let mseMaxBufferedEnd = 0;
@@ -655,6 +686,7 @@ const extractRecapAudioJS = `(async () => {
 		const trackedListeners = [];
 		const restorers = [];
 		let hooksRestored = false;
+		let cleaningUp = false;
 		let pathAPromise = null;
 		let pathAStartedAt = 0;
 		let wakeLoop = null;
@@ -831,17 +863,7 @@ const extractRecapAudioJS = `(async () => {
 			const track = (u.searchParams.get('track') || '').toLowerCase();
 			const isTranscode = u.pathname.toLowerCase().includes('onedrive.transcode') || part === 'initsegment' || part === 'mediasegment';
 			if (!isTranscode) return { isVideoSegment: false };
-			let winOrigin = '';
-			try {
-				winOrigin = (hookWin && hookWin.location && hookWin.location.origin) ||
-					new URL((hookWin && hookWin.location && hookWin.location.href) || pageUrl).origin;
-			} catch (_) {
-				winOrigin = '';
-			}
-			const allowedProto = u.protocol === 'https:' ||
-				(u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]' || u.hostname === '::1'));
-			const sameOrigin = Boolean(winOrigin) && u.origin === winOrigin && allowedProto;
-			if (!sameOrigin) return { isVideoSegment: false };
+			if (!isAllowedSameOriginTranscodeURL(u.toString(), hookWin)) return { isVideoSegment: false };
 			if (headersObj) {
 				const originHdrs = capturedAuthHeadersByOrigin[u.origin] || (capturedAuthHeadersByOrigin[u.origin] = Object.create(null));
 				for (const [k, v] of Object.entries(headersObj)) {
@@ -884,6 +906,7 @@ const extractRecapAudioJS = `(async () => {
 			pathAStarted = true;
 			pathAStartedAt = Date.now();
 			pathAPromise = runPathA(keyInfo).catch(err => {
+				if (hooksRestored || cleaningUp) return null;
 				const msg = String((err && err.message) || err || '');
 				if (msg.includes(limitError) || msg.includes('identity mismatch') || msg.includes('identity unverified')) {
 					fatalErr = err;
@@ -894,6 +917,7 @@ const extractRecapAudioJS = `(async () => {
 				pathAActive = false;
 				pathAFailed = true;
 				streamSourceBytes = mseBytesTotal();
+				if (hooksRestored || cleaningUp) return null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 				if (m && typeof m.play === 'function') {
 					try {
@@ -912,6 +936,9 @@ const extractRecapAudioJS = `(async () => {
 			const activeSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
 			if (activeSignal && activeSignal.aborted) {
 				throw new Error('transcode fetch aborted');
+			}
+			if (!isAllowedSameOriginTranscodeURL(urlStr, hookWin || playerWin)) {
+				throw new Error('recap audio transcode URL disallowed');
 			}
 			const u = new URL(urlStr);
 			const originHdrs = capturedAuthHeadersByOrigin[u.origin];
@@ -1013,6 +1040,9 @@ const extractRecapAudioJS = `(async () => {
 		let origPlayerFetchWin = playerWin;
 
 		async function runPathA(keyInfo) {
+			if (!isAllowedSameOriginTranscodeURL(transcodeAudioTemplateUrl, playerWin)) {
+				throw new Error('recap audio transcode URL disallowed');
+			}
 			const tState = { matched: false };
 			checkIdentityAgainst(transcodeAudioTemplateUrl, pageUrl, tState);
 			if (enforceIdentity && !baseIdentityMatched && !tState.matched) {
@@ -1255,8 +1285,12 @@ const extractRecapAudioJS = `(async () => {
 					}
 					const sb = origAddSB.apply(this, arguments);
 					if (sb) {
-						sb.__isRecapAudioSB = true;
-						audioSBRef = sb;
+						const cls = mime.includes('audio') ? 'audio' : 'unknown';
+						sbTrackMap.set(sb, cls);
+						if (cls === 'audio') {
+							sb.__isRecapAudioSB = true;
+							audioSBRef = sb;
+						}
 						if (typeof sb.addEventListener === 'function') {
 							const onUpdateEnd = () => { stepVideoPlayback(); };
 							sb.addEventListener('updateend', onUpdateEnd);
@@ -1281,12 +1315,40 @@ const extractRecapAudioJS = `(async () => {
 				const origAppend = sbProto.appendBuffer;
 				sbProto.appendBuffer = function(data) {
 					if (this && this.__isRecapVideoShim) return this.appendBuffer(data);
-					if (this && this.mime && String(this.mime).toLowerCase().includes('video')) return;
-					if (this && !this.__isRecapAudioSB) audioSBRef = this;
+					if (this && this.mime && String(this.mime).toLowerCase().includes('video')) {
+						sbTrackMap.set(this, 'video');
+						return;
+					}
 					const u8 = toUint8Array(data);
-					if (u8) recordMSESegment(u8);
+					if (u8 && isFMP4InitSegment(u8)) {
+						const initCls = classifyInitSegmentTrack(u8);
+						if (this) {
+							if (initCls === 'video') {
+								sbTrackMap.set(this, 'video');
+								return;
+							}
+							if (initCls === 'audio') {
+								sbTrackMap.set(this, 'audio');
+								this.__isRecapAudioSB = true;
+								audioSBRef = this;
+							} else if (!sbTrackMap.has(this)) {
+								sbTrackMap.set(this, 'unknown');
+							}
+						} else if (initCls === 'video') {
+							return;
+						}
+						if ((this && sbTrackMap.get(this) === 'audio') || initCls === 'audio') {
+							recordMSESegment(u8);
+						}
+					} else if (u8 && isFMP4MediaSegment(u8)) {
+						const cls = this ? sbTrackMap.get(this) : undefined;
+						if (cls === 'audio') {
+							if (this) audioSBRef = this;
+							recordMSESegment(u8);
+						}
+					}
 					if (fatalErr) return;
-					if (this && this.buffered && this.buffered.length > 0) {
+					if (this && sbTrackMap.get(this) === 'audio' && this.buffered && this.buffered.length > 0) {
 						try {
 							const e = this.buffered.end(this.buffered.length - 1);
 							if (Number.isFinite(e) && e > mseMaxBufferedEnd) mseMaxBufferedEnd = e;
@@ -1428,6 +1490,9 @@ const extractRecapAudioJS = `(async () => {
 			}
 
 			if (!initSegment || !orderedSegments.length) {
+				if (pathAPromise && !pathAFailed && !pathAResult) {
+					throw new Error('recap audio Path A capture deadline exceeded');
+				}
 				throw (blockedErr || lastFetchErr || new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)'));
 			}
 			if (!pathAResult && enforceIdentity && !baseIdentityMatched) {
@@ -1439,11 +1504,24 @@ const extractRecapAudioJS = `(async () => {
 					throw new Error('recap audio recording identity unverified');
 				}
 			}
+			const curMedia = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			if (!pathAResult && mseInitSegment && mseSegments.size > 0) {
+				const finalTargetDur = (() => {
+					for (const raw of [curMedia && curMedia.duration, info.duration, info.durationSeconds]) {
+						const d = Number(raw);
+						if (Number.isFinite(d) && d > 0) return d;
+					}
+					if (transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+					return 0;
+				})();
+				if (finalTargetDur > 0 && !(curMedia && curMedia.ended) && mseMaxBufferedEnd < finalTargetDur - 0.5) {
+					throw new Error('recap audio MSE stream incomplete before deadline');
+				}
+			}
 			const totalSourceBytes = initSegment.byteLength + orderedSegments.reduce((n, s) => n + s.byteLength, 0);
 			if (totalSourceBytes > maxRecapAudioSourceBytes) {
 				throw new Error(limitError);
 			}
-			const curMedia = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 			for (const rawDuration of [curMedia && curMedia.duration, info.duration, info.durationSeconds, mseMaxBufferedEnd]) {
 				const d = Number(rawDuration);
 				if (Number.isFinite(d) && d > 0 &&
@@ -1510,6 +1588,27 @@ const extractRecapAudioJS = `(async () => {
 				await audioContext.close();
 			}
 		} finally {
+			cleaningUp = true;
+			if (abortCtrl) {
+				try { abortCtrl.abort(); } catch (_) {}
+			}
+			if (pathAPromise) {
+				let settleTid = null;
+				try {
+					await Promise.race([
+						Promise.allSettled([pathAPromise]),
+						new Promise(resolve => {
+							settleTid = setTimeout(resolve, 250);
+							activeTimers.add(settleTid);
+						})
+					]);
+				} finally {
+					if (settleTid !== null) {
+						clearTimeout(settleTid);
+						activeTimers.delete(settleTid);
+					}
+				}
+			}
 			cleanupHooks();
 		}
 	}
@@ -1519,7 +1618,8 @@ const extractRecapAudioJS = `(async () => {
 			return await captureStreamEmbedAudio();
 		} catch (streamErr) {
 			const msg = String((streamErr && streamErr.message) || streamErr || '');
-			if (msg.includes(limitError) || msg.includes('identity mismatch') || msg.includes('identity unverified')) {
+			if (msg.includes(limitError) || msg.includes('identity mismatch') || msg.includes('identity unverified') ||
+				msg.includes('MSE stream incomplete') || msg.includes('deadline')) {
 				throw streamErr;
 			}
 			if (blockedErr) throw blockedErr;

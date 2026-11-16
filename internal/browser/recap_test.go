@@ -2195,5 +2195,349 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 				t.Fatalf("U2 probe failed: %v\n%s", err, out)
 			}
 		})
+
+		// M1-R2: Unvalidated info.transcodeUrl (non-HTTPS or cross-origin) must be discarded and never fetched by Path A.
+		t.Run("M1-R2-info-transcodeUrl-origin-and-protocol-validation", func(t *testing.T) {
+			for _, badTranscodeURL := range []string{
+				"https://evil.example/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode?driveItemId=recording-a",
+				"http://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode?driveItemId=recording-a",
+			} {
+				probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(6);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildAudioInitSegment()));
+  const encSeg0 = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(0, 0x11)));
+
+  const evilFetched = [];
+  const sameOriginBase = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  function makeResp(url, bytes) {
+    let sent = false;
+    return {
+      ok: true, status: 200, url, headers: { get: () => null },
+      body: { getReader: () => ({ read: async () => sent ? { done: true } : (sent = true, { done: false, value: bytes }), cancel: async () => {} }) },
+      arrayBuffer: async () => bytes.slice().buffer
+    };
+  }
+  globalThis.fetch = async (url) => {
+    const s = String(url);
+    if (s.includes('evil.example') || s.startsWith('http://')) {
+      evilFetched.push(s);
+      return makeResp(s, encSeg0);
+    }
+    if (s.includes('part=initsegment')) return makeResp(s, encInit);
+    if (s.includes('part=mediasegment')) return makeResp(s, encSeg0);
+    throw new Error('unexpected fetch: ' + s);
+  };
+  globalThis.crypto = { subtle };
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = {
+    VroomItemId: 'recording-a',
+    isDownloadBlocked: true,
+    transcodeUrl: ` + strconv.Quote(badTranscodeURL) + `
+  };
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+  const videoEl = { src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1', play: async () => {}, pause: () => {}, getAttribute: () => null };
+  const playBtn = {
+    click: () => {
+      (async () => {
+        // Video-only transcode request supplies wsd/ppd, and WebCrypto decrypts a pre-fetched/cached init buffer.
+        // If unvalidated info.transcodeUrl was preserved, Path A will fetch evil.example/http://!
+        await globalThis.fetch(sameOriginBase + '?part=mediasegment&track=video&wsd=50000000&ppd=50000000&driveItemId=recording-a');
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, encInit.slice().buffer);
+      })().catch(() => {});
+    }
+  };
+  globalThis.document = { querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null), querySelectorAll: () => [] };
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(raw);
+  if (evilFetched.length > 0) {
+    throw new Error('Path A fetched disallowed info.transcodeUrl: ' + JSON.stringify(evilFetched));
+  }
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected valid PCM');
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+				cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+				cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("M1-R2 probe (%s) failed: %v\n%s", badTranscodeURL, err, out)
+				}
+			}
+		})
+
+		// U1-R2: Deadline expiry aborts pending Path A and settles workers before cleanup without post-cleanup m.play().
+		t.Run("U1-R2-deadline-aborts-path-a-without-post-cleanup-play", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(2);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildAudioInitSegment()));
+
+  let fakeNow = 1000000;
+  Date.now = () => fakeNow;
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+  };
+
+  let workerAborted = false;
+  let pauseCalled = false;
+  let playCalledAfterPause = false;
+  let deadlineTriggered = false;
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  const origFetch = async (url, init) => {
+    const s = String(url);
+    if (s.includes('initsegment')) {
+      return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, arrayBuffer: async () => encInit.slice().buffer };
+    }
+    if (s.includes('segmentTime=0') && !deadlineTriggered) {
+      deadlineTriggered = true;
+      origSetTimeout(() => { fakeNow += 125000; }, 10);
+    }
+    return new Promise((resolve, reject) => {
+      const sig = init && init.signal;
+      if (sig && sig.aborted) {
+        workerAborted = true;
+        reject(new Error('aborted'));
+        return;
+      }
+      if (sig) {
+        sig.addEventListener('abort', () => {
+          workerAborted = true;
+          reject(new Error('aborted'));
+        }, { once: true });
+      }
+    });
+  };
+  globalThis.fetch = origFetch;
+  globalThis.crypto = { subtle };
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true };
+
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    paused: true, muted: false, volume: 1, playbackRate: 1,
+    play: async () => {
+      if (pauseCalled) playCalledAfterPause = true;
+      videoEl.paused = false;
+    },
+    pause: () => {
+      pauseCalled = true;
+      videoEl.paused = true;
+      videoEl.playbackRate = 1;
+    },
+    getAttribute: () => null
+  };
+  const playBtn = {
+    click: () => {
+      (async () => {
+        const r = await globalThis.fetch(base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=100000000&driveItemId=recording-a');
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await r.arrayBuffer());
+      })().catch(() => {});
+    }
+  };
+  globalThis.document = { querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null), querySelectorAll: () => [] };
+
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  await new Promise(r => origSetTimeout(r, 25));
+  if (!failure || !String(failure.message || failure).includes('deadline')) {
+    throw new Error('expected deadline failure, got: ' + String(failure));
+  }
+  if (!workerAborted) throw new Error('expected Path A worker to be aborted on deadline');
+  if (!pauseCalled || !videoEl.paused || videoEl.playbackRate !== 1) throw new Error('expected media element to be paused/restored by cleanupHooks');
+  if (playCalledAfterPause) throw new Error('maybeStartPathA catch handler called m.play() after cleanupHooks');
+  if (globalThis.fetch !== origFetch) throw new Error('expected fetch hook to be restored');
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("U1-R2 probe failed: %v\n%s", err, out)
+			}
+		})
+
+		// U2-R2: Pre-hook native video/mp4 SourceBuffer without .mime must not leak into mseSegments or audioSBRef.
+		t.Run("U2-R2-pre-hook-native-video-sourcebuffer-without-mime-ignored", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const audioInit = buildAudioInitSegment();
+  const videoInit = buildVideoInitSegment();
+  const audioSeg0 = buildMediaSegment(0, 0x11);
+  const videoMediaNoInit = buildMediaSegment(0, 0x99);
+  const videoMediaAfterInit = buildMediaSegment(220500, 0x88);
+
+  class NativeNoMimeSourceBuffer extends EventTarget {
+    constructor() {
+      super();
+      // Intentionally NO .mime property (matches real browser SourceBuffer).
+      this.updating = false;
+      this._end = 0;
+      this.buffered = { get length() { return this._sb._end > 0 ? 1 : 0; }, start: () => 0, end: () => this._end, _sb: null };
+      this.buffered._sb = this;
+    }
+    appendBuffer() {}
+    remove() {}
+    abort() {}
+  }
+  class NativeMediaSource extends EventTarget {
+    addSourceBuffer() { return new NativeNoMimeSourceBuffer(); }
+    removeSourceBuffer() {}
+  }
+
+  // Created BEFORE installWindowHooks runs.
+  const preHookVideoSBNoInit = new NativeNoMimeSourceBuffer();
+  const preHookVideoSBWithInit = new NativeNoMimeSourceBuffer();
+
+  let decodedBytes = null;
+  globalThis.AudioContext = class {
+    async decodeAudioData(ab) {
+      decodedBytes = new Uint8Array(ab);
+      return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) };
+    }
+    async close() {}
+  };
+  globalThis.MediaSource = NativeMediaSource;
+  globalThis.SourceBuffer = NativeNoMimeSourceBuffer;
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 10 };
+
+  const videoEl = { src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1', duration: 10, ended: false, play: async () => {}, pause: () => {}, getAttribute: () => null };
+  const playBtn = {
+    click: () => {
+      // Pre-hook video buffer without init (init was pre-hook) overwrites tfdt=0 if unguarded!
+      preHookVideoSBNoInit._end = 99;
+      preHookVideoSBNoInit.appendBuffer(videoMediaNoInit);
+
+      // Pre-hook video buffer with post-hook videoInit.
+      preHookVideoSBWithInit._end = 99;
+      preHookVideoSBWithInit.appendBuffer(videoInit);
+      preHookVideoSBWithInit.appendBuffer(videoMediaAfterInit);
+
+      // Actual audio SourceBuffer.
+      const ms = new NativeMediaSource();
+      const audioSB = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      audioSB._end = 10;
+      videoEl.ended = true;
+      audioSB.appendBuffer(audioInit);
+      audioSB.appendBuffer(audioSeg0);
+    }
+  };
+  globalThis.document = { querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null), querySelectorAll: () => [] };
+
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(raw);
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected valid PCM');
+  if (!decodedBytes) throw new Error('expected decodeAudioData call');
+  const buf = Buffer.from(decodedBytes);
+  if (buf.includes(Buffer.from('avc1')) || buf.includes(Buffer.from([0x99, 0x99, 0x99, 0x99])) || buf.includes(Buffer.from([0x88, 0x88, 0x88, 0x88]))) {
+    throw new Error('pre-hook video SourceBuffer media leaked into audio mseSegments');
+  }
+  const tfdts = collectTFDTs(decodedBytes.buffer);
+  if (JSON.stringify(tfdts) !== JSON.stringify([0])) {
+    throw new Error('expected only audio tfdt [0], got: ' + JSON.stringify(tfdts));
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("U2-R2 probe failed: %v\n%s", err, out)
+			}
+		})
+
+		// U3-R2: Path B rejects truncated audio when deadlineAt expires with mseMaxBufferedEnd < targetDur - 0.5 and !m.ended.
+		t.Run("U3-R2-path-b-rejects-truncated-stream-at-deadline", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const audioInit = buildAudioInitSegment();
+  const segA = buildMediaSegment(0, 0x01);
+  let fakeNow = 1000000;
+  let polls = 0;
+  Date.now = () => fakeNow;
+
+  class FakeSourceBuffer extends EventTarget {
+    constructor(mime) { super(); this.mime = mime; this.updating = false; this._end = 0; this.buffered = { get length() { return this._sb._end > 0 ? 1 : 0; }, start: () => 0, end: () => this._end, _sb: null }; this.buffered._sb = this; }
+    appendBuffer() {} remove() {} abort() {}
+  }
+  class FakeMediaSource extends EventTarget {
+    addSourceBuffer(mime) { return new FakeSourceBuffer(mime); }
+    removeSourceBuffer() {}
+  }
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    duration: 20, ended: false, paused: true, muted: false, volume: 1, playbackRate: 1, currentTime: 0,
+    play: async () => {}, pause: () => {}, getAttribute: () => null
+  };
+  let decodes = 0;
+  globalThis.AudioContext = class {
+    async decodeAudioData() { decodes++; throw new Error('must not decode truncated Path B stream'); }
+    async close() {}
+  };
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 20 };
+
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    return origSetTimeout(() => {
+      polls++;
+      if (polls === 3) {
+        // Jump past 120s deadline while buffered end is only 5s (< 20 - 0.5) and !ended.
+        fakeNow += 125000;
+      }
+      fn(...args);
+    }, Math.min(ms || 0, 5));
+  };
+
+  const playBtn = {
+    click: () => {
+      const ms = new FakeMediaSource();
+      const audioSB = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      audioSB._end = 5;
+      audioSB.appendBuffer(audioInit);
+      audioSB.appendBuffer(segA);
+    }
+  };
+  globalThis.document = { querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null), querySelectorAll: () => [] };
+
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('recap audio MSE stream incomplete before deadline')) {
+    throw new Error('expected incomplete MSE stream error, got: ' + String(failure));
+  }
+  if (decodes !== 0) throw new Error('decodeAudioData called ' + decodes + ' times on truncated stream');
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("U3-R2 probe failed: %v\n%s", err, out)
+			}
+		})
 	})
 }

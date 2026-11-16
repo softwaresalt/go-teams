@@ -1365,8 +1365,25 @@ const extractRecapAudioJS = `(async () => {
 				const origOpen = proto.open;
 				const origSetHeader = proto.setRequestHeader;
 				const origSend = proto.send;
-				const xhrMeta = new WeakMap();
+				let xhrMeta = new WeakMap();
+				const overriddenXhrs = new Map();
+				const overriddenPropNames = ['readyState', 'status', 'response', 'responseText'];
+				function restoreXHRProps(xhr) {
+					const saved = overriddenXhrs.get(xhr);
+					if (!saved) return;
+					for (const entry of saved) {
+						try {
+							if (entry.hadOwn && entry.desc) {
+								Object.defineProperty(xhr, entry.prop, entry.desc);
+							} else {
+								delete xhr[entry.prop];
+							}
+						} catch (_) {}
+					}
+					overriddenXhrs.delete(xhr);
+				}
 				proto.open = function(method, url) {
+					restoreXHRProps(this);
 					xhrMeta.set(this, { method: String(method || 'GET'), url: String(url || ''), headers: {} });
 					return origOpen.apply(this, arguments);
 				};
@@ -1381,6 +1398,15 @@ const extractRecapAudioJS = `(async () => {
 						const reqInfo = inspectTranscodeRequest(meta.url, meta.headers, w);
 						if (reqInfo.isVideoSegment) {
 							try {
+								if (!overriddenXhrs.has(this)) {
+									const saved = [];
+									for (const prop of overriddenPropNames) {
+										const hadOwn = Object.prototype.hasOwnProperty.call(this, prop);
+										const desc = hadOwn ? Object.getOwnPropertyDescriptor(this, prop) : null;
+										saved.push({ prop, hadOwn, desc });
+									}
+									overriddenXhrs.set(this, saved);
+								}
 								Object.defineProperty(this, 'readyState', { value: 4, configurable: true });
 								Object.defineProperty(this, 'status', { value: 204, configurable: true });
 								Object.defineProperty(this, 'response', { value: new ArrayBuffer(0), configurable: true });
@@ -1412,6 +1438,11 @@ const extractRecapAudioJS = `(async () => {
 					proto.open = origOpen;
 					proto.setRequestHeader = origSetHeader;
 					proto.send = origSend;
+					for (const xhr of Array.from(overriddenXhrs.keys())) {
+						restoreXHRProps(xhr);
+					}
+					overriddenXhrs.clear();
+					xhrMeta = new WeakMap();
 				});
 			}
 			if (w.MediaSource && w.MediaSource.prototype) {

@@ -3583,6 +3583,187 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 				t.Fatalf("Path B unknown-duration !ended probe failed: %v\n%s", err, out)
 			}
 		})
+
+		// 5. PRRT_kwDOTStvas64MQNJ: Reused XHR restores overridden properties on open() and cleanupHooks() restores all overridden XHR instances.
+		t.Run("xhr-restores-overridden-props-on-reuse-and-cleanup", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(10);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildAudioInitSegment()));
+  const encSeg0 = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(0, 0x11)));
+
+  let nativeXHRSends = 0;
+
+  class FakeXMLHttpRequest extends EventTarget {
+    constructor() {
+      super();
+      this._readyState = 0;
+      this._status = 0;
+      this._response = null;
+      this._responseText = '';
+    }
+    get readyState() { return this._readyState; }
+    get status() { return this._status; }
+    get response() { return this._response; }
+    get responseText() { return this._responseText; }
+    open(method, url) {
+      this._url = url;
+      this._readyState = 1;
+      this._status = 0;
+      this._response = null;
+      this._responseText = '';
+    }
+    setRequestHeader() {}
+    send() {
+      nativeXHRSends++;
+      this._readyState = 4;
+      this._status = 200;
+      this._response = encInit.slice().buffer;
+      this._responseText = 'audio-ok';
+      this.dispatchEvent(new Event('load'));
+    }
+    dispatchEvent(ev) {
+      const ok = super.dispatchEvent(ev);
+      const handler = this['on' + ev.type];
+      if (typeof handler === 'function') handler.call(this, ev);
+      return ok;
+    }
+  }
+  globalThis.XMLHttpRequest = FakeXMLHttpRequest;
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  const videoUrl = base + '?part=mediasegment&track=video&quality=high&segmentTime=0&wsd=50000000&ppd=50000000&driveItemId=recording-a';
+  const audioUrl = base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=50000000&driveItemId=recording-a';
+
+  globalThis.fetch = async (url) => {
+    const s = String(url);
+    if (!s.includes('oneDrive.transcode')) throw new TypeError('Failed to fetch');
+    const bytes = s.includes('initsegment') ? encInit : encSeg0;
+    let sent = false;
+    return {
+      ok: true, status: 200, url: s, headers: { get: () => null },
+      body: { getReader: () => ({ read: async () => sent ? { done: true } : (sent = true, { done: false, value: bytes }), cancel: async () => {} }) },
+      arrayBuffer: async () => bytes.slice().buffer
+    };
+  };
+  globalThis.crypto = { subtle };
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = {
+    VroomItemId: 'recording-a',
+    isDownloadBlocked: true,
+    transcodeUrl: audioUrl
+  };
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+
+  let videoPhaseObserved = null;
+  let openPhaseObserved = null;
+  let audioPhaseObserved = null;
+  let unreusedVideoXhr = null;
+  let ownPropVideoXhr = null;
+
+  const videoEl = { src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1', play: async () => {}, pause: () => {}, getAttribute: () => null };
+  const playBtn = {
+    click: () => {
+      const reusedXhr = new globalThis.XMLHttpRequest();
+      reusedXhr.onload = () => {
+        if (reusedXhr.status === 204) {
+          videoPhaseObserved = {
+            readyState: reusedXhr.readyState,
+            status: reusedXhr.status,
+            responseByteLength: reusedXhr.response instanceof ArrayBuffer ? reusedXhr.response.byteLength : -1,
+            responseText: reusedXhr.responseText
+          };
+          reusedXhr.open('GET', audioUrl);
+          openPhaseObserved = {
+            readyState: reusedXhr.readyState,
+            status: reusedXhr.status,
+            response: reusedXhr.response,
+            responseText: reusedXhr.responseText,
+            hasOwnStatus: Object.prototype.hasOwnProperty.call(reusedXhr, 'status'),
+            hasOwnReadyState: Object.prototype.hasOwnProperty.call(reusedXhr, 'readyState'),
+            hasOwnResponse: Object.prototype.hasOwnProperty.call(reusedXhr, 'response'),
+            hasOwnResponseText: Object.prototype.hasOwnProperty.call(reusedXhr, 'responseText')
+          };
+          reusedXhr.send();
+          return;
+        }
+        audioPhaseObserved = {
+          readyState: reusedXhr.readyState,
+          status: reusedXhr.status,
+          responseByteLength: reusedXhr.response instanceof ArrayBuffer ? reusedXhr.response.byteLength : -1,
+          responseText: reusedXhr.responseText,
+          hasOwnStatus: Object.prototype.hasOwnProperty.call(reusedXhr, 'status')
+        };
+      };
+      reusedXhr.open('GET', videoUrl);
+      reusedXhr.send();
+
+      // Second XHR stays suppressed without reuse so cleanupHooks() must restore it.
+      unreusedVideoXhr = new globalThis.XMLHttpRequest();
+      unreusedVideoXhr.open('GET', videoUrl);
+      unreusedVideoXhr.send();
+
+      // Third XHR has an existing own 'status' property before suppression so cleanupHooks() must restore its descriptor.
+      ownPropVideoXhr = new globalThis.XMLHttpRequest();
+      Object.defineProperty(ownPropVideoXhr, 'status', { value: 999, writable: true, enumerable: true, configurable: true });
+      ownPropVideoXhr.open('GET', videoUrl);
+      ownPropVideoXhr.send();
+
+      setTimeout(() => {
+        (async () => {
+          const r = await globalThis.fetch(audioUrl);
+          await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await r.arrayBuffer());
+        })().catch(() => {});
+      }, 40);
+    }
+  };
+  globalThis.document = { querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null), querySelectorAll: () => [] };
+
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(raw);
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected valid PCM');
+
+  if (!videoPhaseObserved || videoPhaseObserved.status !== 204 || videoPhaseObserved.readyState !== 4 || videoPhaseObserved.responseByteLength !== 0 || videoPhaseObserved.responseText !== '') {
+    throw new Error('unexpected suppressed video XHR state: ' + JSON.stringify(videoPhaseObserved));
+  }
+  if (!openPhaseObserved || openPhaseObserved.readyState !== 1 || openPhaseObserved.status !== 0 || openPhaseObserved.response !== null || openPhaseObserved.responseText !== '' ||
+      openPhaseObserved.hasOwnStatus || openPhaseObserved.hasOwnReadyState || openPhaseObserved.hasOwnResponse || openPhaseObserved.hasOwnResponseText) {
+    throw new Error('expected XHR properties restored on open() for reused instance, got: ' + JSON.stringify(openPhaseObserved));
+  }
+  if (nativeXHRSends !== 1) {
+    throw new Error('expected 1 native XHR send for reused audio request, got ' + nativeXHRSends);
+  }
+  if (!audioPhaseObserved || audioPhaseObserved.readyState !== 4 || audioPhaseObserved.status !== 200 ||
+      audioPhaseObserved.responseByteLength !== encInit.byteLength || audioPhaseObserved.responseText !== 'audio-ok' || audioPhaseObserved.hasOwnStatus) {
+    throw new Error('expected clean audio XHR response after reuse, got: ' + JSON.stringify(audioPhaseObserved));
+  }
+  if (!unreusedVideoXhr || unreusedVideoXhr.readyState !== 1 || unreusedVideoXhr.status !== 0 || unreusedVideoXhr.response !== null || unreusedVideoXhr.responseText !== '' ||
+      Object.prototype.hasOwnProperty.call(unreusedVideoXhr, 'status') || Object.prototype.hasOwnProperty.call(unreusedVideoXhr, 'readyState') ||
+      Object.prototype.hasOwnProperty.call(unreusedVideoXhr, 'response') || Object.prototype.hasOwnProperty.call(unreusedVideoXhr, 'responseText')) {
+    throw new Error('expected cleanupHooks() to restore unreused suppressed XHR properties, got status=' + (unreusedVideoXhr && unreusedVideoXhr.status) + ' hasOwn=' + Object.prototype.hasOwnProperty.call(unreusedVideoXhr, 'status'));
+  }
+  if (!ownPropVideoXhr || !Object.prototype.hasOwnProperty.call(ownPropVideoXhr, 'status') || ownPropVideoXhr.status !== 999 ||
+      Object.prototype.hasOwnProperty.call(ownPropVideoXhr, 'readyState') || ownPropVideoXhr.readyState !== 1) {
+    throw new Error('expected cleanupHooks() to restore pre-existing own descriptor on XHR, got status=' + (ownPropVideoXhr && ownPropVideoXhr.status));
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("XHR reused/cleanup prop restoration probe failed: %v\n%s", err, out)
+			}
+		})
 	})
 }
 

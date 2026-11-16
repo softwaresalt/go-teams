@@ -897,9 +897,9 @@ cp .env.example .env.local.test
 ```
 
 Process environment variables always take precedence over `.env.local.test`
-across both primary and alias names, and unedited `synthetic-placeholder`
-values from `.env.example` are ignored. Never commit `.env.local.test` or real
-credentials.
+across both primary and alias names, and unedited template placeholders from
+`.env.example` (`synthetic-placeholder` values and `synthetic-user@example.com`)
+are ignored. Never commit `.env.local.test` or real credentials.
 
 ```bash
 # Compile the harness (CI runs this to prevent bit-rot):
@@ -918,7 +918,7 @@ GO_TEAMS_INTEGRATION=1 TEAMS_MEETING_URL="https://teams.microsoft.com/l/meetup-j
 | `GO_TEAMS_INTEGRATION` | | Set to `1` (or any value other than `""`, `"0"`, or `"false"`) to enable integration tests |
 | `TEAMS_ACCOUNT` | `TEAMS_TEST_ACCOUNT` | Microsoft Entra account (UPN/email or display name) passed as `DefaultAccount` in browser integration tests |
 | `TEAMS_MEETING_URL` | `TEAMS_TEST_MEETING_URL` | Joinable Teams meeting URL for the live meeting tests |
-| `TEAMS_RECAP_URL` | `TEAMS_TEST_RECAP_URL` | Teams Meeting Recap URL for live recap tests |
+| `TEAMS_RECAP_URL` | `TEAMS_TEST_RECAP_URL` | Teams Meeting Recap URL reserved for live recap integration tests (no live recap test consumes it yet) |
 | `TEAMS_PROFILE_DIR` | `TEAMS_TEST_PROFILE_DIR` | Authenticated Chromium profile directory for live integration tests (relative paths resolve from the repository root) |
 | `TEAMS_BROWSER_PATH` | `TEAMS_TEST_BROWSER_PATH` | Chromium/Edge/Chrome executable path or binary name (relative paths resolve from the repository root) |
 | `GO_TEAMS_BINARY` | | Compiled `go-teams` executable path for `TestCompiledBinaryCapturesRecapToExplicitOutput` (relative paths resolve from the repository root) |

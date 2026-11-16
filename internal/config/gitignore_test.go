@@ -194,8 +194,8 @@ func gitDir(root string) (string, error) {
 // parseGitIndexPaths extracts entry paths from a git index (DIRC v2, v3, v4).
 // Unmerged entries (stage != 0) are reported once.
 func parseGitIndexPaths(data []byte) ([]string, error) {
-	if len(data) < 12 || string(data[:4]) != "DIRC" {
-		return nil, errors.New("not a git index: missing DIRC signature")
+	if len(data) < 32 || string(data[:4]) != "DIRC" {
+		return nil, errors.New("not a git index: missing DIRC signature or trailer")
 	}
 	version := binary.BigEndian.Uint32(data[4:8])
 	if version < 2 || version > 4 {
@@ -208,7 +208,7 @@ func parseGitIndexPaths(data []byte) ([]string, error) {
 	seen := map[string]bool{}
 	var paths []string
 	for i := 0; i < count; i++ {
-		if pos+fixed+2 > len(data) {
+		if pos+fixed+2 > len(data)-20 {
 			return nil, fmt.Errorf("git index truncated at entry %d", i)
 		}
 		start := pos
@@ -220,7 +220,7 @@ func parseGitIndexPaths(data []byte) ([]string, error) {
 		var name []byte
 		if version == 4 {
 			strip, n := readIndexVarint(data[pos:])
-			if n == 0 || int(strip) > len(prev) {
+			if n == 0 || strip > uint64(len(prev)) {
 				return nil, fmt.Errorf("git index v4 entry %d has an invalid prefix length", i)
 			}
 			pos += n

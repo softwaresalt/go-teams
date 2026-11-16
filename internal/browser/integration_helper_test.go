@@ -51,83 +51,86 @@ func loadTestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 	}
 	t.Cleanup(func() { loadedTestEnvTB.Delete(t) })
 
+	filtered := map[string]string{}
 	info, err := os.Lstat(envPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stat test env file %s: %v", filepath.Base(envPath), err)
 		}
-		t.Fatalf("stat test env file %s: %v", filepath.Base(envPath), err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		t.Fatalf("test env file %s must not be a symlink", filepath.Base(envPath))
-	}
-	if !info.Mode().IsRegular() {
-		t.Fatalf("test env file %s must be a regular file", filepath.Base(envPath))
-	}
-
-	realRoot, err := filepath.EvalSymlinks(repoRoot)
-	if err != nil {
-		t.Fatalf("resolve repository root for %s: %v", filepath.Base(envPath), err)
-	}
-	realEnv, err := filepath.EvalSymlinks(envPath)
-	if err != nil {
-		t.Fatalf("resolve test env path %s: %v", filepath.Base(envPath), err)
-	}
-	rel, err := filepath.Rel(realRoot, realEnv)
-	if err != nil || !filepath.IsLocal(rel) {
-		t.Fatalf("test env file %s resolves outside repository root", filepath.Base(envPath))
-	}
-
-	if err := verifyEnvFileUntracked(realRoot, filepath.ToSlash(rel)); err != nil {
-		t.Fatalf("%v", err)
-	}
-
-	f, err := os.Open(realEnv)
-	if err != nil {
-		t.Fatalf("open test env file %s: %v", filepath.Base(envPath), err)
-	}
-	defer func() {
-		_ = f.Close() // read-only file handle; read errors already checked
-	}()
-
-	finfo, err := f.Stat()
-	if err != nil {
-		t.Fatalf("stat open test env file %s: %v", filepath.Base(envPath), err)
-	}
-	if !finfo.Mode().IsRegular() {
-		t.Fatalf("test env file %s must be a regular file", filepath.Base(envPath))
-	}
-	if finfo.Size() > maxTestEnvBytes {
-		t.Fatalf("test env file %s exceeds %d byte limit", filepath.Base(envPath), maxTestEnvBytes)
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxTestEnvBytes+1))
-	if err != nil {
-		t.Fatalf("read test env file %s: %v", filepath.Base(envPath), err)
-	}
-	if len(data) > maxTestEnvBytes {
-		t.Fatalf("test env file %s exceeds %d byte limit", filepath.Base(envPath), maxTestEnvBytes)
-	}
-
-	parsed, err := parseDotEnv(data)
-	if err != nil {
-		t.Fatalf("parse %s: %v", filepath.Base(envPath), err)
-	}
-
-	filtered := make(map[string]string, len(parsed))
-	for k, v := range parsed {
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" {
-			continue
+	} else {
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("test env file %s must not be a symlink", filepath.Base(envPath))
 		}
-		if strings.Contains(strings.ToLower(v), "synthetic-placeholder") || strings.EqualFold(v, "synthetic-user@example.com") {
-			continue
+		if !info.Mode().IsRegular() {
+			t.Fatalf("test env file %s must be a regular file", filepath.Base(envPath))
 		}
-		filtered[k] = v
+
+		realRoot, err := filepath.EvalSymlinks(repoRoot)
+		if err != nil {
+			t.Fatalf("resolve repository root for %s: %v", filepath.Base(envPath), err)
+		}
+		realEnv, err := filepath.EvalSymlinks(envPath)
+		if err != nil {
+			t.Fatalf("resolve test env path %s: %v", filepath.Base(envPath), err)
+		}
+		rel, err := filepath.Rel(realRoot, realEnv)
+		if err != nil || !filepath.IsLocal(rel) {
+			t.Fatalf("test env file %s resolves outside repository root", filepath.Base(envPath))
+		}
+
+		if err := verifyEnvFileUntracked(realRoot, filepath.ToSlash(rel)); err != nil {
+			t.Fatalf("%v", err)
+		}
+
+		f, err := os.Open(realEnv)
+		if err != nil {
+			t.Fatalf("open test env file %s: %v", filepath.Base(envPath), err)
+		}
+		defer func() {
+			_ = f.Close() // read-only file handle; read errors already checked
+		}()
+
+		finfo, err := f.Stat()
+		if err != nil {
+			t.Fatalf("stat open test env file %s: %v", filepath.Base(envPath), err)
+		}
+		if !finfo.Mode().IsRegular() {
+			t.Fatalf("test env file %s must be a regular file", filepath.Base(envPath))
+		}
+		if finfo.Size() > maxTestEnvBytes {
+			t.Fatalf("test env file %s exceeds %d byte limit", filepath.Base(envPath), maxTestEnvBytes)
+		}
+		data, err := io.ReadAll(io.LimitReader(f, maxTestEnvBytes+1))
+		if err != nil {
+			t.Fatalf("read test env file %s: %v", filepath.Base(envPath), err)
+		}
+		if len(data) > maxTestEnvBytes {
+			t.Fatalf("test env file %s exceeds %d byte limit", filepath.Base(envPath), maxTestEnvBytes)
+		}
+
+		parsed, err := parseDotEnv(data)
+		if err != nil {
+			t.Fatalf("parse %s: %v", filepath.Base(envPath), err)
+		}
+
+		for k, v := range parsed {
+			trimmed := strings.TrimSpace(v)
+			if trimmed == "" {
+				continue
+			}
+			if strings.Contains(strings.ToLower(v), "synthetic-placeholder") || strings.EqualFold(v, "synthetic-user@example.com") {
+				continue
+			}
+			filtered[k] = v
+		}
 	}
 
 	resolveRelative := func(keyName, val string, isBrowserPath bool) string {
 		hasDrive := len(val) >= 2 && ((val[0] >= 'A' && val[0] <= 'Z') || (val[0] >= 'a' && val[0] <= 'z')) && val[1] == ':'
-		if filepath.IsAbs(val) || strings.HasPrefix(val, "/") || strings.HasPrefix(val, `\`) || hasDrive {
+		if hasDrive && !filepath.IsAbs(val) {
+			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
+		}
+		if filepath.IsAbs(val) || strings.HasPrefix(val, "/") || strings.HasPrefix(val, `\`) {
 			return val
 		}
 		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.ContainsAny(val, `/\`) {
@@ -227,10 +230,13 @@ func parseDotEnv(data []byte) (map[string]string, error) {
 			return nil, fmt.Errorf("line %d: invalid variable name", lineNum)
 		}
 
-		rawVal := strings.TrimSpace(line[eq+1:])
+		rawAfterEq := line[eq+1:]
+		rawVal := strings.TrimSpace(rawAfterEq)
 		var val string
 		switch {
 		case rawVal == "":
+			val = ""
+		case strings.HasPrefix(rawVal, "#") && len(rawAfterEq) > 0 && (rawAfterEq[0] == ' ' || rawAfterEq[0] == '\t'):
 			val = ""
 		case rawVal[0] == '\'':
 			end := strings.IndexByte(rawVal[1:], '\'')
@@ -311,15 +317,21 @@ func verifyEnvFileUntracked(realRoot, relSlash string) error {
 			}
 		}
 	}
+	matchPath := func(entry string) bool {
+		if runtime.GOOS == "windows" {
+			return strings.EqualFold(entry, relSlash)
+		}
+		return entry == relSlash
+	}
 	if err == nil {
-		cmd := exec.Command(gitPath, "ls-files", "-z", "--", relSlash)
+		cmd := exec.Command(gitPath, "ls-files", "-z")
 		cmd.Dir = realRoot
 		out, cmdErr := cmd.Output()
 		if cmdErr != nil {
-			return fmt.Errorf("verify untracked %s: git ls-files failed", relSlash)
+			return fmt.Errorf("verify untracked %s: git ls-files failed: %w", relSlash, cmdErr)
 		}
 		for _, entry := range bytes.Split(out, []byte{0}) {
-			if string(entry) == relSlash {
+			if len(entry) > 0 && matchPath(string(entry)) {
 				return fmt.Errorf("test env file %s must not be tracked in git", relSlash)
 			}
 		}
@@ -347,7 +359,7 @@ func verifyEnvFileUntracked(realRoot, relSlash string) error {
 	if idxErr != nil {
 		return fmt.Errorf("verify untracked %s: read git index: %w", relSlash, idxErr)
 	}
-	if len(idxData) < 12 || string(idxData[:4]) != "DIRC" {
+	if len(idxData) < 32 || string(idxData[:4]) != "DIRC" {
 		return fmt.Errorf("verify untracked %s: invalid git index header", relSlash)
 	}
 	version := binary.BigEndian.Uint32(idxData[4:8])
@@ -355,10 +367,11 @@ func verifyEnvFileUntracked(realRoot, relSlash string) error {
 		return fmt.Errorf("verify untracked %s: unsupported git index version %d", relSlash, version)
 	}
 	count := int(binary.BigEndian.Uint32(idxData[8:12]))
+	extEnd := len(idxData) - 20
 	pos := 12
 	var prev []byte
 	for i := 0; i < count; i++ {
-		if pos+64 > len(idxData) {
+		if pos+64 > extEnd {
 			return fmt.Errorf("verify untracked %s: truncated git index", relSlash)
 		}
 		start := pos
@@ -369,25 +382,25 @@ func verifyEnvFileUntracked(realRoot, relSlash string) error {
 		}
 		var name []byte
 		if version == 4 {
-			if pos >= len(idxData) {
+			if pos >= extEnd {
 				return fmt.Errorf("verify untracked %s: truncated v4 index entry", relSlash)
 			}
 			c := idxData[pos]
 			strip := uint64(c & 0x7f)
 			n := 1
 			for c&0x80 != 0 {
-				if pos+n >= len(idxData) || n > 9 {
+				if pos+n >= extEnd || n > 8 {
 					return fmt.Errorf("verify untracked %s: invalid v4 index varint", relSlash)
 				}
 				c = idxData[pos+n]
 				n++
 				strip = ((strip + 1) << 7) | uint64(c&0x7f)
 			}
-			if int(strip) > len(prev) {
+			if strip > uint64(len(prev)) {
 				return fmt.Errorf("verify untracked %s: invalid v4 prefix length", relSlash)
 			}
 			pos += n
-			end := bytes.IndexByte(idxData[pos:], 0)
+			end := bytes.IndexByte(idxData[pos:extEnd], 0)
 			if end < 0 {
 				return fmt.Errorf("verify untracked %s: unterminated v4 index path", relSlash)
 			}
@@ -395,7 +408,7 @@ func verifyEnvFileUntracked(realRoot, relSlash string) error {
 			pos += end + 1
 			prev = name
 		} else {
-			end := bytes.IndexByte(idxData[pos:], 0)
+			end := bytes.IndexByte(idxData[pos:extEnd], 0)
 			if end < 0 {
 				return fmt.Errorf("verify untracked %s: unterminated index path", relSlash)
 			}
@@ -403,11 +416,10 @@ func verifyEnvFileUntracked(realRoot, relSlash string) error {
 			entryLen := (pos - start) + end
 			pos = start + (entryLen+8)/8*8
 		}
-		if string(name) == relSlash {
+		if matchPath(string(name)) {
 			return fmt.Errorf("test env file %s must not be tracked in git", relSlash)
 		}
 	}
-	extEnd := len(idxData) - 20
 	for pos+8 <= extEnd {
 		sig := idxData[pos : pos+4]
 		size := int(binary.BigEndian.Uint32(idxData[pos+4 : pos+8]))
@@ -418,6 +430,9 @@ func verifyEnvFileUntracked(realRoot, relSlash string) error {
 			return fmt.Errorf("verify untracked %s: truncated git index extension", relSlash)
 		}
 		pos += 8 + size
+	}
+	if pos != extEnd {
+		return fmt.Errorf("verify untracked %s: trailing or truncated git index data", relSlash)
 	}
 	return nil
 }
@@ -445,6 +460,14 @@ func TestParseDotEnvSyntaxAndRedaction(t *testing.T) {
 			want: map[string]string{
 				"TEAMS_BROWSER_PATH": `C:\Program Files\teams\msedge.exe`,
 				"GO_TEAMS_BINARY":    `.\bin\go-teams.exe`,
+			},
+		},
+		{
+			name:  "empty assignment with inline comment stays empty",
+			input: "GO_TEAMS_INTEGRATION= # set to 1\nTEAMS_BROWSER_PATH=\t# override\n",
+			want: map[string]string{
+				"GO_TEAMS_INTEGRATION": "",
+				"TEAMS_BROWSER_PATH":   "",
 			},
 		},
 		{
@@ -511,11 +534,13 @@ func TestLoadTestEnvPrecedenceAndPaths(t *testing.T) {
 		}
 	}
 
-	t.Run("missing file is a no-op", func(t *testing.T) {
+	t.Run("missing file is a no-op except process alias sync", func(t *testing.T) {
 		clearEnv(t)
+		t.Setenv("TEAMS_TEST_MEETING_URL", "https://teams.microsoft.com/meet/proc-only")
 		root := t.TempDir()
 		loadTestEnvFromFile(t, filepath.Join(root, ".env.local.test"), root)
 		assert.Empty(t, os.Getenv("TEAMS_ACCOUNT"))
+		assert.Equal(t, "https://teams.microsoft.com/meet/proc-only", os.Getenv("TEAMS_MEETING_URL"))
 	})
 
 	t.Run("loads all allowlisted keys and resolves relative paths", func(t *testing.T) {
@@ -656,16 +681,26 @@ func TestLoadTestEnvSecurityAndTemplateGuardrails(t *testing.T) {
 		require.NoError(t, os.WriteFile(exampleCopy, data, 0o600))
 
 		loadTestEnvFromFile(t, exampleCopy, filepath.Dir(exampleCopy))
-		assert.Empty(t, os.Getenv("TEAMS_ACCOUNT"))
-		assert.Empty(t, os.Getenv("TEAMS_MEETING_URL"))
-		assert.Empty(t, os.Getenv("TEAMS_RECAP_URL"))
-		assert.Empty(t, os.Getenv("TEAMS_PROFILE_DIR"))
-		assert.Empty(t, os.Getenv("TEAMS_BROWSER_PATH"))
-		assert.Empty(t, os.Getenv("GO_TEAMS_BINARY"))
-		assert.Empty(t, os.Getenv("GO_TEAMS_INTEGRATION"))
+		for _, k := range []string{
+			"GO_TEAMS_INTEGRATION",
+			"TEAMS_ACCOUNT",
+			"TEAMS_TEST_ACCOUNT",
+			"TEAMS_MEETING_URL",
+			"TEAMS_TEST_MEETING_URL",
+			"TEAMS_RECAP_URL",
+			"TEAMS_TEST_RECAP_URL",
+			"TEAMS_PROFILE_DIR",
+			"TEAMS_TEST_PROFILE_DIR",
+			"TEAMS_BROWSER_PATH",
+			"TEAMS_TEST_BROWSER_PATH",
+			"GO_TEAMS_BINARY",
+			"TEAMS_DISABLE_SANDBOX",
+		} {
+			assert.Emptyf(t, os.Getenv(k), "key %s from .env.example must remain unset", k)
+		}
 	})
 
-	t.Run("rejects symlink oversized file traversal and git-tracked env", func(t *testing.T) {
+	t.Run("rejects symlink oversized file traversal drive-relative and git-tracked env", func(t *testing.T) {
 		clearEnv(t)
 		root := t.TempDir()
 
@@ -683,6 +718,21 @@ func TestLoadTestEnvSecurityAndTemplateGuardrails(t *testing.T) {
 		})
 		assert.Contains(t, msg, "escaping repository root")
 		assert.NotContains(t, msg, "outside-secret-bin")
+
+		driveRelPath := filepath.Join(root, ".env.driverel")
+		require.NoError(t, os.WriteFile(driveRelPath, []byte(`GO_TEAMS_BINARY=C:..\outside-drive-secret.exe`+"\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadTestEnvFromFile(tb, driveRelPath, root)
+		})
+		assert.Contains(t, msg, "escaping repository root")
+		assert.NotContains(t, msg, "outside-drive-secret")
+
+		// Direct truncated git index check (no-git fallback invariant).
+		truncRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(truncRoot, ".git"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(truncRoot, ".git", "index"), []byte("DIRC\x00\x00\x00\x02\x00\x00\x00\x00"), 0o600))
+		t.Setenv("PATH", "")
+		require.Error(t, verifyEnvFileUntracked(truncRoot, ".env.local.test"))
 
 		target := filepath.Join(root, "real.env")
 		require.NoError(t, os.WriteFile(target, []byte("TEAMS_ACCOUNT=a@b.com\n"), 0o600))

@@ -1,7 +1,7 @@
 ---
 title: Quality Grades by Domain
 description: Honest quality grades, test coverage tiers, and live-verification gaps for each go-teams package
-date: 2026-11-14
+date: 2026-11-15
 ---
 
 ## How to read this document

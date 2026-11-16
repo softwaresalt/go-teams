@@ -356,4 +356,135 @@ func TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd(t *testing.T)
 		}
 	}
 	assert.True(t, completedLine, "expected queue entry to be prefixed with :: after delayed AI Summary enrichment")
+
+	// Phase 2: Early in-browser call-end must stop capture well before a long
+	// nominal --duration (60s) under a 15s outer context timeout.
+	earlySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/meet/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// httptest handler; write failure surfaces as test timeout.
+		_, _ = w.Write([]byte(`<!doctype html>
+<html>
+<head><title>Microsoft Teams</title></head>
+<body>
+  <div id="app">
+    <button data-tid="joinOnWeb">Continue on this browser</button>
+  </div>
+  <script>
+    const app = document.getElementById('app');
+    document.querySelector('[data-tid="joinOnWeb"]').addEventListener('click', showPreJoin);
+
+    function showPreJoin() {
+      app.innerHTML = '' +
+        '<input type="checkbox" role="switch" data-tid="toggle-mute" checked />' +
+        '<input data-tid="prejoin-display-name-input" value="" />' +
+        '<button data-tid="prejoin-join-button">Join now</button>';
+      document.querySelector('[data-tid="prejoin-join-button"]').addEventListener('click', showLobby);
+    }
+
+    function showLobby() {
+      app.innerHTML = '<div>Someone will let you in shortly</div>';
+      setTimeout(showCall, 100);
+    }
+
+    function showCall() {
+      app.innerHTML = '' +
+        '<div id="toolbar">' +
+        '  <button id="hangup-button">Leave</button>' +
+        '  <button id="callingButtons-showMoreBtn">More</button>' +
+        '</div>' +
+        '<div id="menu"></div>' +
+        '<div id="stage"></div>';
+      document.getElementById('callingButtons-showMoreBtn').addEventListener('click', () => {
+        document.getElementById('menu').innerHTML =
+          '<button id="closed-captions-button">Turn on live captions</button>';
+        document.getElementById('closed-captions-button').addEventListener('click', startCaptions);
+      });
+    }
+
+    function startCaptions() {
+      const stage = document.getElementById('stage');
+      stage.innerHTML = '<div data-tid="closed-caption-renderer-wrapper" id="cc"></div>';
+      const cc = document.getElementById('cc');
+
+      function emitWhenObserverReady() {
+        if (typeof window.sendCaptionToGo !== 'function') {
+          setTimeout(emitWhenObserverReady, 50);
+          return;
+        }
+        setTimeout(() => {
+          cc.innerHTML = '' +
+            '<div class="fui-ChatMessageCompact" id="msg1">' +
+            '  <span data-tid="author">Bob</span>' +
+            '  <span data-tid="closed-caption-text">Early call-end utterance.</span>' +
+            '</div>';
+        }, 150);
+        setTimeout(() => {
+          app.innerHTML = '<div data-tid="call-ended-screen">You left the meeting</div>';
+        }, 350);
+      }
+
+      emitWhenObserverReady();
+    }
+  </script>
+</body>
+</html>`))
+	}))
+	defer earlySrv.Close()
+
+	earlyDir := t.TempDir()
+	earlyOutDir := filepath.Join(earlyDir, "out")
+	require.NoError(t, os.MkdirAll(earlyOutDir, 0o700))
+	earlyProfileDir := filepath.Join(earlyDir, "profile")
+	earlyCfgPath := filepath.Join(earlyDir, "config.yaml")
+	earlyCfgYAML := fmt.Sprintf(
+		"output_dir: %q\nprofile_dir: %q\nbot_name: \"Sched Bot\"\n",
+		filepath.ToSlash(earlyOutDir),
+		filepath.ToSlash(earlyProfileDir),
+	)
+	require.NoError(t, os.WriteFile(earlyCfgPath, []byte(earlyCfgYAML), 0o600))
+	t.Cleanup(func() {
+		for range 10 {
+			if os.RemoveAll(earlyProfileDir) == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+
+	earlyCtx, earlyCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer earlyCancel()
+
+	earlyRoot := NewRootCommand()
+	earlyRoot.SetArgs([]string{
+		"join",
+		earlySrv.URL + "/meet/earlyend123?p=synthetic-placeholder-passcode",
+		"--config", earlyCfgPath,
+		"--mode", "live-with-summary",
+		"--duration", "60s",
+		"--idle-timeout", "800ms",
+		"--no-ai-summary",
+		"--output-dir", earlyOutDir,
+		"--profile-dir", earlyProfileDir,
+		"--headless",
+	})
+	require.NoError(t, earlyRoot.ExecuteContext(earlyCtx))
+	require.NoError(t, earlyCtx.Err())
+
+	earlyEntries, err := os.ReadDir(earlyOutDir)
+	require.NoError(t, err)
+	var earlyMDPath string
+	for _, e := range earlyEntries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			earlyMDPath = filepath.Join(earlyOutDir, e.Name())
+			break
+		}
+	}
+	require.NotEmpty(t, earlyMDPath, "expected early call-end Markdown transcript")
+	earlyMDBytes, err := os.ReadFile(earlyMDPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(earlyMDBytes), "Early call-end utterance.")
 }

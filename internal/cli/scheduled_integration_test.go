@@ -135,6 +135,7 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 	runCtx, cancelRun := context.WithCancel(outerCtx)
 	defer cancelRun()
 
+	start := time.Now()
 	errCh := make(chan error, 1)
 	go func() {
 		root := NewRootCommand()
@@ -176,6 +177,7 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 	require.NoError(t, outerCtx.Err(), "expected live join session to self-terminate before outer timeout")
 	cancelRun()
 	require.NoError(t, <-errCh)
+	require.GreaterOrEqual(t, time.Since(start), liveCLINominalDuration, "expected live join session to stay active through nominal duration")
 
 	entries, err := os.ReadDir(outDir)
 	require.NoError(t, err)
@@ -196,7 +198,9 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 	}
 	mdBytes, err := os.ReadFile(mdPath)
 	require.NoError(t, err)
-	require.True(t, strings.Contains(string(mdBytes), "## Transcript"), "expected transcript body section in saved Markdown")
+	_, afterTranscript, hasTranscript := strings.Cut(string(mdBytes), "## Transcript")
+	require.True(t, hasTranscript, "expected transcript body section in saved Markdown")
+	require.True(t, strings.Contains(afterTranscript, "\n> "), "expected at least one captured caption utterance in saved Markdown")
 
 	require.True(t, strings.Contains(qStr, "--append-ai-summary"), "expected deferred --append-ai-summary entry in queue file")
 	require.True(t, strings.Contains(qStr, filepath.Base(mdPath)), "expected deferred queue entry to reference saved transcript")

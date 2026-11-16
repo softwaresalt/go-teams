@@ -194,8 +194,8 @@ func gitDir(root string) (string, error) {
 // parseGitIndexPaths extracts entry paths from a git index (DIRC v2, v3, v4).
 // Unmerged entries (stage != 0) are reported once.
 func parseGitIndexPaths(data []byte) ([]string, error) {
-	if len(data) < 12 || string(data[:4]) != "DIRC" {
-		return nil, errors.New("not a git index: missing DIRC signature")
+	if len(data) < 32 || string(data[:4]) != "DIRC" {
+		return nil, errors.New("not a git index: missing DIRC signature or trailer")
 	}
 	version := binary.BigEndian.Uint32(data[4:8])
 	if version < 2 || version > 4 {
@@ -208,7 +208,7 @@ func parseGitIndexPaths(data []byte) ([]string, error) {
 	seen := map[string]bool{}
 	var paths []string
 	for i := 0; i < count; i++ {
-		if pos+fixed+2 > len(data) {
+		if pos+fixed+2 > len(data)-20 {
 			return nil, fmt.Errorf("git index truncated at entry %d", i)
 		}
 		start := pos
@@ -220,7 +220,7 @@ func parseGitIndexPaths(data []byte) ([]string, error) {
 		var name []byte
 		if version == 4 {
 			strip, n := readIndexVarint(data[pos:])
-			if n == 0 || int(strip) > len(prev) {
+			if n == 0 || strip > uint64(len(prev)) {
 				return nil, fmt.Errorf("git index v4 entry %d has an invalid prefix length", i)
 			}
 			pos += n
@@ -425,11 +425,70 @@ func TestScanTrackedContentDetectsSyntheticCredentials(t *testing.T) {
 func TestIsLocalEnvPath(t *testing.T) {
 	assert.True(t, isLocalEnvPath(".env"))
 	assert.True(t, isLocalEnvPath(".env.local"))
+	assert.True(t, isLocalEnvPath(".env.local.test"))
+	assert.True(t, isLocalEnvPath("sub/.env.local.test"))
 	assert.True(t, isLocalEnvPath("local.env"))
 	assert.True(t, isLocalEnvPath("config/prod.env"))
 	assert.False(t, isLocalEnvPath(".env.example"))
 	assert.False(t, isLocalEnvPath("config/.env.example"))
 	assert.False(t, isLocalEnvPath("environment.go"))
+}
+
+func TestEnvExampleTemplateContainsOnlySyntheticPlaceholders(t *testing.T) {
+	root := findRepoRoot(t)
+	examplePath := filepath.Join(root, ".env.example")
+	data, err := os.ReadFile(examplePath)
+	require.NoError(t, err, ".env.example must exist at the repository root")
+	require.NotEmpty(t, strings.TrimSpace(string(data)), ".env.example must not be empty")
+
+	files, err := trackedFiles(root)
+	require.NoError(t, err)
+	assert.Contains(t, files, ".env.example", ".env.example must be tracked in the Git index")
+	assert.Empty(t, scanTrackedContent(".env.example", data), ".env.example must produce zero secret-scanner findings")
+
+	expectedKeys := map[string]bool{
+		"TEAMS_ACCOUNT":           false,
+		"TEAMS_TEST_ACCOUNT":      false,
+		"TEAMS_MEETING_URL":       false,
+		"TEAMS_TEST_MEETING_URL":  false,
+		"TEAMS_RECAP_URL":         false,
+		"TEAMS_TEST_RECAP_URL":    false,
+		"TEAMS_PROFILE_DIR":       false,
+		"TEAMS_TEST_PROFILE_DIR":  false,
+		"TEAMS_BROWSER_PATH":      false,
+		"TEAMS_TEST_BROWSER_PATH": false,
+		"GO_TEAMS_BINARY":         false,
+	}
+
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	for i, rawLine := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		require.Greaterf(t, eq, 0, "line %d in .env.example must be KEY=VALUE", i+1)
+		key := strings.TrimSpace(line[:eq])
+		_, expected := expectedKeys[key]
+		require.Truef(t, expected, "unexpected active key %s in .env.example (line %d)", key, i+1)
+		require.Falsef(t, expectedKeys[key], "duplicate active key %s in .env.example (line %d)", key, i+1)
+		expectedKeys[key] = true
+
+		val := strings.TrimSpace(line[eq+1:])
+		if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
+			val = val[1 : len(val)-1]
+		}
+		require.NotEmptyf(t, val, "key %s in .env.example must have a non-empty placeholder value", key)
+		isPlaceholder := strings.Contains(strings.ToLower(val), "synthetic-placeholder") ||
+			strings.EqualFold(val, "synthetic-user@example.com")
+		assert.Truef(t, isPlaceholder, "key %s in .env.example must contain only a synthetic placeholder value", key)
+	}
+
+	for key, seen := range expectedKeys {
+		assert.Truef(t, seen, "expected key %s must be present in .env.example", key)
+	}
+	assert.Contains(t, text, "# GO_TEAMS_INTEGRATION", ".env.example must document GO_TEAMS_INTEGRATION as a comment")
+	assert.Contains(t, text, "# TEAMS_DISABLE_SANDBOX", ".env.example must document TEAMS_DISABLE_SANDBOX as a comment")
 }
 
 func TestScanTrackedFilesFlagsTrackedEnvAndSkipsUntracked(t *testing.T) {

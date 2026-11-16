@@ -317,9 +317,13 @@ Flags for the root command, `captions`, and `join`:
 Meeting Recap URLs write only the `.md` transcript by default. Enabling audio
 with `--audio`, `--recap-audio`, or `capture_audio: true` (alias `audio: true`)
 in the config file also writes a companion `.mp3` file next to the transcript,
-extracted from the recording that belongs to the requested Recap. Recap audio
-is rejected rather than captured when its recording identity cannot be verified
-or when it exceeds the supported size or duration limits.
+extracted from the recording that belongs to the requested Recap. For view-only
+SharePoint Meeting Recaps where direct file downloads are blocked
+(`isDownloadBlocked=true`), `go-teams` captures the in-page `streamembed.aspx`
+audio-only stream at high speed (`14x-100x` real-time) while stripping the
+video track and encodes it to MP3 in pure Go without external tools. Recap
+audio is rejected rather than captured when its recording identity cannot be
+verified or when it exceeds the supported size or duration limits.
 
 `--browser-path`, `--profile-dir`, and `--account` are also accepted by `auth`
 and `schedule`, and `schedule` additionally binds `--audio` / `--recap-audio`,

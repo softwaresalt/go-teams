@@ -160,11 +160,24 @@ transcript instead of listening live:
 2. The AI Summary is read by intercepting the clipboard write of the Copy
    control, retried up to 20 times with 500 ms between attempts. Transcript
    export still succeeds when no summary appears.
-3. With audio enabled, the recording is decoded through Web Audio over CDP and
-   encoded to MP3, but only after the recording identity (`VroomItemID` or
-   `VroomItemId`) is verified against the requested recap and size and duration
-   limits pass; SharePoint `isDownloadBlocked=true` HTML/error responses fail
-   explicitly rather than decoding HTML bytes as audio.
+3. With audio enabled, the recording is decoded through Web Audio over CDP (using
+   chunked CDP pull transfers for multi-megabyte PCM buffers) and encoded to MP3
+   by `internal/audio.Encoder`, after verifying recording identity (`VroomItemID`
+   or `VroomItemId`) against the requested recap and enforcing size and duration
+   limits. When direct download URLs are blocked by view-only permissions
+   (`g_fileInfo.isDownloadBlocked=true` in `streamembed.aspx`, across
+   same-origin child `<iframe>` or transitive `ParentID` OOPIF topologies),
+   `extractRecapAudioJS` triggers muted `'Play video'` playback, strips
+   `video/mp4`, and collects only the `audio/mp4` (`mp4a.40.2`) fMP4 stream at
+   `14x-100x` real-time speed via WebCrypto AES-CBC (`window.crypto.subtle.decrypt`)
+   parallel `oneDrive.transcode` fetch/decrypt (`part=initsegment` +
+   `part=mediasegment`, `track=audio&quality=audcopy`, `segmentTime = k * wsd`
+   up to `ppd`) and MSE `MediaSource.prototype.addSourceBuffer` /
+   `SourceBuffer.prototype.appendBuffer` hooks (`16x` `playbackRate`,
+   `currentTime` stepping, and `tfdt`-ordered deduplication), then decodes
+   through `AudioContext.decodeAudioData` to 44.1 kHz mono PCM. Inert
+   `isDownloadBlocked=true` pages with no playable stream surface still fail
+   explicitly rather than decoding HTML error bytes as audio.
 4. `capture.Session` writes the transcript, a Markdown horizontal rule, and the
    summary, then the process exits.
 

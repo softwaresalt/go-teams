@@ -36,6 +36,7 @@ const RecapOffsetSeparator = "\x00"
 
 const extractRecapAudioJS = `(async () => {
 	const limitError = 'recap audio exceeds maximum supported size/duration';
+	try { delete window.__goTeamsRecapAudioTransfer; } catch (_) {}
 	const enforceIdentity = typeof recapExpectedIdentity !== 'undefined';
 	const expected = enforceIdentity ? recapExpectedIdentity : {};
 	const authHosts = [
@@ -136,9 +137,11 @@ const extractRecapAudioJS = `(async () => {
 		const d = ctx.doc;
 		const w = ctx.win;
 		const fi = ctx.info || {};
+		const urlLower = String(ctx.pageUrl || '').toLowerCase();
 		const media = d && d.querySelector ? d.querySelector('audio, video') : null;
 		const playBtn = d && d.querySelector ? d.querySelector(playBtnSelector) : null;
 		return Boolean(
+			urlLower.includes('streamembed.aspx') ||
 			playBtn ||
 			(media && (typeof media.play === 'function' || typeof w.MediaSource !== 'undefined')) ||
 			fi.transcodeUrl
@@ -229,8 +232,8 @@ const extractRecapAudioJS = `(async () => {
 		}
 		state.totalDurationSec = nextDuration;
 		state.totalPCMBytes = nextPCMBytes;
-		for (let start = 0; start < outputLength; start += 16384) {
-			const count = Math.min(16384, outputLength - start);
+		for (let start = 0; start < outputLength; start += 65536) {
+			const count = Math.min(65536, outputLength - start);
 			const pcm = new Int16Array(count);
 			for (let i = 0; i < count; i++) {
 				const index = Math.min(bufLen - 1, Math.floor((start + i) * sampleRate / 44100));
@@ -634,7 +637,7 @@ const extractRecapAudioJS = `(async () => {
 		let mseLastAppendAt = 0;
 		let mseMaxBufferedEnd = 0;
 		let audioSBRef = null;
-		const activeTimers = new Set();
+		let activeTimers = new Set();
 		const trackedListeners = [];
 		const restorers = [];
 		let hooksRestored = false;
@@ -1025,7 +1028,7 @@ const extractRecapAudioJS = `(async () => {
 				}
 			}
 			const workers = [];
-			for (let i = 0; i < Math.min(8, totalSegments); i++) workers.push(worker());
+			for (let i = 0; i < Math.min(16, totalSegments); i++) workers.push(worker());
 			await Promise.all(workers);
 			if (fatalErr) throw fatalErr;
 			if (segments.some(s => !s)) throw new Error('incomplete Path A segment set');
@@ -1250,27 +1253,36 @@ const extractRecapAudioJS = `(async () => {
 			installWindowHooks(playerWin);
 			if (playerWin !== window) installWindowHooks(window);
 
-			const playBtn = playerDoc.querySelector ? playerDoc.querySelector(playBtnSelector) : null;
-			if (media) {
-				try {
-					media.muted = true;
-					media.volume = 0;
-					media.playbackRate = 16;
-				} catch (_) {}
+			let playTriggered = false;
+			function triggerPlaybackIfReady() {
+				if (playTriggered) return;
+				const btn = playerDoc.querySelector ? playerDoc.querySelector(playBtnSelector) : null;
+				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+				if (m) {
+					try {
+						m.muted = true;
+						m.volume = 0;
+						m.playbackRate = 16;
+					} catch (_) {}
+				}
+				if (btn && typeof btn.click === 'function') {
+					playTriggered = true;
+					btn.click();
+				}
+				if (m && typeof m.play === 'function') {
+					playTriggered = true;
+					try { Promise.resolve(m.play()).catch(() => {}); } catch (_) {}
+				}
 			}
-			if (playBtn && typeof playBtn.click === 'function') {
-				playBtn.click();
-			}
-			if (media && typeof media.play === 'function') {
-				try { Promise.resolve(media.play()).catch(() => {}); } catch (_) {}
-			}
+			triggerPlaybackIfReady();
 
 			const startedAt = Date.now();
 			const deadlineAt = startedAt + 120000;
-			const initialActivityTimeoutMs = 8000;
+			const initialActivityTimeoutMs = 10000;
 			let pathAResult = null;
 
 			while (Date.now() < deadlineAt) {
+				if (!playTriggered) triggerPlaybackIfReady();
 				if (fatalErr) throw fatalErr;
 				maybeStartPathA();
 				if (pathAPromise) {
@@ -1380,6 +1392,19 @@ const extractRecapAudioJS = `(async () => {
 						decodeAudioBufferToPCMChunks(buf, pcmState);
 					}
 				}
+				if (pcmState.totalPCMBytes > 4*1024*1024) {
+					window.__goTeamsRecapAudioTransfer = { chunks: pcmState.pcmChunks };
+					return JSON.stringify({
+						pageUrl,
+						itemId,
+						fileName,
+						mediaUrl: sanitizeMediaUrl(selectedMediaUrl),
+						sourceBytes: totalSourceBytes,
+						durationSec: pcmState.totalDurationSec,
+						transferPending: true,
+						chunkCount: pcmState.pcmChunks.length
+					});
+				}
 				return JSON.stringify({
 					pageUrl,
 					itemId,
@@ -1427,43 +1452,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 	if port <= 0 || ownerID == "" || w == nil {
 		return fmt.Errorf("browser: recap audio requires a bound CDP page and writer")
 	}
-	targets, err := listCDPTargets(port)
-	if err != nil {
-		return fmt.Errorf("browser: list recap audio targets: %w", err)
-	}
-	var owner *cdpTargetInfo
-	for i := range targets {
-		if targets[i].Type == "page" && targets[i].ID == ownerID && targets[i].WebSocketDebuggerURL != "" {
-			owner = &targets[i]
-			break
-		}
-	}
-	if owner == nil {
-		return fmt.Errorf("browser: recap audio page is unavailable")
-	}
 	expected := ExtractMeetingIdentity(meetingURL)
-	if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(owner.URL)) {
-		return fmt.Errorf("browser: recap audio page does not match requested recording")
-	}
-	frames := expandOwnedFrames(targets, ownerID, fetchOwnedFrames(ctx, owner.WebSocketDebuggerURL))
-	orderedTargets := make([]cdpTargetInfo, len(targets))
-	copy(orderedTargets, targets)
-	recapTargetRank := func(t cdpTargetInfo) int {
-		lowerURL := strings.ToLower(t.URL)
-		if t.Type == "iframe" {
-			if strings.Contains(lowerURL, "streamembed.aspx") {
-				return 0
-			}
-			if strings.Contains(lowerURL, "xplatplugins.aspx") {
-				return 1
-			}
-			return 2
-		}
-		return 3
-	}
-	sort.SliceStable(orderedTargets, func(i, j int) bool {
-		return recapTargetRank(orderedTargets[i]) < recapTargetRank(orderedTargets[j])
-	})
 	expectedJSON, err := json.Marshal(expected)
 	if err != nil {
 		return fmt.Errorf("browser: encode recap audio identity: %w", err)
@@ -1472,6 +1461,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 	// in the same execution context do not redeclare global lexical bindings.
 	expr := fmt.Sprintf("(() => {\nconst maxRecapAudioSourceBytes=%d, maxRecapAudioDurationSec=%d, maxRecapAudioPCMBytes=%d, recapExpectedIdentity=%s;\nreturn %s;\n})()",
 		maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes, expectedJSON, extractRecapAudioJS)
+
 	var lastErr error
 	errPriority := func(err error) int {
 		msg := err.Error()
@@ -1495,94 +1485,230 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		}
 		lastErr = err
 	}
-	for _, target := range orderedTargets {
+
+	const maxAttempts = 8
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("browser: recap audio cancelled: %w", err)
 		}
-		if isAuthRedirectURL(target.URL) {
-			continue
-		}
-		if !isTargetInCaptureScope(target, ownerID, frames) ||
-			hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
-			continue
-		}
-		raw, evalErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
-		if evalErr != nil {
-			setLastErr(evalErr)
-			continue
-		}
-		if raw == "" {
-			continue
-		}
-		var payload struct {
-			PageURL     string   `json:"pageUrl"`
-			ItemID      string   `json:"itemId"`
-			FileName    string   `json:"fileName"`
-			MediaURL    string   `json:"mediaUrl"`
-			SourceBytes int64    `json:"sourceBytes"`
-			DurationSec float64  `json:"durationSec"`
-			PCMChunks   []string `json:"pcmChunks"`
-			Error       string   `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-			setLastErr(fmt.Errorf("browser: invalid recap audio payload: %w", err))
-			continue
-		}
-		pageIdentity := recapAudioIdentity(payload.PageURL)
-		mediaIdentity := recapAudioIdentity(payload.MediaURL)
-		if hasMeetingIdentityConflict(expected, pageIdentity) ||
-			hasMeetingIdentityConflict(expected, mediaIdentity) ||
-			(expected.DriveItemID != "" && payload.ItemID != "" && !strings.EqualFold(expected.DriveItemID, payload.ItemID)) ||
-			(expected.RecordingName != "" && payload.FileName != "" && !strings.EqualFold(expected.RecordingName, payload.FileName)) {
-			setLastErr(fmt.Errorf("browser: recap audio recording identity mismatch"))
-			continue
-		}
-		if expected != (MeetingIdentity{}) &&
-			!hasRecapAudioIdentityMatch(expected, pageIdentity) &&
-			!hasRecapAudioIdentityMatch(expected, mediaIdentity) &&
-			!(expected.DriveItemID != "" && strings.EqualFold(expected.DriveItemID, payload.ItemID)) &&
-			!(expected.RecordingName != "" && strings.EqualFold(expected.RecordingName, payload.FileName)) {
-			setLastErr(fmt.Errorf("browser: recap audio recording identity unverified"))
-			continue
-		}
-		if payload.Error != "" {
-			setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
-			continue
-		}
-		if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
-			math.IsNaN(payload.DurationSec) || payload.DurationSec < 0 || payload.DurationSec > float64(maxRecapAudioDurationSec) {
-			return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
-		}
-		var size int64
-		for _, chunk := range payload.PCMChunks {
-			n := int64(base64.StdEncoding.DecodedLen(len(chunk)))
-			if strings.HasSuffix(chunk, "==") {
-				n -= 2
-			} else if strings.HasSuffix(chunk, "=") {
-				n--
+		targets, listErr := listCDPTargets(port)
+		if listErr != nil {
+			if attempt == 0 {
+				return fmt.Errorf("browser: list recap audio targets: %w", listErr)
 			}
-			size += n
-			if size > int64(maxRecapAudioPCMBytes) {
+			break
+		}
+		var owner *cdpTargetInfo
+		for i := range targets {
+			if targets[i].Type == "page" && targets[i].ID == ownerID && targets[i].WebSocketDebuggerURL != "" {
+				owner = &targets[i]
+				break
+			}
+		}
+		if owner == nil {
+			return fmt.Errorf("browser: recap audio page is unavailable")
+		}
+		if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(owner.URL)) {
+			return fmt.Errorf("browser: recap audio page does not match requested recording")
+		}
+		frames := expandOwnedFrames(targets, ownerID, fetchOwnedFrames(ctx, owner.WebSocketDebuggerURL))
+		orderedTargets := make([]cdpTargetInfo, len(targets))
+		copy(orderedTargets, targets)
+		hasStreamEmbedTarget := false
+		for _, t := range orderedTargets {
+			if isTargetInCaptureScope(t, ownerID, frames) && strings.Contains(strings.ToLower(t.URL), "streamembed.aspx") {
+				hasStreamEmbedTarget = true
+				break
+			}
+		}
+		recapTargetRank := func(t cdpTargetInfo) int {
+			lowerURL := strings.ToLower(t.URL)
+			if t.Type == "iframe" {
+				if strings.Contains(lowerURL, "streamembed.aspx") {
+					return 0
+				}
+				if strings.Contains(lowerURL, "xplatplugins.aspx") {
+					return 1
+				}
+				return 2
+			}
+			return 3
+		}
+		sort.SliceStable(orderedTargets, func(i, j int) bool {
+			return recapTargetRank(orderedTargets[i]) < recapTargetRank(orderedTargets[j])
+		})
+		for _, target := range orderedTargets {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("browser: recap audio cancelled: %w", err)
+			}
+			if isAuthRedirectURL(target.URL) {
+				continue
+			}
+			if !isTargetInCaptureScope(target, ownerID, frames) ||
+				hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
+				continue
+			}
+			tStart := time.Now()
+			raw, evalErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
+			slog.Debug("browser: recap audio eval finished", "elapsed", time.Since(tStart).Round(time.Millisecond), "raw_len", len(raw), "err", evalErr)
+			if evalErr != nil {
+				setLastErr(evalErr)
+				continue
+			}
+			if raw == "" {
+				continue
+			}
+			var payload struct {
+				PageURL         string   `json:"pageUrl"`
+				ItemID          string   `json:"itemId"`
+				FileName        string   `json:"fileName"`
+				MediaURL        string   `json:"mediaUrl"`
+				SourceBytes     int64    `json:"sourceBytes"`
+				DurationSec     float64  `json:"durationSec"`
+				PCMChunks       []string `json:"pcmChunks"`
+				TransferPending bool     `json:"transferPending"`
+				ChunkCount      int      `json:"chunkCount"`
+				Error           string   `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+				setLastErr(fmt.Errorf("browser: invalid recap audio payload: %w", err))
+				continue
+			}
+			slog.Debug("browser: recap audio unmarshaled", "elapsed", time.Since(tStart).Round(time.Millisecond), "chunks", len(payload.PCMChunks), "transfer_pending", payload.TransferPending, "chunk_count", payload.ChunkCount, "duration_sec", payload.DurationSec)
+			pageIdentity := recapAudioIdentity(payload.PageURL)
+			mediaIdentity := recapAudioIdentity(payload.MediaURL)
+			if hasMeetingIdentityConflict(expected, pageIdentity) ||
+				hasMeetingIdentityConflict(expected, mediaIdentity) ||
+				(expected.DriveItemID != "" && payload.ItemID != "" && !strings.EqualFold(expected.DriveItemID, payload.ItemID)) ||
+				(expected.RecordingName != "" && payload.FileName != "" && !strings.EqualFold(expected.RecordingName, payload.FileName)) {
+				setLastErr(fmt.Errorf("browser: recap audio recording identity mismatch"))
+				continue
+			}
+			if expected != (MeetingIdentity{}) &&
+				!hasRecapAudioIdentityMatch(expected, pageIdentity) &&
+				!hasRecapAudioIdentityMatch(expected, mediaIdentity) &&
+				!(expected.DriveItemID != "" && strings.EqualFold(expected.DriveItemID, payload.ItemID)) &&
+				!(expected.RecordingName != "" && strings.EqualFold(expected.RecordingName, payload.FileName)) {
+				setLastErr(fmt.Errorf("browser: recap audio recording identity unverified"))
+				continue
+			}
+			if payload.Error != "" {
+				setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
+				continue
+			}
+			if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
+				math.IsNaN(payload.DurationSec) || payload.DurationSec < 0 || payload.DurationSec > float64(maxRecapAudioDurationSec) {
 				return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
 			}
-		}
-		if len(payload.PCMChunks) == 0 || size == 0 {
-			continue
-		}
-		enc := audio.NewEncoder(w, audio.SampleRate)
-		for _, chunk := range payload.PCMChunks {
-			samples, err := decodeAudioPayload(chunk)
-			if err != nil {
-				return fmt.Errorf("browser: recap audio: %w", err)
+			if payload.TransferPending {
+				if payload.ChunkCount <= 0 {
+					continue
+				}
+				cleanupTransfer := func() {
+					cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer cleanCancel()
+					_, _ = evalInCDPTarget(cleanCtx, target.WebSocketDebuggerURL, `(() => { delete window.__goTeamsRecapAudioTransfer; return ""; })()`)
+				}
+				enc := audio.NewEncoder(w, audio.SampleRate)
+				var size int64
+				for pulled := 0; pulled < payload.ChunkCount; {
+					if err := ctx.Err(); err != nil {
+						cleanupTransfer()
+						return fmt.Errorf("browser: recap audio cancelled: %w", err)
+					}
+					batchRaw, pullErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, `(() => {
+						const t = window.__goTeamsRecapAudioTransfer;
+						if (!t || !Array.isArray(t.chunks)) return "[]";
+						return JSON.stringify(t.chunks.splice(0, 32));
+					})()`, 30*time.Second)
+					if pullErr != nil {
+						cleanupTransfer()
+						return fmt.Errorf("browser: pull recap audio chunk batch: %w", pullErr)
+					}
+					var batch []string
+					if err := json.Unmarshal([]byte(batchRaw), &batch); err != nil {
+						cleanupTransfer()
+						return fmt.Errorf("browser: decode recap audio chunk batch: %w", err)
+					}
+					if len(batch) == 0 {
+						break
+					}
+					for _, chunk := range batch {
+						n := int64(base64.StdEncoding.DecodedLen(len(chunk)))
+						if strings.HasSuffix(chunk, "==") {
+							n -= 2
+						} else if strings.HasSuffix(chunk, "=") {
+							n--
+						}
+						size += n
+						if size > int64(maxRecapAudioPCMBytes) {
+							cleanupTransfer()
+							return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
+						}
+						samples, decErr := decodeAudioPayload(chunk)
+						if decErr != nil {
+							cleanupTransfer()
+							return fmt.Errorf("browser: recap audio: %w", decErr)
+						}
+						if writeErr := enc.WritePCM(samples); writeErr != nil {
+							cleanupTransfer()
+							return fmt.Errorf("browser: encode recap audio: %w", writeErr)
+						}
+					}
+					pulled += len(batch)
+				}
+				cleanupTransfer()
+				if size == 0 {
+					continue
+				}
+				if err := enc.Flush(); err != nil {
+					return fmt.Errorf("browser: flush recap audio: %w", err)
+				}
+				slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
+				return nil
 			}
-			if err := enc.WritePCM(samples); err != nil {
-				return fmt.Errorf("browser: encode recap audio: %w", err)
+			var size int64
+			for _, chunk := range payload.PCMChunks {
+				n := int64(base64.StdEncoding.DecodedLen(len(chunk)))
+				if strings.HasSuffix(chunk, "==") {
+					n -= 2
+				} else if strings.HasSuffix(chunk, "=") {
+					n--
+				}
+				size += n
+				if size > int64(maxRecapAudioPCMBytes) {
+					return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
+				}
 			}
+			if len(payload.PCMChunks) == 0 || size == 0 {
+				continue
+			}
+			enc := audio.NewEncoder(w, audio.SampleRate)
+			for _, chunk := range payload.PCMChunks {
+				samples, err := decodeAudioPayload(chunk)
+				if err != nil {
+					return fmt.Errorf("browser: recap audio: %w", err)
+				}
+				if err := enc.WritePCM(samples); err != nil {
+					return fmt.Errorf("browser: encode recap audio: %w", err)
+				}
+			}
+			if err := enc.Flush(); err != nil {
+				return fmt.Errorf("browser: flush recap audio: %w", err)
+			}
+			slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
+			return nil
 		}
-		if err := enc.Flush(); err != nil {
-			return fmt.Errorf("browser: flush recap audio: %w", err)
+		if lastErr == nil || !strings.Contains(lastErr.Error(), "isDownloadBlocked=true") || hasStreamEmbedTarget || attempt == maxAttempts-1 {
+			break
 		}
-		return nil
+		timer := time.NewTimer(1 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("browser: recap audio cancelled: %w", ctx.Err())
+		case <-timer.C:
+		}
 	}
 	if lastErr != nil {
 		return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)

@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -108,7 +107,7 @@ func TestMeetingEnableCaptions(t *testing.T) {
 // the teardown barrier, then asserts bytes were written.
 func TestMeetingCaptureAudio(t *testing.T) {
 	m, bctx := newMeeting(t)
-	ctx, cancel := context.WithTimeout(bctx, 1*time.Minute)
+	ctx, cancel := context.WithTimeout(bctx, 3*time.Minute)
 	defer cancel()
 
 	require.NoError(t, m.Join(ctx))
@@ -120,11 +119,10 @@ func TestMeetingCaptureAudio(t *testing.T) {
 	if rm, ok := m.(browser.RecapMeeting); ok && rm.IsRecap() {
 		select {
 		case err := <-errCh:
-			if err != nil && strings.Contains(err.Error(), "isDownloadBlocked=true") {
-				t.Skip("recap recording has SharePoint download blocked (isDownloadBlocked=true); skipping raw audio download assertion")
-			}
 			require.NoError(t, err, "CaptureAudio failed for RecapMeeting")
 			require.NotZero(t, buf.Len(), "expected captured MP3 bytes")
+			b := buf.Bytes()
+			require.True(t, len(b) >= 2 && b[0] == 0xff && (b[1]&0xe0) == 0xe0, "expected valid MP3 frame sync header")
 			return
 		case <-ctx.Done():
 			t.Fatal("CaptureAudio did not complete before timeout for RecapMeeting")

@@ -1,5 +1,5 @@
 ---
-title: Compacted Memory — Shipment 028-S (.env.local.test Loader and .env.example Template)
+title: Compacted Memory - Shipment 028-S (.env.local.test Loader and .env.example Template)
 description: Consolidated Stage and Ship session summary for shipment 028-S (feature 028-F, deliberation 017-DL, source stash ED249B2F)
 date: 2026-11-15
 shipment: 028-S
@@ -18,9 +18,9 @@ Shipment `028-S` (`028-F`, deliberation `017-DL`, source stash `ED249B2F`) merge
 
 ## Decisions & Key Implementation Facts
 
-1. **Test-only loaders preserving 10-package architecture (`017-DL` Option A)**: `.env.local.test` loading lives solely in `internal/browser/integration_helper_test.go` (`LoadTestEnv`) and `internal/cli/binary_automation_test.go` (`loadCLITestEnv`) — zero production `.go` changes and zero new packages.
+1. **Test-only loaders preserving 10-package architecture (`017-DL` Option A)**: `.env.local.test` loading lives solely in `internal/browser/integration_helper_test.go` (`LoadTestEnv`) and `internal/cli/binary_automation_test.go` (`loadCLITestEnv`) - zero production `.go` changes and zero new packages.
 2. **Tracked `.env.example` & secret hygiene**: Root `.env.example` supplies 11 synthetic placeholder variables (`TEAMS_PROFILE_DIR` / `TEAMS_TEST_PROFILE_DIR` under gitignored `./bin/`) plus commented `# GO_TEAMS_INTEGRATION` and `# TEAMS_DISABLE_SANDBOX`, verified by `internal/config/gitignore_test.go` (`TestIsLocalEnvPath` and `TestEnvExampleTemplateContainsOnlySyntheticPlaceholders`).
-3. **Fail-closed loader invariants**: Regular non-symlink file check, symmetrical `filepath.EvalSymlinks` containment, `64 KiB` bounded open-handle read, fail-closed `git ls-files -z` / `.git/index` untracked check (case-insensitive on Windows), allowlisted alias-pair precedence (`os.Getenv` always wins even when `.env.local.test` is absent), Windows backslash and drive-relative rejection, `isTemplatePlaceholder` pre-filtering, and zero-echo parse/path diagnostics.
+3. **Fail-closed loader invariants**: Regular non-symlink file check, symmetrical `filepath.EvalSymlinks` containment, `64 KiB` bounded open-handle read, fail-closed `git ls-files -z` / `.git/index` untracked check (case-insensitive on Windows), allowlisted alias-pair precedence (`os.Getenv` always wins even when `.env.local.test` is absent), Windows backslash preservation in double-quoted paths, separator normalization with `..` / drive-relative path rejection, `isTemplatePlaceholder` pre-filtering, and zero-echo parse/path diagnostics.
 4. **Learnings & catches during execution**:
    * `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` enforces `syntheticPasscodeMarkers` on test URL fixtures too (`?p=realpass` failed; changed to `?p=samplepass`).
    * Linux CI catches Windows-only `filepath.IsAbs` assumptions and `t.Setenv("PATH", "")` leaks across subtests (`6e88530`).

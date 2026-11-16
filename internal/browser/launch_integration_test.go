@@ -5,6 +5,7 @@ package browser_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,9 @@ import (
 // never launches a real browser in unattended CI.
 func requireIntegration(t *testing.T) {
 	t.Helper()
-	if os.Getenv("GO_TEAMS_INTEGRATION") == "" {
+	browser.LoadTestEnv(t)
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("GO_TEAMS_INTEGRATION")))
+	if v == "" || v == "0" || v == "false" {
 		t.Skip("set GO_TEAMS_INTEGRATION=1 to run browser integration tests")
 	}
 }
@@ -30,7 +33,10 @@ func requireIntegration(t *testing.T) {
 func TestChromeRunnerLaunch(t *testing.T) {
 	requireIntegration(t)
 
-	opts := browser.AllocatorOptions(browser.Options{Headless: true})
+	opts := browser.AllocatorOptions(browser.Options{
+		Headless: true,
+		ExecPath: os.Getenv("TEAMS_BROWSER_PATH"),
+	})
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancelAlloc()
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)

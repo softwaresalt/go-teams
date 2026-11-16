@@ -35,13 +35,16 @@ func meetingURL(t *testing.T) string {
 // context is cancelled via t.Cleanup, reaping the browser process.
 func browserContext(t *testing.T) context.Context {
 	t.Helper()
+	requireIntegration(t)
 	profile := os.Getenv("TEAMS_PROFILE_DIR")
 	if profile == "" {
 		t.Skip("set TEAMS_PROFILE_DIR to an authenticated profile for live meeting tests")
 	}
 	opts := browser.AllocatorOptions(browser.Options{
-		Headless:    true,
-		UserDataDir: profile,
+		Headless:       true,
+		UserDataDir:    profile,
+		ExecPath:       os.Getenv("TEAMS_BROWSER_PATH"),
+		DefaultAccount: os.Getenv("TEAMS_ACCOUNT"),
 	})
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	t.Cleanup(cancelAlloc)
@@ -51,10 +54,12 @@ func browserContext(t *testing.T) context.Context {
 }
 
 func newMeeting(t *testing.T) (browser.Meeting, context.Context) {
+	t.Helper()
 	url := meetingURL(t)
 	m := browser.NewMeeting(browser.MeetingOptions{
-		MeetingURL: url,
-		BotName:    "Transcription Agent",
+		MeetingURL:     url,
+		BotName:        "Transcription Agent",
+		DefaultAccount: os.Getenv("TEAMS_ACCOUNT"),
 	})
 	return m, browserContext(t)
 }

@@ -478,16 +478,20 @@ func TestLoadCLITestEnvPrecedenceAndPaths(t *testing.T) {
 		clearEnv(t)
 		root := t.TempDir()
 		envPath := filepath.Join(root, ".env.local.test")
+		wantBrowserPath := "/usr/bin/msedge"
+		if runtime.GOOS == "windows" {
+			wantBrowserPath = `C:\Program Files\teams\msedge.exe`
+		}
 		content := strings.Join([]string{
 			`GO_TEAMS_BINARY=".\bin\go-teams.exe"`,
-			`TEAMS_BROWSER_PATH="C:\Program Files\teams\msedge.exe"`,
+			fmt.Sprintf("TEAMS_BROWSER_PATH=%q", wantBrowserPath),
 			"TEAMS_TEST_PROFILE_DIR=./bin/profile",
 		}, "\n")
 		require.NoError(t, os.WriteFile(envPath, []byte(content), 0o600))
 
 		loadCLITestEnvFromFile(t, envPath, root)
 		assert.Equal(t, filepath.Join(root, "bin", "go-teams.exe"), os.Getenv("GO_TEAMS_BINARY"))
-		assert.Equal(t, `C:\Program Files\teams\msedge.exe`, os.Getenv("TEAMS_BROWSER_PATH"))
+		assert.Equal(t, wantBrowserPath, os.Getenv("TEAMS_BROWSER_PATH"))
 		assert.Equal(t, filepath.Join(root, "bin", "profile"), os.Getenv("TEAMS_PROFILE_DIR"))
 	})
 

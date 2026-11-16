@@ -727,12 +727,15 @@ func TestLoadTestEnvSecurityAndTemplateGuardrails(t *testing.T) {
 		assert.Contains(t, msg, "escaping repository root")
 		assert.NotContains(t, msg, "outside-drive-secret")
 
-		// Direct truncated git index check (no-git fallback invariant).
-		truncRoot := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(truncRoot, ".git"), 0o750))
-		require.NoError(t, os.WriteFile(filepath.Join(truncRoot, ".git", "index"), []byte("DIRC\x00\x00\x00\x02\x00\x00\x00\x00"), 0o600))
-		t.Setenv("PATH", "")
-		require.Error(t, verifyEnvFileUntracked(truncRoot, ".env.local.test"))
+		// Direct truncated git index check (no-git fallback invariant) scoped in a
+		// nested subtest so PATH is restored before the git-tracked check below.
+		t.Run("truncated git index fails closed", func(t *testing.T) {
+			truncRoot := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(truncRoot, ".git"), 0o750))
+			require.NoError(t, os.WriteFile(filepath.Join(truncRoot, ".git", "index"), []byte("DIRC\x00\x00\x00\x02\x00\x00\x00\x00"), 0o600))
+			t.Setenv("PATH", "")
+			require.Error(t, verifyEnvFileUntracked(truncRoot, ".env.local.test"))
+		})
 
 		target := filepath.Join(root, "real.env")
 		require.NoError(t, os.WriteFile(target, []byte("TEAMS_ACCOUNT=a@b.com\n"), 0o600))

@@ -36,65 +36,247 @@ const RecapOffsetSeparator = "\x00"
 
 const extractRecapAudioJS = `(async () => {
 	const limitError = 'recap audio exceeds maximum supported size/duration';
-	const info = window.g_fileInfo || {};
-	const pageUrl = String(location.href || '');
-	const itemId = String(info.itemId || info.driveItemId || info.VroomItemID || info.VroomItemId || new URL(pageUrl).searchParams.get('driveItemId') || '');
-	const fileName = String(info.fileName || info.name || '');
+	const maxRecapAudioSegments = 2400;
+	try { delete window.__goTeamsRecapAudioTransfer; } catch (_) {}
 	const enforceIdentity = typeof recapExpectedIdentity !== 'undefined';
 	const expected = enforceIdentity ? recapExpectedIdentity : {};
-	let identityMatched = false;
-	function checkField(field, value, positive = true) {
-		if (!value || !expected[field]) return;
-		if (String(value).toLowerCase() !== String(expected[field]).toLowerCase()) throw new Error('recap audio recording identity mismatch');
-		if (positive) identityMatched = true;
+	const authHosts = [
+		'login.microsoftonline.com',
+		'login.microsoft.com',
+		'login.live.com',
+		'account.live.com',
+		'login.windows.net',
+		'login.microsoftonline.us',
+		'autologon.microsoftazuread-sso.com',
+		'device.login.microsoftonline.com',
+		'account.activedirectory.windowsazure.com',
+		'mysignins.microsoft.com',
+		'fpt.microsoft.com',
+		'aadcdn.msftauth.net',
+		'msftauth.net',
+		'msauth.net',
+		'duosecurity.com',
+		'okta.com',
+		'pingidentity.com',
+		'onelogin.com',
+		'auth0.com'
+	];
+	function isAuthRedirectURL(raw) {
+		if (!raw) return false;
+		try {
+			const u = new URL(String(raw));
+			if (u.protocol !== 'https:') return false;
+			const host = u.hostname.toLowerCase();
+			return authHosts.some(d => host === d || host.endsWith('.' + d));
+		} catch (_) {
+			return false;
+		}
 	}
-	function checkIdentity(raw) {
+	function matchField(field, value, positive, state) {
+		if (!value || !expected[field]) return;
+		if (String(value).toLowerCase() !== String(expected[field]).toLowerCase()) {
+			throw new Error('recap audio recording identity mismatch');
+		}
+		if (positive) state.matched = true;
+	}
+	function checkIdentityAgainst(raw, baseUrl, state) {
 		if (!raw) return;
 		let u;
-		try { u = new URL(raw, pageUrl); } catch (_) { throw new Error('recap audio recording identity mismatch'); }
+		try { u = new URL(raw, baseUrl); } catch (_) { throw new Error('recap audio recording identity mismatch'); }
 		const queries = [u.searchParams];
 		const hashQuery = u.hash.indexOf('?');
 		if (hashQuery >= 0) queries.push(new URLSearchParams(u.hash.slice(hashQuery + 1)));
 		for (const params of queries) {
 			for (const [key, field] of [['threadId','ThreadID'], ['driveItemId','DriveItemID'], ['driveId','DriveID'], ['callId','CallID'], ['iCalUid','ICalUID']]) {
-				for (const value of params.getAll(key)) checkField(field, value, field !== 'DriveID');
+				for (const value of params.getAll(key)) matchField(field, value, field !== 'DriveID', state);
 			}
 			for (const value of params.getAll('fileUrl')) {
 				try {
-					const filePath = new URL(value, pageUrl).pathname;
-					if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) checkField('RecordingName', decodeURIComponent(filePath.split('/').pop()));
+					const filePath = new URL(value, baseUrl).pathname;
+					if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) matchField('RecordingName', decodeURIComponent(filePath.split('/').pop()), true, state);
 				} catch (_) { throw new Error('recap audio recording identity mismatch'); }
 			}
 		}
 		const decoded = decodeURIComponent(raw);
 		const token = decoded.match(/meeting_[a-z0-9_-]+/i);
-		if (token) checkField('MeetingToken', token[0]);
+		if (token) matchField('MeetingToken', token[0], true, state);
 		const meet = decoded.match(/\/meet\/([a-z0-9_-]+)/i);
-		if (meet) checkField('MeetID', meet[1]);
-		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) checkField('RecordingName', decodeURIComponent(u.pathname.split('/').pop()));
+		if (meet) matchField('MeetID', meet[1], true, state);
+		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', decodeURIComponent(u.pathname.split('/').pop()), true, state);
 	}
-	checkIdentity(pageUrl);
-	checkField('DriveItemID', info.itemId);
-	checkField('DriveItemID', info.driveItemId);
-	checkField('DriveItemID', info.VroomItemID);
-	checkField('DriveItemID', info.VroomItemId);
-	checkField('RecordingName', info.fileName);
-	checkField('RecordingName', info.name);
-	const pcmEl = document.querySelector('[data-recap-audio-pcm]');
+	const playBtnSelector = 'button[aria-label="Play video"], button[title="Play video"], button[data-automationid="playButton"], button[aria-label="Play"], .vjs-big-play-button, [role="button"][aria-label="Play video"]';
+	function validateFrameContext(win, doc) {
+		const state = { matched: false };
+		const fUrl = String((win.location && win.location.href) || '');
+		const fi = win.g_fileInfo || {};
+		const fallbackBase = fUrl || String((typeof location !== 'undefined' && location.href) || '');
+		if (fUrl) checkIdentityAgainst(fUrl, fallbackBase, state);
+		matchField('DriveItemID', fi.itemId, true, state);
+		matchField('DriveItemID', fi.driveItemId, true, state);
+		matchField('DriveItemID', fi.VroomItemID, true, state);
+		matchField('DriveItemID', fi.VroomItemId, true, state);
+		matchField('RecordingName', fi.fileName, true, state);
+		matchField('RecordingName', fi.name, true, state);
+		let fItemId = '';
+		try {
+			fItemId = String(fi.itemId || fi.driveItemId || fi.VroomItemID || fi.VroomItemId || (fUrl ? new URL(fUrl).searchParams.get('driveItemId') : '') || '');
+		} catch (_) {
+			fItemId = String(fi.itemId || fi.driveItemId || fi.VroomItemID || fi.VroomItemId || '');
+		}
+		const fFileName = String(fi.fileName || fi.name || '');
+		return {
+			win,
+			doc,
+			info: fi,
+			pageUrl: fUrl,
+			itemId: fItemId,
+			fileName: fFileName,
+			baseIdentityMatched: state.matched
+		};
+	}
+	function hasPlayableStreamSurface(ctx) {
+		const d = ctx.doc;
+		const w = ctx.win;
+		const fi = ctx.info || {};
+		const urlLower = String(ctx.pageUrl || '').toLowerCase();
+		const media = d && d.querySelector ? d.querySelector('audio, video') : null;
+		const playBtn = d && d.querySelector ? d.querySelector(playBtnSelector) : null;
+		return Boolean(
+			urlLower.includes('streamembed.aspx') ||
+			playBtn ||
+			(media && (typeof media.play === 'function' || typeof w.MediaSource !== 'undefined')) ||
+			fi.transcodeUrl
+		);
+	}
+	function frameScore(ctx) {
+		let score = 0;
+		const urlLower = String(ctx.pageUrl || '').toLowerCase();
+		if (urlLower.includes('streamembed.aspx')) score += 100;
+		if (hasPlayableStreamSurface(ctx)) score += 50;
+		if (ctx.doc && ctx.doc.querySelector && ctx.doc.querySelector('audio, video')) score += 10;
+		if (ctx.info && ctx.info.isDownloadBlocked) score += 5;
+		const pcmEl = ctx.doc && ctx.doc.querySelector ? ctx.doc.querySelector('[data-recap-audio-pcm]') : null;
+		if (pcmEl && pcmEl.hasAttribute && pcmEl.hasAttribute('data-recap-audio-pcm')) score += 20;
+		if (ctx.info && (ctx.info.audioPcmBase64 || ctx.info.audioUrl || ctx.info.mediaUrl || ctx.info.downloadUrl || ctx.info.streamUrl)) score += 10;
+		return score;
+	}
+	function collectPlayerWindows() {
+		const visited = new Set();
+		const contexts = [];
+		function walk(win, doc, depth) {
+			if (!win || depth > 3 || visited.has(win)) return;
+			visited.add(win);
+			let href = '';
+			try { href = String((win.location && win.location.href) || ''); } catch (_) { return; }
+			if (isAuthRedirectURL(href)) return;
+			let targetDoc = doc;
+			if (!targetDoc) {
+				try { targetDoc = win.document; } catch (_) { return; }
+			}
+			if (!targetDoc) return;
+			const frameCtx = validateFrameContext(win, targetDoc);
+			contexts.push(frameCtx);
+			if (depth === 3) return;
+			let iframes = [];
+			try {
+				if (typeof targetDoc.querySelectorAll === 'function') {
+					iframes = Array.from(targetDoc.querySelectorAll('iframe') || []);
+				}
+			} catch (_) {
+				iframes = [];
+			}
+			for (const iframe of iframes) {
+				try {
+					const cw = iframe && iframe.contentWindow;
+					if (!cw) continue;
+					const cd = iframe.contentDocument || cw.document;
+					if (!cd) continue;
+					void String(cw.location && cw.location.href);
+					walk(cw, cd, depth + 1);
+				} catch (_) {
+					// Cross-origin iframe; evaluated via separate CDP target.
+				}
+			}
+		}
+		walk(window, document, 0);
+		try {
+			if (window.parent && window.parent !== window && !visited.has(window.parent)) {
+				const pHref = String((window.parent.location && window.parent.location.href) || '');
+				if (pHref && !isAuthRedirectURL(pHref)) {
+					validateFrameContext(window.parent, window.parent.document);
+				}
+			}
+		} catch (_) {}
+		return contexts;
+	}
+	function decodeAudioBufferToPCMChunks(buffer, state) {
+		if (!buffer) throw new Error('recap audio decode returned empty buffer');
+		const sampleRate = Number(buffer.sampleRate);
+		const bufLen = Number(buffer.length);
+		const duration = Number(buffer.duration);
+		const outputLength = Math.ceil(bufLen * 44100 / sampleRate);
+		const sampleRateRatio = sampleRate > 0 ? Math.max(1, sampleRate / 44100) : 1;
+		if (!Number.isFinite(duration) || duration < 0 || !Number.isFinite(outputLength) || outputLength <= 0) {
+			throw new Error(limitError);
+		}
+		const nextDuration = state.totalDurationSec + duration;
+		const nextPCMBytes = state.totalPCMBytes + outputLength * 2;
+		if (nextDuration > maxRecapAudioDurationSec ||
+			bufLen * 2 > maxRecapAudioPCMBytes * sampleRateRatio ||
+			nextPCMBytes > maxRecapAudioPCMBytes) {
+			throw new Error(limitError);
+		}
+		const channels = [];
+		for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+		if (!channels.length) {
+			throw new Error('recap audio has no channels');
+		}
+		state.totalDurationSec = nextDuration;
+		state.totalPCMBytes = nextPCMBytes;
+		for (let start = 0; start < outputLength; start += 65536) {
+			const count = Math.min(65536, outputLength - start);
+			const pcm = new Int16Array(count);
+			for (let i = 0; i < count; i++) {
+				const index = Math.min(bufLen - 1, Math.floor((start + i) * sampleRate / 44100));
+				let sample = 0;
+				for (const channel of channels) sample += channel[index];
+				sample = Math.max(-1, Math.min(1, sample / channels.length));
+				pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+			}
+			const bytes = new Uint8Array(pcm.buffer);
+			let binary = '';
+			for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+			const b64 = typeof btoa === 'function' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
+			state.pcmChunks.push(b64);
+		}
+	}
+
+	const playerContexts = collectPlayerWindows();
+	playerContexts.sort((a, b) => frameScore(b) - frameScore(a));
+	const playerCtx = playerContexts[0];
+	const playerWin = playerCtx.win;
+	const playerDoc = playerCtx.doc;
+	const info = playerCtx.info;
+	const pageUrl = playerCtx.pageUrl;
+	const itemId = playerCtx.itemId;
+	const fileName = playerCtx.fileName;
+	const baseIdentityMatched = playerCtx.baseIdentityMatched;
+
+	const pcmEl = playerDoc.querySelector ? playerDoc.querySelector('[data-recap-audio-pcm]') : null;
 	const hasPCM = pcmEl && pcmEl.hasAttribute && pcmEl.hasAttribute('data-recap-audio-pcm');
-	if (hasPCM && enforceIdentity && !identityMatched) throw new Error('recap audio recording identity unverified');
+	if (hasPCM && enforceIdentity && !baseIdentityMatched) throw new Error('recap audio recording identity unverified');
 	const supplied = (hasPCM && pcmEl.getAttribute('data-recap-audio-pcm')) ||
-		((!enforceIdentity || identityMatched) && info.audioPcmBase64);
+		((!enforceIdentity || baseIdentityMatched) && info.audioPcmBase64);
 	if (supplied) {
-		if (enforceIdentity && !identityMatched) throw new Error('recap audio recording identity unverified');
+		if (enforceIdentity && !baseIdentityMatched) throw new Error('recap audio recording identity unverified');
 		const pcm = String(supplied);
 		const padding = pcm.endsWith('==') ? 2 : (pcm.endsWith('=') ? 1 : 0);
 		if (Math.floor(pcm.length / 4) * 3 - padding > maxRecapAudioPCMBytes) throw new Error(limitError);
 		return JSON.stringify({pageUrl, itemId, fileName, pcmChunks: [pcm]});
 	}
-	const media = document.querySelector('audio, video');
+
+	const media = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 	const source = media && media.querySelector ? media.querySelector('source') : null;
-	const baseIdentityMatched = identityMatched;
 	const rawCandidates = [
 		media && media.getAttribute ? media.getAttribute('data-audio-src') : '',
 		source && source.src,
@@ -116,15 +298,41 @@ const extractRecapAudioJS = `(async () => {
 		else nonBlobCandidates.push(u);
 	}
 	const candidates = nonBlobCandidates.concat(blobCandidates);
-	if (!candidates.length) return '';
+	const streamSurface = hasPlayableStreamSurface(playerCtx);
+	if (!candidates.length && !streamSurface) {
+		if (info.isDownloadBlocked) {
+			throw new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+		}
+		return '';
+	}
+
+	function sanitizeMediaUrl(raw) {
+		if (!raw) return '';
+		try {
+			const u = new URL(String(raw), pageUrl || String((typeof location !== 'undefined' && location.href) || ''));
+			for (const k of ['tempauth', 'access_token', 'sig', 'se', 'sp', 'sv', 'auth']) {
+				u.searchParams.delete(k);
+			}
+			return u.toString();
+		} catch (_) {
+			return '';
+		}
+	}
+
 	let blockedErr = null;
 	let lastFetchErr = null;
+	const fetchFn = (typeof playerWin.fetch === 'function' ? playerWin.fetch : (typeof fetch === 'function' ? fetch : null));
+	const getAudioCtxCtor = () => {
+		if (typeof playerWin.AudioContext === 'function') return playerWin.AudioContext;
+		if (typeof AudioContext === 'function') return AudioContext;
+		return null;
+	};
+
 	for (const candidateUrl of candidates) {
-		identityMatched = false;
-		checkIdentity(candidateUrl);
-		const candidateHasIdentity = identityMatched;
-		identityMatched = baseIdentityMatched || candidateHasIdentity;
-		if (enforceIdentity && !identityMatched) {
+		const candState = { matched: false };
+		checkIdentityAgainst(candidateUrl, pageUrl, candState);
+		const candidateHasIdentity = candState.matched;
+		if (enforceIdentity && !(baseIdentityMatched || candidateHasIdentity)) {
 			lastFetchErr = new Error('recap audio recording identity unverified');
 			continue;
 		}
@@ -133,13 +341,17 @@ const extractRecapAudioJS = `(async () => {
 			if (Number.isFinite(duration) && duration > 0 &&
 				(duration > maxRecapAudioDurationSec || Math.ceil(duration * 44100) * 2 > maxRecapAudioPCMBytes)) throw new Error(limitError);
 		}
+		if (!fetchFn) {
+			lastFetchErr = new Error('recap audio fetch unavailable');
+			continue;
+		}
 		let resp = null;
 		try {
-			resp = await fetch(candidateUrl, {credentials: 'include', redirect: 'follow'});
+			resp = await fetchFn.call(playerWin, candidateUrl, {credentials: 'include', redirect: 'follow'});
 		} catch (err) {
 			if (err && err.name === 'TypeError' && !/^blob:/i.test(candidateUrl)) {
 				try {
-					resp = await fetch(candidateUrl, {credentials: 'omit', redirect: 'follow'});
+					resp = await fetchFn.call(playerWin, candidateUrl, {credentials: 'omit', redirect: 'follow'});
 				} catch (retryErr) {
 					if (info.isDownloadBlocked) {
 						blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
@@ -175,17 +387,16 @@ const extractRecapAudioJS = `(async () => {
 		}
 		let respHasIdentity = false;
 		if (resp.url) {
-			identityMatched = false;
-			checkIdentity(resp.url);
-			respHasIdentity = identityMatched;
+			const respState = { matched: false };
+			checkIdentityAgainst(resp.url, pageUrl, respState);
+			respHasIdentity = respState.matched;
 		}
-		identityMatched = baseIdentityMatched || candidateHasIdentity || respHasIdentity;
-		if (enforceIdentity && !identityMatched) {
+		if (enforceIdentity && !(baseIdentityMatched || candidateHasIdentity || respHasIdentity)) {
 			lastFetchErr = new Error('recap audio recording identity unverified');
 			continue;
 		}
 		const selectedUrl = (resp.url && respHasIdentity) ? resp.url : (candidateHasIdentity ? candidateUrl : (resp.url || candidateUrl));
-		const length = Number(resp.headers.get('Content-Length'));
+		const length = Number(resp.headers && resp.headers.get && resp.headers.get('Content-Length'));
 		if (Number.isFinite(length) && length > maxRecapAudioSourceBytes) throw new Error(limitError);
 		if (!resp.body || !resp.body.getReader) {
 			lastFetchErr = new Error('recap audio streaming unavailable');
@@ -218,7 +429,12 @@ const extractRecapAudioJS = `(async () => {
 		const sourceData = new Uint8Array(sourceBytes);
 		let offset = 0;
 		for (const part of parts) { sourceData.set(part, offset); offset += part.byteLength; }
-		const audioContext = new AudioContext({sampleRate: 44100});
+		const AudioCtxCtor = getAudioCtxCtor();
+		if (!AudioCtxCtor) {
+			lastFetchErr = new Error('recap audio AudioContext unavailable');
+			continue;
+		}
+		const audioContext = new AudioCtxCtor({sampleRate: 44100});
 		try {
 			let buffer = null;
 			try {
@@ -228,36 +444,1368 @@ const extractRecapAudioJS = `(async () => {
 				lastFetchErr = decodeErr;
 				continue;
 			}
-			const outputLength = Math.ceil(buffer.length * 44100 / buffer.sampleRate);
-			const sampleRateRatio = buffer.sampleRate > 0 ? Math.max(1, buffer.sampleRate / 44100) : 1;
-			if (!Number.isFinite(buffer.duration) || buffer.duration > maxRecapAudioDurationSec ||
-				!Number.isFinite(outputLength) || outputLength <= 0 ||
-				buffer.length * 2 > maxRecapAudioPCMBytes * sampleRateRatio ||
-				outputLength * 2 > maxRecapAudioPCMBytes) throw new Error(limitError);
-			const channels = [];
-			for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
-			if (!channels.length) {
-				lastFetchErr = new Error('recap audio has no channels');
+			const pcmState = { totalDurationSec: 0, totalPCMBytes: 0, pcmChunks: [] };
+			try {
+				decodeAudioBufferToPCMChunks(buffer, pcmState);
+			} catch (pcmErr) {
+				const pcmMsg = String((pcmErr && pcmErr.message) || pcmErr || '');
+				if (pcmMsg.includes(limitError)) throw pcmErr;
+				lastFetchErr = pcmErr;
 				continue;
 			}
-			const pcmChunks = [];
-			for (let start = 0; start < outputLength; start += 16384) {
-				const count = Math.min(16384, outputLength - start);
-				const pcm = new Int16Array(count);
-				for (let i = 0; i < count; i++) {
-					const index = Math.min(buffer.length - 1, Math.floor((start + i) * buffer.sampleRate / 44100));
-					let sample = 0;
-					for (const channel of channels) sample += channel[index];
-					sample = Math.max(-1, Math.min(1, sample / channels.length));
-					pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
-				}
-				const bytes = new Uint8Array(pcm.buffer);
-				let binary = '';
-				for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-				pcmChunks.push(btoa(binary));
-			}
-			return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: selectedUrl, sourceBytes, durationSec: buffer.duration, pcmChunks});
+			return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: sanitizeMediaUrl(selectedUrl), sourceBytes, durationSec: pcmState.totalDurationSec, pcmChunks: pcmState.pcmChunks});
 		} finally { await audioContext.close(); }
+	}
+
+	function readU32(u8, off) {
+		return ((u8[off] << 24) | (u8[off + 1] << 16) | (u8[off + 2] << 8) | u8[off + 3]) >>> 0;
+	}
+	function readU64(u8, off) {
+		return readU32(u8, off) * 0x100000000 + readU32(u8, off + 4);
+	}
+	function readFourCC(u8, off) {
+		if (!u8 || off + 4 > u8.length) return '';
+		return String.fromCharCode(u8[off], u8[off + 1], u8[off + 2], u8[off + 3]);
+	}
+	function isFMP4InitSegment(u8) {
+		if (!u8 || u8.length < 8) return false;
+		const t = readFourCC(u8, 4);
+		return t === 'ftyp' || t === 'moov';
+	}
+	function isFMP4MediaSegment(u8) {
+		if (!u8 || u8.length < 8) return false;
+		const t = readFourCC(u8, 4);
+		return t === 'styp' || t === 'sidx' || t === 'moof' || t === 'emsg';
+	}
+	function readBoxHeader(u8, pos, end) {
+		if (pos + 8 > end) return null;
+		let boxSize = readU32(u8, pos);
+		const type = readFourCC(u8, pos + 4);
+		let hdrSize = 8;
+		if (boxSize === 1) {
+			if (pos + 16 > end) return null;
+			boxSize = readU64(u8, pos + 8);
+			hdrSize = 16;
+			if (!Number.isFinite(boxSize) || boxSize < 16) return null;
+		} else if (boxSize === 0) {
+			boxSize = end - pos;
+		} else if (boxSize < 8) {
+			return null;
+		}
+		if (pos + boxSize > end) return null;
+		return { boxSize, hdrSize, type };
+	}
+	function classifyInitSegmentTrack(u8) {
+		if (!u8 || u8.length < 8) return 'unknown';
+		let hasAudio = false;
+		let hasVideo = false;
+		const containerBoxes = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl']);
+		function walk(start, end) {
+			let pos = start;
+			while (pos + 8 <= end) {
+				const h = readBoxHeader(u8, pos, end);
+				if (!h) break;
+				const bodyStart = pos + h.hdrSize;
+				const boxEnd = pos + h.boxSize;
+				if (h.type === 'hdlr' && bodyStart + 12 <= boxEnd) {
+					const ht = readFourCC(u8, bodyStart + 8);
+					if (ht === 'soun') hasAudio = true;
+					else if (ht === 'vide') hasVideo = true;
+				} else if (h.type === 'stsd' && bodyStart + 8 <= boxEnd) {
+					walk(bodyStart + 8, boxEnd);
+				} else if (h.type === 'mp4a') {
+					hasAudio = true;
+				} else if (h.type === 'avc1' || h.type === 'hev1' || h.type === 'hvc1' || h.type === 'vp09' || h.type === 'av01') {
+					hasVideo = true;
+				} else if (containerBoxes.has(h.type)) {
+					walk(bodyStart, boxEnd);
+				}
+				pos = boxEnd;
+			}
+		}
+		walk(0, u8.length);
+		if (hasAudio && !hasVideo) return 'audio';
+		if (hasVideo && !hasAudio) return 'video';
+		for (let i = 0; i + 4 <= u8.length; i++) {
+			const cc = readFourCC(u8, i);
+			if (cc === 'mp4a') hasAudio = true;
+			else if (cc === 'avc1' || cc === 'hev1' || cc === 'hvc1' || cc === 'vp09' || cc === 'av01') hasVideo = true;
+		}
+		if (hasAudio && !hasVideo) return 'audio';
+		if (hasVideo && !hasAudio) return 'video';
+		return hasAudio ? 'audio' : 'unknown';
+	}
+	function parseFMP4DecodeTime(u8) {
+		if (!u8 || u8.length < 16) return null;
+		let sidxTime = null;
+		function walkTraf(start, end) {
+			let pos = start;
+			while (pos + 8 <= end) {
+				const h = readBoxHeader(u8, pos, end);
+				if (!h) break;
+				const bodyStart = pos + h.hdrSize;
+				const boxEnd = pos + h.boxSize;
+				if (h.type === 'tfdt' && bodyStart + 8 <= boxEnd) {
+					const ver = u8[bodyStart];
+					if (ver === 1 && bodyStart + 12 <= boxEnd) return readU64(u8, bodyStart + 4);
+					return readU32(u8, bodyStart + 4);
+				}
+				pos = boxEnd;
+			}
+			return null;
+		}
+		function walkMoof(start, end) {
+			let pos = start;
+			while (pos + 8 <= end) {
+				const h = readBoxHeader(u8, pos, end);
+				if (!h) break;
+				const bodyStart = pos + h.hdrSize;
+				const boxEnd = pos + h.boxSize;
+				if (h.type === 'traf') {
+					const dt = walkTraf(bodyStart, boxEnd);
+					if (dt !== null) return dt;
+				}
+				pos = boxEnd;
+			}
+			return null;
+		}
+		let pos = 0;
+		while (pos + 8 <= u8.length) {
+			const h = readBoxHeader(u8, pos, u8.length);
+			if (!h) break;
+			const bodyStart = pos + h.hdrSize;
+			const boxEnd = pos + h.boxSize;
+			if (h.type === 'moof') {
+				const dt = walkMoof(bodyStart, boxEnd);
+				if (dt !== null) return dt;
+			} else if (h.type === 'sidx' && sidxTime === null && bodyStart + 16 <= boxEnd) {
+				const ver = u8[bodyStart];
+				if (ver === 1 && bodyStart + 20 <= boxEnd) sidxTime = readU64(u8, bodyStart + 12);
+				else if (ver === 0) sidxTime = readU32(u8, bodyStart + 12);
+			}
+			pos = boxEnd;
+		}
+		return sidxTime;
+	}
+	function zeroFMP4DecodeTime(u8) {
+		const copy = new Uint8Array(u8);
+		function walkBox(start, end) {
+			let pos = start;
+			while (pos + 8 <= end) {
+				const h = readBoxHeader(copy, pos, end);
+				if (!h) break;
+				const bodyStart = pos + h.hdrSize;
+				const boxEnd = pos + h.boxSize;
+				if (h.type === 'moof' || h.type === 'traf') {
+					walkBox(bodyStart, boxEnd);
+				} else if (h.type === 'tfdt' && bodyStart + 8 <= boxEnd) {
+					const ver = copy[bodyStart];
+					const len = (ver === 1 && bodyStart + 12 <= boxEnd) ? 8 : 4;
+					for (let i = 0; i < len; i++) copy[bodyStart + 4 + i] = 0;
+				} else if (h.type === 'sidx' && bodyStart + 16 <= boxEnd) {
+					const ver = copy[bodyStart];
+					const len = (ver === 1 && bodyStart + 20 <= boxEnd) ? 8 : 4;
+					for (let i = 0; i < len; i++) copy[bodyStart + 12 + i] = 0;
+				}
+				pos = boxEnd;
+			}
+		}
+		walkBox(0, copy.length);
+		return copy;
+	}
+
+	async function captureStreamEmbedAudio() {
+		for (const rawDuration of [media && media.duration, info.duration, info.durationSeconds]) {
+			const d = Number(rawDuration);
+			if (Number.isFinite(d) && d > 0 &&
+				(d > maxRecapAudioDurationSec || Math.ceil(d * 44100) * 2 > maxRecapAudioPCMBytes)) {
+				throw new Error(limitError);
+			}
+		}
+		const abortCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+		let fatalErr = null;
+		let streamSourceBytes = 0;
+		let pathAActive = false;
+		let pathAStarted = false;
+		let pathAFailed = false;
+		let activityObserved = false;
+		function isAllowedSameOriginTranscodeURL(rawUrl, hookWin) {
+			if (!rawUrl) return false;
+			const targetWin = hookWin || playerWin;
+			let u;
+			try {
+				const base = (targetWin && targetWin.location && targetWin.location.href) || pageUrl || String((typeof location !== 'undefined' && location.href) || '');
+				u = new URL(String(rawUrl), base);
+			} catch (_) {
+				return false;
+			}
+			let winOrigin = '';
+			try {
+				winOrigin = (targetWin && targetWin.location && targetWin.location.origin) ||
+					new URL((targetWin && targetWin.location && targetWin.location.href) || pageUrl).origin;
+			} catch (_) {
+				winOrigin = '';
+			}
+			if (!winOrigin || winOrigin === 'null') return false;
+			const allowedProto = u.protocol === 'https:' ||
+				(u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]' || u.hostname === '::1'));
+			return u.origin === winOrigin && allowedProto;
+		}
+		let transcodeAudioTemplateUrl = '';
+		if (info.transcodeUrl && isAllowedSameOriginTranscodeURL(info.transcodeUrl, playerWin)) {
+			try {
+				const base = (playerWin && playerWin.location && playerWin.location.href) || pageUrl || String((typeof location !== 'undefined' && location.href) || '');
+				transcodeAudioTemplateUrl = new URL(String(info.transcodeUrl), base).toString();
+			} catch (_) {
+				transcodeAudioTemplateUrl = '';
+			}
+		}
+		let transcodeWsd = 0;
+		let transcodePpd = 0;
+		const capturedAuthHeadersByOrigin = Object.create(null);
+		const allowlistedHeaderNames = [
+			'accept',
+			'authorization',
+			'prefer',
+			'x-ms-client-request-id',
+			'x-ms-correlation-id',
+			'x-ms-user-agent',
+			'x-ms-request-id'
+		];
+		let cryptoInitSegment = null;
+		let audioCryptoKeyInfo = null;
+		let fallbackCryptoKeyInfo = null;
+		let mseInitSegment = null;
+		const mseSegments = new Map();
+		const sbTrackMap = new WeakMap();
+		let mseSeq = 0;
+		let mseLastAppendAt = 0;
+		let mseMaxBufferedEnd = 0;
+		let mseContiguousEnd = 0;
+		let mseHasBufferedGap = false;
+		let audioSBRef = null;
+		let activeTimers = new Set();
+		const trackedListeners = [];
+		const restorers = [];
+		let hooksRestored = false;
+		let cleaningUp = false;
+		let pathAPromise = null;
+		let pathAStartedAt = 0;
+		let wakeLoop = null;
+
+		function signalWake() {
+			if (wakeLoop) {
+				const fn = wakeLoop;
+				wakeLoop = null;
+				fn();
+			}
+		}
+		function sleepOrWake(ms) {
+			return new Promise(resolve => {
+				let done = false;
+				const finish = () => {
+					if (done) return;
+					done = true;
+					clearTimeout(tid);
+					activeTimers.delete(tid);
+					if (wakeLoop === finish) wakeLoop = null;
+					resolve();
+				};
+				const tid = setTimeout(finish, ms);
+				activeTimers.add(tid);
+				wakeLoop = finish;
+			});
+		}
+		function toUint8Array(data) {
+			if (!data) return null;
+			if (data instanceof Uint8Array) return data;
+			if (data instanceof ArrayBuffer ||
+				(playerWin && playerWin.ArrayBuffer && data instanceof playerWin.ArrayBuffer) ||
+				Object.prototype.toString.call(data) === '[object ArrayBuffer]') {
+				return new Uint8Array(data);
+			}
+			if (ArrayBuffer.isView(data) ||
+				(playerWin && playerWin.ArrayBuffer && typeof playerWin.ArrayBuffer.isView === 'function' && playerWin.ArrayBuffer.isView(data)) ||
+				(data.buffer && Object.prototype.toString.call(data.buffer) === '[object ArrayBuffer]' &&
+					typeof data.byteOffset === 'number' && typeof data.byteLength === 'number')) {
+				return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+			}
+			return null;
+		}
+		function mseBytesTotal() {
+			let total = mseInitSegment ? mseInitSegment.byteLength : 0;
+			for (const entry of mseSegments.values()) total += entry.data.byteLength;
+			return total;
+		}
+		function recordMSESegment(u8) {
+			if (!u8 || u8.byteLength === 0 || fatalErr) return;
+			if (isFMP4InitSegment(u8)) {
+				if (classifyInitSegmentTrack(u8) === 'video') return;
+				if (!mseInitSegment) {
+					if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+						fatalErr = new Error(limitError);
+						if (abortCtrl) abortCtrl.abort();
+						signalWake();
+						return;
+					}
+					streamSourceBytes += u8.byteLength;
+					mseInitSegment = new Uint8Array(u8);
+				}
+				activityObserved = true;
+				mseLastAppendAt = Date.now();
+				signalWake();
+				return;
+			}
+			if (!isFMP4MediaSegment(u8)) return;
+			const dts = parseFMP4DecodeTime(u8);
+			const key = (dts !== null && dts !== undefined && Number.isFinite(dts)) ? ('dts:' + dts) : ('seq:' + (mseSeq++));
+			if (mseSegments.has(key)) {
+				activityObserved = true;
+				mseLastAppendAt = Date.now();
+				return;
+			}
+			if (mseSegments.size >= maxRecapAudioSegments) {
+				fatalErr = new Error(limitError);
+				if (abortCtrl) abortCtrl.abort();
+				signalWake();
+				return;
+			}
+			if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+				fatalErr = new Error(limitError);
+				if (abortCtrl) abortCtrl.abort();
+				signalWake();
+				return;
+			}
+			streamSourceBytes += u8.byteLength;
+			mseSegments.set(key, { dts, seq: mseSeq++, data: new Uint8Array(u8) });
+			activityObserved = true;
+			mseLastAppendAt = Date.now();
+			signalWake();
+		}
+		function createVideoSourceBufferShim() {
+			const ET = playerWin.EventTarget || EventTarget;
+			const shim = new ET();
+			let shimBufferedEnd = 0;
+			shim.__isRecapVideoShim = true;
+			shim.updating = false;
+			shim.mode = 'segments';
+			shim.timestampOffset = 0;
+			shim.appendWindowStart = 0;
+			shim.appendWindowEnd = Infinity;
+			shim.buffered = {
+				get length() { return shimBufferedEnd > 0 ? 1 : 0; },
+				start: () => 0,
+				end: () => shimBufferedEnd
+			};
+			function fireAsyncUpdate() {
+				shim.updating = true;
+				const tid = setTimeout(() => {
+					activeTimers.delete(tid);
+					shim.updating = false;
+					try {
+						const Ev = playerWin.Event || Event;
+						shim.dispatchEvent(new Ev('updatestart'));
+						shim.dispatchEvent(new Ev('update'));
+						shim.dispatchEvent(new Ev('updateend'));
+					} catch (_) {}
+				}, 0);
+				activeTimers.add(tid);
+			}
+			shim.appendBuffer = (data) => {
+				if (mseMaxBufferedEnd > shimBufferedEnd) shimBufferedEnd = mseMaxBufferedEnd;
+				else if (shimBufferedEnd === 0 && data && data.byteLength) shimBufferedEnd = 0.1;
+				fireAsyncUpdate();
+			};
+			shim.remove = () => { fireAsyncUpdate(); };
+			shim.abort = () => {};
+			shim.changeType = () => {};
+			return shim;
+		}
+		function emitSuppressedSBUpdate(sb) {
+			if (!sb || typeof sb.dispatchEvent !== 'function') return;
+			const tid = setTimeout(() => {
+				activeTimers.delete(tid);
+				try {
+					const Ev = playerWin.Event || Event;
+					sb.dispatchEvent(new Ev('updatestart'));
+					sb.dispatchEvent(new Ev('update'));
+					sb.dispatchEvent(new Ev('updateend'));
+				} catch (_) {}
+			}, 0);
+			activeTimers.add(tid);
+		}
+		function stepVideoPlayback() {
+			if (pathAActive || fatalErr) return;
+			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			if (m) {
+				try {
+					m.muted = true;
+					m.volume = 0;
+					if (m.playbackRate !== 16) m.playbackRate = 16;
+				} catch (_) {}
+			}
+			const sb = audioSBRef;
+			if (sb && sb.buffered && sb.buffered.length > 0) {
+				try {
+					const range0Start = sb.buffered.start(0);
+					const range0End = sb.buffered.end(0);
+					const lastRangeEnd = sb.buffered.end(sb.buffered.length - 1);
+					if (Number.isFinite(lastRangeEnd)) {
+						mseMaxBufferedEnd = Math.max(mseMaxBufferedEnd, lastRangeEnd);
+					}
+					mseHasBufferedGap = sb.buffered.length > 1;
+					if (Number.isFinite(range0Start) && range0Start <= mseContiguousEnd + 0.5 &&
+						Number.isFinite(range0End) && range0End > mseContiguousEnd) {
+						mseContiguousEnd = range0End;
+					}
+					if (Number.isFinite(range0End) && range0End > 0) {
+						const targetTime = Math.max(0, range0End - 0.05);
+						if (m && Number.isFinite(m.currentTime) && targetTime > m.currentTime + 0.01) {
+							m.currentTime = targetTime;
+						}
+						const bufStart = range0Start;
+						const cutoff = range0End - 30;
+						if (Number.isFinite(bufStart) && cutoff > bufStart + 0.5 && !sb.updating && typeof sb.remove === 'function') {
+							try { sb.remove(bufStart, cutoff); } catch (_) {}
+						}
+					}
+				} catch (_) {}
+			}
+		}
+		function normalizeHeaders(hdrs) {
+			const out = {};
+			if (!hdrs) return out;
+			if (Array.isArray(hdrs)) {
+				for (const pair of hdrs) {
+					if (Array.isArray(pair) && pair.length >= 2) out[String(pair[0]).toLowerCase()] = String(pair[1]);
+				}
+			} else if (typeof hdrs.forEach === 'function') {
+				hdrs.forEach((v, k) => { out[String(k).toLowerCase()] = String(v); });
+			} else if (typeof hdrs === 'object') {
+				for (const [k, v] of Object.entries(hdrs)) out[String(k).toLowerCase()] = String(v);
+			}
+			return out;
+		}
+		function inspectTranscodeRequest(rawUrl, headersObj, hookWin) {
+			if (!rawUrl) return { isVideoSegment: false };
+			let u;
+			try {
+				const base = (hookWin && hookWin.location && hookWin.location.href) || pageUrl || String(location.href || '');
+				u = new URL(String(rawUrl), base);
+			} catch (_) {
+				return { isVideoSegment: false };
+			}
+			const part = (u.searchParams.get('part') || '').toLowerCase();
+			const track = (u.searchParams.get('track') || '').toLowerCase();
+			const isTranscode = u.pathname.toLowerCase().includes('onedrive.transcode') || part === 'initsegment' || part === 'mediasegment';
+			if (!isTranscode) return { isVideoSegment: false };
+			if (!isAllowedSameOriginTranscodeURL(u.toString(), hookWin)) return { isVideoSegment: false };
+			if (headersObj) {
+				const originHdrs = capturedAuthHeadersByOrigin[u.origin] || (capturedAuthHeadersByOrigin[u.origin] = Object.create(null));
+				for (const [k, v] of Object.entries(headersObj)) {
+					const kl = String(k).toLowerCase();
+					if (v && allowlistedHeaderNames.includes(kl)) {
+						originHdrs[kl] = String(v);
+					}
+				}
+			}
+			const wsd = Number(u.searchParams.get('wsd'));
+			const ppd = Number(u.searchParams.get('ppd'));
+			if (Number.isFinite(wsd) && wsd > 0) transcodeWsd = wsd;
+			if (Number.isFinite(ppd) && ppd > 0) {
+				transcodePpd = ppd;
+				const ppdSec = ppd >= 1e6 ? (ppd / 1e7) : ppd;
+				if (Number.isFinite(ppdSec) && (ppdSec > maxRecapAudioDurationSec || Math.ceil(ppdSec * 44100) * 2 > maxRecapAudioPCMBytes)) {
+					fatalErr = new Error(limitError);
+					if (abortCtrl) abortCtrl.abort();
+					signalWake();
+				}
+			}
+			if (!transcodeAudioTemplateUrl || track === 'audio') {
+				const tmpl = new URL(u.toString());
+				tmpl.searchParams.set('track', 'audio');
+				tmpl.searchParams.set('quality', 'audcopy');
+				tmpl.searchParams.delete('segmentTime');
+				tmpl.searchParams.delete('part');
+				transcodeAudioTemplateUrl = tmpl.toString();
+			}
+			activityObserved = true;
+			signalWake();
+			maybeStartPathA();
+			return { isVideoSegment: track === 'video' && part === 'mediasegment' && (pathAActive || pathAStarted || (Boolean(transcodeAudioTemplateUrl) && !pathAFailed)), parsedUrl: u };
+		}
+		function maybeStartPathA() {
+			if (pathAStarted || pathAFailed || fatalErr || pathAPromise) return;
+			if (!transcodeAudioTemplateUrl || !(transcodeWsd > 0) || !(transcodePpd > 0)) return;
+			const keyInfo = audioCryptoKeyInfo || fallbackCryptoKeyInfo;
+			if (!keyInfo && !mseInitSegment && !mseSegments.size) return;
+			pathAStarted = true;
+			pathAStartedAt = Date.now();
+			pathAPromise = runPathA(keyInfo).catch(err => {
+				if (hooksRestored || cleaningUp) return null;
+				const msg = String((err && err.message) || err || '');
+				if (msg.includes(limitError) || msg.includes('identity mismatch') || msg.includes('identity unverified')) {
+					fatalErr = err;
+					if (abortCtrl) abortCtrl.abort();
+					signalWake();
+					return null;
+				}
+				pathAActive = false;
+				pathAFailed = true;
+				streamSourceBytes = mseBytesTotal();
+				if (hooksRestored || cleaningUp) return null;
+				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+				if (m && typeof m.play === 'function') {
+					try {
+						m.muted = true;
+						m.volume = 0;
+						m.playbackRate = 16;
+						Promise.resolve(m.play()).catch(() => {});
+					} catch (_) {}
+				}
+				signalWake();
+				return null;
+			});
+		}
+		async function fetchBytesOnce(urlStr, origFetchFn, hookWin, signal) {
+			if (fatalErr) throw fatalErr;
+			const parentSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
+			if (parentSignal && parentSignal.aborted) {
+				throw new Error('transcode fetch aborted');
+			}
+			if (!isAllowedSameOriginTranscodeURL(urlStr, hookWin || playerWin)) {
+				throw new Error('recap audio transcode URL disallowed');
+			}
+			const reqCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+			let timedOut = false;
+			const onParentAbort = () => {
+				if (reqCtrl) {
+					try { reqCtrl.abort(); } catch (_) {}
+				}
+			};
+			if (parentSignal && typeof parentSignal.addEventListener === 'function') {
+				parentSignal.addEventListener('abort', onParentAbort, { once: true });
+			}
+			const reqTimer = setTimeout(() => {
+				timedOut = true;
+				if (reqCtrl) {
+					try { reqCtrl.abort(); } catch (_) {}
+				}
+			}, 15000);
+			activeTimers.add(reqTimer);
+			try {
+				const u = new URL(urlStr);
+				const originHdrs = capturedAuthHeadersByOrigin[u.origin];
+				const hdrs = (originHdrs && Object.keys(originHdrs).length)
+					? Object.assign({}, originHdrs)
+					: undefined;
+				const fetchOpts = {
+					credentials: 'include',
+					signal: reqCtrl ? reqCtrl.signal : parentSignal,
+					headers: hdrs
+				};
+				const resp = await origFetchFn.call(hookWin, urlStr, fetchOpts);
+				if (fatalErr) throw fatalErr;
+				if (parentSignal && parentSignal.aborted) {
+					throw new Error('transcode fetch aborted');
+				}
+				if (timedOut) {
+					const err = new Error('transcode fetch timeout');
+					err.retryable = true;
+					throw err;
+				}
+				if (!resp || !resp.ok) {
+					const st = resp ? Number(resp.status) : 0;
+					const err = new Error('transcode fetch failed: ' + (resp ? resp.status : 'network error'));
+					if (!resp || st === 429 || st >= 500) err.retryable = true;
+					throw err;
+				}
+				const cl = Number(resp.headers && resp.headers.get && resp.headers.get('content-length'));
+				if (Number.isFinite(cl) && cl > 0 && streamSourceBytes + cl > maxRecapAudioSourceBytes) {
+					fatalErr = new Error(limitError);
+					if (abortCtrl) abortCtrl.abort();
+					throw fatalErr;
+				}
+				if (!resp.body || !resp.body.getReader) {
+					const ab = await resp.arrayBuffer();
+					if (fatalErr) throw fatalErr;
+					if (parentSignal && parentSignal.aborted) {
+						throw new Error('transcode fetch aborted');
+					}
+					const u8 = new Uint8Array(ab);
+					if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+						fatalErr = new Error(limitError);
+						if (abortCtrl) abortCtrl.abort();
+						throw fatalErr;
+					}
+					streamSourceBytes += u8.byteLength;
+					return u8;
+				}
+				const reader = resp.body.getReader();
+				const chunks = [];
+				let total = 0;
+				while (true) {
+					if (fatalErr || (parentSignal && parentSignal.aborted)) {
+						try { await reader.cancel(); } catch (_) {}
+						throw (fatalErr || new Error('transcode fetch aborted'));
+					}
+					if (timedOut) {
+						try { await reader.cancel(); } catch (_) {}
+						const err = new Error('transcode fetch timeout');
+						err.retryable = true;
+						throw err;
+					}
+					const part = await reader.read();
+					if (fatalErr || (parentSignal && parentSignal.aborted)) {
+						try { await reader.cancel(); } catch (_) {}
+						throw (fatalErr || new Error('transcode fetch aborted'));
+					}
+					if (part.done) break;
+					const v = part.value;
+					if (!v || !v.byteLength) continue;
+					if (streamSourceBytes + total + v.byteLength > maxRecapAudioSourceBytes) {
+						try { await reader.cancel(); } catch (_) {}
+						fatalErr = new Error(limitError);
+						if (abortCtrl) abortCtrl.abort();
+						throw fatalErr;
+					}
+					total += v.byteLength;
+					chunks.push(v);
+				}
+				if (streamSourceBytes + total > maxRecapAudioSourceBytes) {
+					fatalErr = new Error(limitError);
+					if (abortCtrl) abortCtrl.abort();
+					throw fatalErr;
+				}
+				streamSourceBytes += total;
+				const out = new Uint8Array(total);
+				let off = 0;
+				for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+				return out;
+			} catch (err) {
+				if (timedOut && (!parentSignal || !parentSignal.aborted)) {
+					const tErr = new Error('transcode fetch timeout');
+					tErr.retryable = true;
+					throw tErr;
+				}
+				if (err && (err.name === 'TypeError' || err.name === 'NetworkError') && (!parentSignal || !parentSignal.aborted)) {
+					err.retryable = true;
+				}
+				throw err;
+			} finally {
+				clearTimeout(reqTimer);
+				activeTimers.delete(reqTimer);
+				if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
+					parentSignal.removeEventListener('abort', onParentAbort);
+				}
+			}
+		}
+		async function fetchBytesWithCap(urlStr, origFetchFn, hookWin, signal) {
+			const parentSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
+			let lastAttemptErr = null;
+			for (let attempt = 0; attempt < 3; attempt++) {
+				if (fatalErr) throw fatalErr;
+				if (parentSignal && parentSignal.aborted) {
+					throw new Error('transcode fetch aborted');
+				}
+				try {
+					return await fetchBytesOnce(urlStr, origFetchFn, hookWin, signal);
+				} catch (err) {
+					lastAttemptErr = err;
+					if (fatalErr || !err || !err.retryable || attempt === 2 || (parentSignal && parentSignal.aborted)) {
+						throw err;
+					}
+					await new Promise((resolve, reject) => {
+						let settled = false;
+						let tid = null;
+						const onBackoffAbort = () => {
+							if (settled) return;
+							settled = true;
+							if (tid !== null) {
+								clearTimeout(tid);
+								activeTimers.delete(tid);
+							}
+							reject(new Error('transcode fetch aborted'));
+						};
+						if (parentSignal && parentSignal.aborted) {
+							onBackoffAbort();
+							return;
+						}
+						if (parentSignal && typeof parentSignal.addEventListener === 'function') {
+							parentSignal.addEventListener('abort', onBackoffAbort, { once: true });
+						}
+						tid = setTimeout(() => {
+							if (settled) return;
+							settled = true;
+							activeTimers.delete(tid);
+							if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
+								parentSignal.removeEventListener('abort', onBackoffAbort);
+							}
+							resolve();
+						}, 250 * (attempt + 1));
+						activeTimers.add(tid);
+					});
+				}
+			}
+			throw lastAttemptErr;
+		}
+		async function decryptSegmentBytes(rawU8, keyInfo, origDecryptFn, subtleCtx) {
+			if (isFMP4InitSegment(rawU8) || isFMP4MediaSegment(rawU8)) return rawU8;
+			if (!keyInfo || !origDecryptFn || !subtleCtx) {
+				throw new Error('recap audio missing WebCrypto key for encrypted segment');
+			}
+			if (!keyInfo.prefixIV && keyInfo.iv) {
+				try {
+					const ab = await origDecryptFn.call(subtleCtx, { name: keyInfo.algorithm, iv: keyInfo.iv }, keyInfo.key, rawU8);
+					const dec = new Uint8Array(ab);
+					if (isFMP4InitSegment(dec) || isFMP4MediaSegment(dec)) return dec;
+				} catch (_) {}
+			}
+			if (rawU8.byteLength > 32) {
+				const iv = rawU8.subarray(0, 16);
+				const ct = rawU8.subarray(16);
+				const ab = await origDecryptFn.call(subtleCtx, { name: keyInfo.algorithm, iv }, keyInfo.key, ct);
+				const dec = new Uint8Array(ab);
+				if (isFMP4InitSegment(dec) || isFMP4MediaSegment(dec)) {
+					keyInfo.prefixIV = true;
+					return dec;
+				}
+			}
+			throw new Error('decrypted segment is not valid fMP4');
+		}
+		let origPlayerFetch = (typeof playerWin.fetch === 'function' ? playerWin.fetch : (typeof fetch === 'function' ? fetch : null));
+		let origPlayerDecrypt = (playerWin.crypto && playerWin.crypto.subtle && playerWin.crypto.subtle.decrypt) || null;
+		let origPlayerSubtle = (playerWin.crypto && playerWin.crypto.subtle) || null;
+		let origPlayerFetchWin = playerWin;
+
+		async function runPathA(keyInfo) {
+			if (!isAllowedSameOriginTranscodeURL(transcodeAudioTemplateUrl, playerWin)) {
+				throw new Error('recap audio transcode URL disallowed');
+			}
+			const tState = { matched: false };
+			checkIdentityAgainst(transcodeAudioTemplateUrl, pageUrl, tState);
+			if (enforceIdentity && !baseIdentityMatched && !tState.matched) {
+				throw new Error('recap audio recording identity unverified');
+			}
+			const ppdSec = transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+			if (!Number.isFinite(ppdSec) || ppdSec <= 0 || ppdSec > maxRecapAudioDurationSec || Math.ceil(ppdSec * 44100) * 2 > maxRecapAudioPCMBytes) {
+				throw new Error(limitError);
+			}
+			const totalSegments = Math.ceil(transcodePpd / transcodeWsd);
+			if (!Number.isFinite(totalSegments) || totalSegments < 1 || totalSegments > maxRecapAudioSegments) {
+				throw new Error(limitError);
+			}
+			pathAActive = true;
+			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			if (m && typeof m.pause === 'function') {
+				try { m.pause(); } catch (_) {}
+			}
+			const pathAAbortCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+			const pathASignal = pathAAbortCtrl ? pathAAbortCtrl.signal : undefined;
+			const onOuterAbort = () => {
+				if (pathAAbortCtrl) {
+					try { pathAAbortCtrl.abort(); } catch (_) {}
+				}
+			};
+			if (abortCtrl && abortCtrl.signal) {
+				if (abortCtrl.signal.aborted) onOuterAbort();
+				else if (typeof abortCtrl.signal.addEventListener === 'function') {
+					abortCtrl.signal.addEventListener('abort', onOuterAbort, { once: true });
+				}
+			}
+			const workers = [];
+			try {
+				let initSeg = null;
+				if (cryptoInitSegment) {
+					if (streamSourceBytes + cryptoInitSegment.byteLength > maxRecapAudioSourceBytes) {
+						throw new Error(limitError);
+					}
+					streamSourceBytes += cryptoInitSegment.byteLength;
+					initSeg = cryptoInitSegment;
+				} else if (mseInitSegment) {
+					initSeg = mseInitSegment;
+				} else {
+					const initUrl = new URL(transcodeAudioTemplateUrl);
+					initUrl.searchParams.set('part', 'initsegment');
+					initUrl.searchParams.set('track', 'audio');
+					initUrl.searchParams.set('quality', 'audcopy');
+					const rawInit = await fetchBytesWithCap(initUrl.toString(), origPlayerFetch, origPlayerFetchWin, pathASignal);
+					const decInit = await decryptSegmentBytes(rawInit, keyInfo, origPlayerDecrypt, origPlayerSubtle);
+					if (!isFMP4InitSegment(decInit) || classifyInitSegmentTrack(decInit) === 'video') {
+						throw new Error('transcode initsegment is not audio fMP4');
+					}
+					initSeg = decInit;
+				}
+				const segments = new Array(totalSegments);
+				let nextIdx = 0;
+				async function worker() {
+					while (nextIdx < totalSegments) {
+						if (fatalErr || (abortCtrl && abortCtrl.signal.aborted) || (pathASignal && pathASignal.aborted)) return;
+						const k = nextIdx++;
+						const segUrl = new URL(transcodeAudioTemplateUrl);
+						segUrl.searchParams.set('part', 'mediasegment');
+						segUrl.searchParams.set('track', 'audio');
+						segUrl.searchParams.set('quality', 'audcopy');
+						segUrl.searchParams.set('segmentTime', String(k * transcodeWsd));
+						const rawSeg = await fetchBytesWithCap(segUrl.toString(), origPlayerFetch, origPlayerFetchWin, pathASignal);
+						const decSeg = await decryptSegmentBytes(rawSeg, keyInfo, origPlayerDecrypt, origPlayerSubtle);
+						if (!isFMP4MediaSegment(decSeg)) {
+							throw new Error('transcode mediasegment is not fMP4');
+						}
+						segments[k] = decSeg;
+					}
+				}
+				for (let i = 0; i < Math.min(8, totalSegments); i++) workers.push(worker());
+				await Promise.all(workers);
+				if (fatalErr) throw fatalErr;
+				if (segments.some(s => !s)) throw new Error('incomplete Path A segment set');
+				return { initSegment: initSeg, mediaSegments: segments, selectedMediaUrl: transcodeAudioTemplateUrl };
+			} catch (err) {
+				if (pathAAbortCtrl) {
+					try { pathAAbortCtrl.abort(); } catch (_) {}
+				}
+				if (workers.length) {
+					await Promise.allSettled(workers);
+				}
+				if (fatalErr) throw fatalErr;
+				throw err;
+			} finally {
+				if (abortCtrl && abortCtrl.signal && typeof abortCtrl.signal.removeEventListener === 'function') {
+					abortCtrl.signal.removeEventListener('abort', onOuterAbort);
+				}
+			}
+		}
+
+		function installWindowHooks(w) {
+			if (!w) return;
+			if (w.crypto && w.crypto.subtle && typeof w.crypto.subtle.decrypt === 'function') {
+				const subtle = w.crypto.subtle;
+				const origDecrypt = subtle.decrypt;
+				const hadOwn = Object.prototype.hasOwnProperty.call(subtle, 'decrypt');
+				const origDesc = hadOwn ? Object.getOwnPropertyDescriptor(subtle, 'decrypt') : null;
+				if (w === playerWin || !origPlayerDecrypt) {
+					origPlayerDecrypt = origDecrypt;
+					origPlayerSubtle = subtle;
+				}
+				const wrappedDecrypt = async function(algorithm, key, data) {
+					const algoName = (algorithm && typeof algorithm === 'object' ? String(algorithm.name || '') : String(algorithm || '')).toUpperCase();
+					let ivClone = null;
+					if (algorithm && algorithm.iv) {
+						try {
+							const ivView = toUint8Array(algorithm.iv);
+							if (ivView) ivClone = new Uint8Array(ivView);
+						} catch (_) {}
+					}
+					const plainBuf = await origDecrypt.call(this, algorithm, key, data);
+					try {
+						const u8 = new Uint8Array(plainBuf);
+						if (u8.byteLength > maxRecapAudioSourceBytes) {
+							fatalErr = new Error(limitError);
+							if (abortCtrl) abortCtrl.abort();
+							signalWake();
+						} else if (isFMP4InitSegment(u8)) {
+							if (classifyInitSegmentTrack(u8) === 'audio') {
+								if (!cryptoInitSegment) cryptoInitSegment = new Uint8Array(u8);
+								audioCryptoKeyInfo = { algorithm: algoName || 'AES-CBC', key, iv: ivClone, prefixIV: false };
+								activityObserved = true;
+								signalWake();
+								maybeStartPathA();
+							}
+						} else if (isFMP4MediaSegment(u8)) {
+							if (!audioCryptoKeyInfo && !fallbackCryptoKeyInfo) {
+								fallbackCryptoKeyInfo = { algorithm: algoName || 'AES-CBC', key, iv: ivClone, prefixIV: false };
+							}
+							activityObserved = true;
+							signalWake();
+							maybeStartPathA();
+						}
+					} catch (_) {}
+					return plainBuf;
+				};
+				try {
+					Object.defineProperty(subtle, 'decrypt', { value: wrappedDecrypt, configurable: true, writable: true });
+					restorers.push(() => {
+						try {
+							if (hadOwn && origDesc) Object.defineProperty(subtle, 'decrypt', origDesc);
+							else delete subtle.decrypt;
+						} catch (_) { subtle.decrypt = origDecrypt; }
+					});
+				} catch (_) {}
+			}
+			if (typeof w.fetch === 'function') {
+				const origFetch = w.fetch;
+				if (w === playerWin || !origPlayerFetch) {
+					origPlayerFetch = origFetch;
+					origPlayerFetchWin = w;
+				}
+				w.fetch = function(input, init) {
+					const reqUrl = (input && typeof input === 'object' && 'url' in input) ? input.url : String(input || '');
+					const hdrs = Object.assign(
+						{},
+						(input && typeof input === 'object' && input.headers) ? normalizeHeaders(input.headers) : {},
+						(init && init.headers) ? normalizeHeaders(init.headers) : {}
+					);
+					const reqInfo = inspectTranscodeRequest(reqUrl, hdrs, w);
+					if (reqInfo.isVideoSegment) {
+						return Promise.resolve({
+							ok: true,
+							status: 204,
+							url: String(reqInfo.parsedUrl || reqUrl),
+							headers: { get: () => null },
+							body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) },
+							arrayBuffer: async () => new ArrayBuffer(0)
+						});
+					}
+					return origFetch.apply(this, arguments);
+				};
+				restorers.push(() => { w.fetch = origFetch; });
+			}
+			if (w.XMLHttpRequest && w.XMLHttpRequest.prototype) {
+				const proto = w.XMLHttpRequest.prototype;
+				const origOpen = proto.open;
+				const origSetHeader = proto.setRequestHeader;
+				const origSend = proto.send;
+				let xhrMeta = new WeakMap();
+				const overriddenXhrs = new Map();
+				const overriddenPropNames = ['readyState', 'status', 'response', 'responseText'];
+				function restoreXHRProps(xhr) {
+					const saved = overriddenXhrs.get(xhr);
+					if (!saved) return;
+					for (const entry of saved) {
+						try {
+							if (entry.hadOwn && entry.desc) {
+								Object.defineProperty(xhr, entry.prop, entry.desc);
+							} else {
+								delete xhr[entry.prop];
+							}
+						} catch (_) {}
+					}
+					overriddenXhrs.delete(xhr);
+				}
+				proto.open = function(method, url) {
+					restoreXHRProps(this);
+					xhrMeta.set(this, { method: String(method || 'GET'), url: String(url || ''), headers: {} });
+					return origOpen.apply(this, arguments);
+				};
+				proto.setRequestHeader = function(name, value) {
+					const meta = xhrMeta.get(this);
+					if (meta && name) meta.headers[String(name).toLowerCase()] = String(value);
+					return origSetHeader.apply(this, arguments);
+				};
+				proto.send = function() {
+					const meta = xhrMeta.get(this);
+					if (meta && meta.url) {
+						const reqInfo = inspectTranscodeRequest(meta.url, meta.headers, w);
+						if (reqInfo.isVideoSegment) {
+							try {
+								if (!overriddenXhrs.has(this)) {
+									const saved = [];
+									for (const prop of overriddenPropNames) {
+										const hadOwn = Object.prototype.hasOwnProperty.call(this, prop);
+										const desc = hadOwn ? Object.getOwnPropertyDescriptor(this, prop) : null;
+										saved.push({ prop, hadOwn, desc });
+									}
+									overriddenXhrs.set(this, saved);
+								}
+								Object.defineProperty(this, 'readyState', { value: 4, configurable: true });
+								Object.defineProperty(this, 'status', { value: 204, configurable: true });
+								Object.defineProperty(this, 'response', { value: new ArrayBuffer(0), configurable: true });
+								Object.defineProperty(this, 'responseText', { value: '', configurable: true });
+							} catch (_) {}
+							const self = this;
+							const tid = setTimeout(() => {
+								activeTimers.delete(tid);
+								try {
+									const Ev = w.Event || Event;
+									if (typeof self.dispatchEvent === 'function') {
+										self.dispatchEvent(new Ev('readystatechange'));
+										self.dispatchEvent(new Ev('load'));
+										self.dispatchEvent(new Ev('loadend'));
+									} else {
+										if (typeof self.onreadystatechange === 'function') self.onreadystatechange(new Ev('readystatechange'));
+										if (typeof self.onload === 'function') self.onload(new Ev('load'));
+										if (typeof self.onloadend === 'function') self.onloadend(new Ev('loadend'));
+									}
+								} catch (_) {}
+							}, 0);
+							activeTimers.add(tid);
+							return;
+						}
+					}
+					return origSend.apply(this, arguments);
+				};
+				restorers.push(() => {
+					proto.open = origOpen;
+					proto.setRequestHeader = origSetHeader;
+					proto.send = origSend;
+					for (const xhr of Array.from(overriddenXhrs.keys())) {
+						restoreXHRProps(xhr);
+					}
+					overriddenXhrs.clear();
+					xhrMeta = new WeakMap();
+				});
+			}
+			if (w.MediaSource && w.MediaSource.prototype) {
+				const msProto = w.MediaSource.prototype;
+				const origAddSB = msProto.addSourceBuffer;
+				const origRemoveSB = msProto.removeSourceBuffer;
+				msProto.addSourceBuffer = function(mimeType) {
+					const mime = String(mimeType || '').toLowerCase();
+					activityObserved = true;
+					signalWake();
+					if (mime.includes('video')) {
+						return createVideoSourceBufferShim();
+					}
+					const sb = origAddSB.apply(this, arguments);
+					if (sb) {
+						const cls = mime.includes('audio') ? 'audio' : 'unknown';
+						sbTrackMap.set(sb, cls);
+						if (cls === 'audio') {
+							sb.__isRecapAudioSB = true;
+							audioSBRef = sb;
+						}
+						if (typeof sb.addEventListener === 'function') {
+							const onUpdateEnd = () => { stepVideoPlayback(); };
+							sb.addEventListener('updateend', onUpdateEnd);
+							trackedListeners.push({ target: sb, type: 'updateend', fn: onUpdateEnd });
+						}
+					}
+					return sb;
+				};
+				if (typeof origRemoveSB === 'function') {
+					msProto.removeSourceBuffer = function(sb) {
+						if (sb && sb.__isRecapVideoShim) return;
+						return origRemoveSB.apply(this, arguments);
+					};
+				}
+				restorers.push(() => {
+					msProto.addSourceBuffer = origAddSB;
+					if (typeof origRemoveSB === 'function') msProto.removeSourceBuffer = origRemoveSB;
+				});
+			}
+			if (w.SourceBuffer && w.SourceBuffer.prototype) {
+				const sbProto = w.SourceBuffer.prototype;
+				const origAppend = sbProto.appendBuffer;
+				sbProto.appendBuffer = function(data) {
+					if (this && this.__isRecapVideoShim) return this.appendBuffer(data);
+					if (this && (sbTrackMap.get(this) === 'video' || (this.mime && String(this.mime).toLowerCase().includes('video')))) {
+						sbTrackMap.set(this, 'video');
+						emitSuppressedSBUpdate(this);
+						return;
+					}
+					const u8 = toUint8Array(data);
+					if (u8 && isFMP4InitSegment(u8)) {
+						const initCls = classifyInitSegmentTrack(u8);
+						if (initCls === 'video') {
+							if (this) {
+								sbTrackMap.set(this, 'video');
+								emitSuppressedSBUpdate(this);
+							}
+							return;
+						}
+						if (this) {
+							if (initCls === 'audio') {
+								sbTrackMap.set(this, 'audio');
+								this.__isRecapAudioSB = true;
+								audioSBRef = this;
+							} else if (!sbTrackMap.has(this)) {
+								sbTrackMap.set(this, 'unknown');
+							}
+						}
+						if ((this && sbTrackMap.get(this) === 'audio') || initCls === 'audio') {
+							recordMSESegment(u8);
+						}
+					} else if (u8 && isFMP4MediaSegment(u8)) {
+						const cls = this ? sbTrackMap.get(this) : undefined;
+						if (cls === 'audio') {
+							if (this) audioSBRef = this;
+							recordMSESegment(u8);
+						}
+					}
+					if (fatalErr) return;
+					if (this && sbTrackMap.get(this) === 'audio' && this.buffered && this.buffered.length > 0) {
+						try {
+							const e = this.buffered.end(this.buffered.length - 1);
+							if (Number.isFinite(e) && e > mseMaxBufferedEnd) mseMaxBufferedEnd = e;
+						} catch (_) {}
+					}
+					return origAppend.apply(this, arguments);
+				};
+				restorers.push(() => { sbProto.appendBuffer = origAppend; });
+			}
+		}
+		function cleanupHooks() {
+			if (hooksRestored) return;
+			hooksRestored = true;
+			for (const tid of activeTimers) clearTimeout(tid);
+			activeTimers.clear();
+			for (const item of trackedListeners) {
+				try {
+					if (item.target && typeof item.target.removeEventListener === 'function') {
+						item.target.removeEventListener(item.type, item.fn);
+					}
+				} catch (_) {}
+			}
+			for (let i = restorers.length - 1; i >= 0; i--) {
+				try { restorers[i](); } catch (_) {}
+			}
+			if (abortCtrl) {
+				try { abortCtrl.abort(); } catch (_) {}
+			}
+			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			if (m && typeof m.pause === 'function') {
+				try { m.pause(); } catch (_) {}
+			}
+		}
+
+		try {
+			installWindowHooks(playerWin);
+			if (playerWin !== window) installWindowHooks(window);
+
+			let playTriggered = false;
+			function triggerPlaybackIfReady() {
+				if (playTriggered) return;
+				const btn = playerDoc.querySelector ? playerDoc.querySelector(playBtnSelector) : null;
+				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+				if (m) {
+					try {
+						m.muted = true;
+						m.volume = 0;
+						m.playbackRate = 16;
+					} catch (_) {}
+				}
+				if (btn && typeof btn.click === 'function') {
+					playTriggered = true;
+					btn.click();
+				}
+				if (m && typeof m.play === 'function') {
+					playTriggered = true;
+					try { Promise.resolve(m.play()).catch(() => {}); } catch (_) {}
+				}
+			}
+			triggerPlaybackIfReady();
+
+			const startedAt = Date.now();
+			const deadlineAt = startedAt + 120000;
+			const initialActivityTimeoutMs = 10000;
+			let pathAResult = null;
+
+			while (Date.now() < deadlineAt) {
+				if (!playTriggered) triggerPlaybackIfReady();
+				if (fatalErr) throw fatalErr;
+				maybeStartPathA();
+				if (pathAPromise) {
+					const settled = await Promise.race([
+						pathAPromise.then(res => ({ done: true, res })),
+						sleepOrWake(25).then(() => ({ done: false }))
+					]);
+					if (fatalErr) throw fatalErr;
+					if (settled.done && settled.res) {
+						pathAResult = settled.res;
+						break;
+					}
+					if (settled.done && !settled.res) {
+						pathAPromise = null;
+					}
+				} else {
+					await sleepOrWake(25);
+				}
+				if (fatalErr) throw fatalErr;
+				if (!activityObserved && Date.now() - startedAt >= initialActivityTimeoutMs) {
+					break;
+				}
+				if (!pathAActive) {
+					stepVideoPlayback();
+					const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+					const targetDur = (() => {
+						for (const raw of [m && m.duration, info.duration, info.durationSeconds]) {
+							const d = Number(raw);
+							if (Number.isFinite(d) && d > 0) return d;
+						}
+						if (transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+						return 0;
+					})();
+					if (mseInitSegment && mseSegments.size > 0) {
+						if (m && m.ended) {
+							if (!(targetDur > 0) || (!mseHasBufferedGap && mseContiguousEnd >= targetDur - 0.5)) break;
+						} else if (targetDur > 0) {
+							if (!mseHasBufferedGap && mseContiguousEnd >= targetDur - 0.5 && Date.now() - mseLastAppendAt >= 150) break;
+						}
+					}
+				}
+			}
+			if (pathAResult && pathAStartedAt > 0) {
+				const settleRemaining = 80 - (Date.now() - pathAStartedAt);
+				if (settleRemaining > 0) {
+					await new Promise(resolve => {
+						const tid = setTimeout(() => { activeTimers.delete(tid); resolve(); }, settleRemaining);
+						activeTimers.add(tid);
+					});
+				}
+			}
+			if (fatalErr) throw fatalErr;
+
+			let initSegment = null;
+			let orderedSegments = [];
+			let selectedMediaUrl = '';
+			if (pathAResult) {
+				initSegment = pathAResult.initSegment;
+				orderedSegments = pathAResult.mediaSegments;
+				selectedMediaUrl = pathAResult.selectedMediaUrl;
+			} else {
+				initSegment = mseInitSegment;
+				orderedSegments = Array.from(mseSegments.values()).sort((a, b) => {
+					if (a.dts !== null && b.dts !== null && a.dts !== b.dts) return a.dts - b.dts;
+					if (a.dts !== null && b.dts === null) return -1;
+					if (a.dts === null && b.dts !== null) return 1;
+					return a.seq - b.seq;
+				}).map(item => item.data);
+				selectedMediaUrl = transcodeAudioTemplateUrl || (candidates.length ? candidates[0] : pageUrl);
+			}
+
+			if (!initSegment || !orderedSegments.length) {
+				if (pathAPromise && !pathAFailed && !pathAResult) {
+					throw new Error('recap audio Path A capture deadline exceeded');
+				}
+				throw (blockedErr || lastFetchErr || new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)'));
+			}
+			if (!pathAResult && enforceIdentity && !baseIdentityMatched) {
+				const tState = { matched: false };
+				if (transcodeAudioTemplateUrl) {
+					checkIdentityAgainst(transcodeAudioTemplateUrl, pageUrl, tState);
+				}
+				if (!tState.matched) {
+					throw new Error('recap audio recording identity unverified');
+				}
+			}
+			const curMedia = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			if (!pathAResult && mseInitSegment && mseSegments.size > 0) {
+				stepVideoPlayback();
+				const finalTargetDur = (() => {
+					for (const raw of [curMedia && curMedia.duration, info.duration, info.durationSeconds]) {
+						const d = Number(raw);
+						if (Number.isFinite(d) && d > 0) return d;
+					}
+					if (Number.isFinite(transcodePpd) && transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+					return 0;
+				})();
+				if (finalTargetDur <= 0 && (!(curMedia && curMedia.ended) || !(mseMaxBufferedEnd > 0))) {
+					throw new Error('recap audio MSE stream duration unverified');
+				}
+				if (finalTargetDur > 0 && (mseHasBufferedGap || mseContiguousEnd < finalTargetDur - 0.5)) {
+					throw new Error('recap audio MSE stream incomplete before deadline');
+				}
+			}
+			const totalSourceBytes = initSegment.byteLength + orderedSegments.reduce((n, s) => n + s.byteLength, 0);
+			if (totalSourceBytes > maxRecapAudioSourceBytes) {
+				throw new Error(limitError);
+			}
+			for (const rawDuration of [curMedia && curMedia.duration, info.duration, info.durationSeconds, mseMaxBufferedEnd]) {
+				const d = Number(rawDuration);
+				if (Number.isFinite(d) && d > 0 &&
+					(d > maxRecapAudioDurationSec || Math.ceil(d * 44100) * 2 > maxRecapAudioPCMBytes)) {
+					throw new Error(limitError);
+				}
+			}
+			const combined = new Uint8Array(totalSourceBytes);
+			combined.set(initSegment, 0);
+			let off = initSegment.byteLength;
+			for (const seg of orderedSegments) {
+				combined.set(seg, off);
+				off += seg.byteLength;
+			}
+			const AudioCtxCtor = getAudioCtxCtor();
+			if (!AudioCtxCtor) {
+				throw new Error('recap audio AudioContext unavailable');
+			}
+			const audioContext = new AudioCtxCtor({sampleRate: 44100});
+			try {
+				const pcmState = { totalDurationSec: 0, totalPCMBytes: 0, pcmChunks: [] };
+				try {
+					const buf = await audioContext.decodeAudioData(combined.buffer);
+					decodeAudioBufferToPCMChunks(buf, pcmState);
+				} catch (singleErr) {
+					const singleMsg = String((singleErr && singleErr.message) || singleErr || '');
+					if (singleMsg.includes(limitError)) throw singleErr;
+					if (orderedSegments.length <= 1) throw singleErr;
+					pcmState.totalDurationSec = 0;
+					pcmState.totalPCMBytes = 0;
+					pcmState.pcmChunks = [];
+					for (const seg of orderedSegments) {
+						const zeroed = zeroFMP4DecodeTime(seg);
+						const segBuf = new Uint8Array(initSegment.byteLength + zeroed.byteLength);
+						segBuf.set(initSegment, 0);
+						segBuf.set(zeroed, initSegment.byteLength);
+						const buf = await audioContext.decodeAudioData(segBuf.buffer);
+						decodeAudioBufferToPCMChunks(buf, pcmState);
+					}
+				}
+				if (pcmState.totalPCMBytes > 4*1024*1024) {
+					window.__goTeamsRecapAudioTransfer = { chunks: pcmState.pcmChunks };
+					return JSON.stringify({
+						pageUrl,
+						itemId,
+						fileName,
+						mediaUrl: sanitizeMediaUrl(selectedMediaUrl),
+						sourceBytes: totalSourceBytes,
+						durationSec: pcmState.totalDurationSec,
+						transferPending: true,
+						chunkCount: pcmState.pcmChunks.length
+					});
+				}
+				return JSON.stringify({
+					pageUrl,
+					itemId,
+					fileName,
+					mediaUrl: sanitizeMediaUrl(selectedMediaUrl),
+					sourceBytes: totalSourceBytes,
+					durationSec: pcmState.totalDurationSec,
+					pcmChunks: pcmState.pcmChunks
+				});
+			} finally {
+				await audioContext.close();
+			}
+		} finally {
+			cleaningUp = true;
+			if (abortCtrl) {
+				try { abortCtrl.abort(); } catch (_) {}
+			}
+			if (pathAPromise) {
+				let settleTid = null;
+				try {
+					await Promise.race([
+						Promise.allSettled([pathAPromise]),
+						new Promise(resolve => {
+							settleTid = setTimeout(resolve, 250);
+							activeTimers.add(settleTid);
+						})
+					]);
+				} finally {
+					if (settleTid !== null) {
+						clearTimeout(settleTid);
+						activeTimers.delete(settleTid);
+					}
+				}
+			}
+			cleanupHooks();
+		}
+	}
+
+	if (streamSurface) {
+		try {
+			return await captureStreamEmbedAudio();
+		} catch (streamErr) {
+			const msg = String((streamErr && streamErr.message) || streamErr || '');
+			if (msg.includes(limitError) || msg.includes('identity mismatch') || msg.includes('identity unverified') ||
+				msg.includes('MSE stream') || msg.includes('deadline')) {
+				throw streamErr;
+			}
+			if (blockedErr) throw blockedErr;
+			if (info.isDownloadBlocked) {
+				throw new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+			}
+			throw (streamErr || lastFetchErr || new Error('recap audio fetch failed'));
+		}
 	}
 	throw (blockedErr || lastFetchErr || new Error('recap audio fetch failed'));
 })()`
@@ -274,25 +1822,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 	if port <= 0 || ownerID == "" || w == nil {
 		return fmt.Errorf("browser: recap audio requires a bound CDP page and writer")
 	}
-	targets, err := listCDPTargets(port)
-	if err != nil {
-		return fmt.Errorf("browser: list recap audio targets: %w", err)
-	}
-	var owner *cdpTargetInfo
-	for i := range targets {
-		if targets[i].Type == "page" && targets[i].ID == ownerID && targets[i].WebSocketDebuggerURL != "" {
-			owner = &targets[i]
-			break
-		}
-	}
-	if owner == nil {
-		return fmt.Errorf("browser: recap audio page is unavailable")
-	}
 	expected := ExtractMeetingIdentity(meetingURL)
-	if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(owner.URL)) {
-		return fmt.Errorf("browser: recap audio page does not match requested recording")
-	}
-	frames := fetchOwnedFrames(ctx, owner.WebSocketDebuggerURL)
 	expectedJSON, err := json.Marshal(expected)
 	if err != nil {
 		return fmt.Errorf("browser: encode recap audio identity: %w", err)
@@ -301,98 +1831,292 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 	// in the same execution context do not redeclare global lexical bindings.
 	expr := fmt.Sprintf("(() => {\nconst maxRecapAudioSourceBytes=%d, maxRecapAudioDurationSec=%d, maxRecapAudioPCMBytes=%d, recapExpectedIdentity=%s;\nreturn %s;\n})()",
 		maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes, expectedJSON, extractRecapAudioJS)
+
 	var lastErr error
+	errPriority := func(err error) int {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "exceeds maximum supported size/duration"):
+			return 3
+		case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"),
+			strings.Contains(msg, "MSE stream"), strings.Contains(msg, "Path A capture deadline exceeded"):
+			return 2
+		case strings.Contains(msg, "isDownloadBlocked=true"):
+			return 1
+		default:
+			return 0
+		}
+	}
 	setLastErr := func(err error) {
 		if err == nil {
 			return
 		}
-		if lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true") && !strings.Contains(err.Error(), "isDownloadBlocked=true") {
+		if lastErr != nil && errPriority(lastErr) > errPriority(err) {
 			return
 		}
 		lastErr = err
 	}
-	for _, target := range targets {
-		if !isTargetInCaptureScope(target, ownerID, frames) ||
-			hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
-			continue
+
+	const maxAttempts = 8
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("browser: recap audio cancelled: %w", err)
 		}
-		raw, evalErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
-		if evalErr != nil {
-			setLastErr(evalErr)
-			continue
-		}
-		if raw == "" {
-			continue
-		}
-		var payload struct {
-			PageURL     string   `json:"pageUrl"`
-			ItemID      string   `json:"itemId"`
-			FileName    string   `json:"fileName"`
-			MediaURL    string   `json:"mediaUrl"`
-			SourceBytes int64    `json:"sourceBytes"`
-			DurationSec float64  `json:"durationSec"`
-			PCMChunks   []string `json:"pcmChunks"`
-			Error       string   `json:"error"`
-		}
-		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-			setLastErr(fmt.Errorf("browser: invalid recap audio payload: %w", err))
-			continue
-		}
-		pageIdentity := recapAudioIdentity(payload.PageURL)
-		mediaIdentity := recapAudioIdentity(payload.MediaURL)
-		if hasMeetingIdentityConflict(expected, pageIdentity) ||
-			hasMeetingIdentityConflict(expected, mediaIdentity) ||
-			(expected.DriveItemID != "" && payload.ItemID != "" && !strings.EqualFold(expected.DriveItemID, payload.ItemID)) ||
-			(expected.RecordingName != "" && payload.FileName != "" && !strings.EqualFold(expected.RecordingName, payload.FileName)) {
-			setLastErr(fmt.Errorf("browser: recap audio recording identity mismatch"))
-			continue
-		}
-		if expected != (MeetingIdentity{}) &&
-			!hasRecapAudioIdentityMatch(expected, pageIdentity) &&
-			!hasRecapAudioIdentityMatch(expected, mediaIdentity) &&
-			!(expected.DriveItemID != "" && strings.EqualFold(expected.DriveItemID, payload.ItemID)) &&
-			!(expected.RecordingName != "" && strings.EqualFold(expected.RecordingName, payload.FileName)) {
-			setLastErr(fmt.Errorf("browser: recap audio recording identity unverified"))
-			continue
-		}
-		if payload.Error != "" {
-			setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
-			continue
-		}
-		if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
-			math.IsNaN(payload.DurationSec) || payload.DurationSec < 0 || payload.DurationSec > float64(maxRecapAudioDurationSec) {
-			return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
-		}
-		var size int64
-		for _, chunk := range payload.PCMChunks {
-			n := int64(base64.StdEncoding.DecodedLen(len(chunk)))
-			if strings.HasSuffix(chunk, "==") {
-				n -= 2
-			} else if strings.HasSuffix(chunk, "=") {
-				n--
+		targets, listErr := listCDPTargets(port)
+		if listErr != nil {
+			if attempt == 0 {
+				return fmt.Errorf("browser: list recap audio targets: %w", listErr)
 			}
-			size += n
-			if size > int64(maxRecapAudioPCMBytes) {
+			break
+		}
+		var owner *cdpTargetInfo
+		for i := range targets {
+			if targets[i].Type == "page" && targets[i].ID == ownerID && targets[i].WebSocketDebuggerURL != "" {
+				owner = &targets[i]
+				break
+			}
+		}
+		if owner == nil {
+			return fmt.Errorf("browser: recap audio page is unavailable")
+		}
+		if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(owner.URL)) {
+			return fmt.Errorf("browser: recap audio page does not match requested recording")
+		}
+		frames := expandOwnedFrames(targets, ownerID, fetchOwnedFrames(ctx, owner.WebSocketDebuggerURL))
+		orderedTargets := make([]cdpTargetInfo, len(targets))
+		copy(orderedTargets, targets)
+		hasStreamEmbedTarget := false
+		hasXplatTarget := false
+		for _, t := range orderedTargets {
+			if !isTargetInCaptureScope(t, ownerID, frames) {
+				continue
+			}
+			lowerURL := strings.ToLower(t.URL)
+			if strings.Contains(lowerURL, "streamembed.aspx") {
+				hasStreamEmbedTarget = true
+			}
+			if strings.Contains(lowerURL, "xplatplugins.aspx") {
+				hasXplatTarget = true
+			}
+		}
+		recapTargetRank := func(t cdpTargetInfo) int {
+			lowerURL := strings.ToLower(t.URL)
+			if t.Type == "iframe" {
+				if strings.Contains(lowerURL, "streamembed.aspx") {
+					return 0
+				}
+				if strings.Contains(lowerURL, "xplatplugins.aspx") {
+					return 1
+				}
+				return 2
+			}
+			return 3
+		}
+		sort.SliceStable(orderedTargets, func(i, j int) bool {
+			return recapTargetRank(orderedTargets[i]) < recapTargetRank(orderedTargets[j])
+		})
+		for _, target := range orderedTargets {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("browser: recap audio cancelled: %w", err)
+			}
+			if isAuthRedirectURL(target.URL) {
+				continue
+			}
+			if !isTargetInCaptureScope(target, ownerID, frames) ||
+				hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
+				continue
+			}
+			tStart := time.Now()
+			raw, evalErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
+			slog.Debug("browser: recap audio eval finished", "elapsed", time.Since(tStart).Round(time.Millisecond), "raw_len", len(raw), "err", evalErr)
+			if evalErr != nil {
+				setLastErr(evalErr)
+				continue
+			}
+			if raw == "" {
+				continue
+			}
+			var payload struct {
+				PageURL         string   `json:"pageUrl"`
+				ItemID          string   `json:"itemId"`
+				FileName        string   `json:"fileName"`
+				MediaURL        string   `json:"mediaUrl"`
+				SourceBytes     int64    `json:"sourceBytes"`
+				DurationSec     float64  `json:"durationSec"`
+				PCMChunks       []string `json:"pcmChunks"`
+				TransferPending bool     `json:"transferPending"`
+				ChunkCount      int      `json:"chunkCount"`
+				Error           string   `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+				setLastErr(fmt.Errorf("browser: invalid recap audio payload: %w", err))
+				continue
+			}
+			var pullSess *cdpEvalSession
+			transferCleaned := false
+			cleanupPendingTransfer := func() {
+				if !payload.TransferPending || transferCleaned {
+					return
+				}
+				transferCleaned = true
+				cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cleanCancel()
+				const clearTransferJS = `(() => { delete window.__goTeamsRecapAudioTransfer; return ""; })()`
+				if pullSess != nil {
+					// Best-effort cleanup of transfer buffer before closing session.
+					_, _ = pullSess.eval(cleanCtx, clearTransferJS, 2*time.Second)
+					pullSess.close()
+					pullSess = nil
+					return
+				}
+				// Best-effort one-shot cleanup when transfer session has not opened yet.
+				_, _ = evalInCDPTarget(cleanCtx, target.WebSocketDebuggerURL, clearTransferJS)
+			}
+			slog.Debug("browser: recap audio unmarshaled", "elapsed", time.Since(tStart).Round(time.Millisecond), "chunks", len(payload.PCMChunks), "transfer_pending", payload.TransferPending, "chunk_count", payload.ChunkCount, "duration_sec", payload.DurationSec)
+			pageIdentity := recapAudioIdentity(payload.PageURL)
+			mediaIdentity := recapAudioIdentity(payload.MediaURL)
+			if hasMeetingIdentityConflict(expected, pageIdentity) ||
+				hasMeetingIdentityConflict(expected, mediaIdentity) ||
+				(expected.DriveItemID != "" && payload.ItemID != "" && !strings.EqualFold(expected.DriveItemID, payload.ItemID)) ||
+				(expected.RecordingName != "" && payload.FileName != "" && !strings.EqualFold(expected.RecordingName, payload.FileName)) {
+				cleanupPendingTransfer()
+				setLastErr(fmt.Errorf("browser: recap audio recording identity mismatch"))
+				continue
+			}
+			if expected != (MeetingIdentity{}) &&
+				!hasRecapAudioIdentityMatch(expected, pageIdentity) &&
+				!hasRecapAudioIdentityMatch(expected, mediaIdentity) &&
+				!(expected.DriveItemID != "" && strings.EqualFold(expected.DriveItemID, payload.ItemID)) &&
+				!(expected.RecordingName != "" && strings.EqualFold(expected.RecordingName, payload.FileName)) {
+				cleanupPendingTransfer()
+				setLastErr(fmt.Errorf("browser: recap audio recording identity unverified"))
+				continue
+			}
+			if payload.Error != "" {
+				cleanupPendingTransfer()
+				setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
+				continue
+			}
+			if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
+				math.IsNaN(payload.DurationSec) || payload.DurationSec < 0 || payload.DurationSec > float64(maxRecapAudioDurationSec) {
+				cleanupPendingTransfer()
 				return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
 			}
-		}
-		if len(payload.PCMChunks) == 0 || size == 0 {
-			continue
-		}
-		enc := audio.NewEncoder(w, audio.SampleRate)
-		for _, chunk := range payload.PCMChunks {
-			samples, err := decodeAudioPayload(chunk)
-			if err != nil {
-				return fmt.Errorf("browser: recap audio: %w", err)
+			if payload.TransferPending {
+				if payload.ChunkCount <= 0 {
+					cleanupPendingTransfer()
+					continue
+				}
+				var sessErr error
+				pullSess, sessErr = newCDPEvalSession(ctx, target.WebSocketDebuggerURL, int64(maxRecapAudioPCMBytes)*2+65536)
+				if sessErr != nil {
+					cleanupPendingTransfer()
+					return fmt.Errorf("browser: open recap audio transfer session: %w", sessErr)
+				}
+				enc := audio.NewEncoder(w, audio.SampleRate)
+				var size int64
+				for pulled := 0; pulled < payload.ChunkCount; {
+					if err := ctx.Err(); err != nil {
+						cleanupPendingTransfer()
+						return fmt.Errorf("browser: recap audio cancelled: %w", err)
+					}
+					batchRaw, pullErr := pullSess.eval(ctx, `(() => {
+						const t = window.__goTeamsRecapAudioTransfer;
+						if (!t || !Array.isArray(t.chunks)) return "[]";
+						return JSON.stringify(t.chunks.splice(0, 64));
+					})()`, 30*time.Second)
+					if pullErr != nil {
+						cleanupPendingTransfer()
+						return fmt.Errorf("browser: pull recap audio chunk batch: %w", pullErr)
+					}
+					var batch []string
+					if err := json.Unmarshal([]byte(batchRaw), &batch); err != nil {
+						cleanupPendingTransfer()
+						return fmt.Errorf("browser: decode recap audio chunk batch: %w", err)
+					}
+					if len(batch) == 0 {
+						cleanupPendingTransfer()
+						return fmt.Errorf("browser: incomplete recap audio chunk transfer (%d of %d chunks)", pulled, payload.ChunkCount)
+					}
+					for _, chunk := range batch {
+						n := int64(base64.StdEncoding.DecodedLen(len(chunk)))
+						if strings.HasSuffix(chunk, "==") {
+							n -= 2
+						} else if strings.HasSuffix(chunk, "=") {
+							n--
+						}
+						size += n
+						if size > int64(maxRecapAudioPCMBytes) {
+							cleanupPendingTransfer()
+							return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
+						}
+						samples, decErr := decodeAudioPayload(chunk)
+						if decErr != nil {
+							cleanupPendingTransfer()
+							return fmt.Errorf("browser: recap audio: %w", decErr)
+						}
+						if writeErr := enc.WritePCM(samples); writeErr != nil {
+							cleanupPendingTransfer()
+							return fmt.Errorf("browser: encode recap audio: %w", writeErr)
+						}
+					}
+					pulled += len(batch)
+				}
+				cleanupPendingTransfer()
+				if size == 0 {
+					continue
+				}
+				if err := enc.Flush(); err != nil {
+					return fmt.Errorf("browser: flush recap audio: %w", err)
+				}
+				slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
+				return nil
 			}
-			if err := enc.WritePCM(samples); err != nil {
-				return fmt.Errorf("browser: encode recap audio: %w", err)
+			var size int64
+			for _, chunk := range payload.PCMChunks {
+				n := int64(base64.StdEncoding.DecodedLen(len(chunk)))
+				if strings.HasSuffix(chunk, "==") {
+					n -= 2
+				} else if strings.HasSuffix(chunk, "=") {
+					n--
+				}
+				size += n
+				if size > int64(maxRecapAudioPCMBytes) {
+					return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
+				}
 			}
+			if len(payload.PCMChunks) == 0 || size == 0 {
+				continue
+			}
+			enc := audio.NewEncoder(w, audio.SampleRate)
+			for _, chunk := range payload.PCMChunks {
+				samples, err := decodeAudioPayload(chunk)
+				if err != nil {
+					return fmt.Errorf("browser: recap audio: %w", err)
+				}
+				if err := enc.WritePCM(samples); err != nil {
+					return fmt.Errorf("browser: encode recap audio: %w", err)
+				}
+			}
+			if err := enc.Flush(); err != nil {
+				return fmt.Errorf("browser: flush recap audio: %w", err)
+			}
+			slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
+			return nil
 		}
-		if err := enc.Flush(); err != nil {
-			return fmt.Errorf("browser: flush recap audio: %w", err)
+		shouldRetry := !hasStreamEmbedTarget && attempt < maxAttempts-1 &&
+			((lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true")) ||
+				(lastErr == nil && hasXplatTarget))
+		if !shouldRetry {
+			break
 		}
-		return nil
+		timer := time.NewTimer(1 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("browser: recap audio cancelled: %w", ctx.Err())
+		case <-timer.C:
+		}
 	}
 	if lastErr != nil {
 		return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
@@ -673,6 +2397,36 @@ func (s ownedFrameSet) contains(t cdpTargetInfo) bool {
 	return t.ID != "" && s.ids[t.ID]
 }
 
+func expandOwnedFrames(targets []cdpTargetInfo, capturePageID string, base ownedFrameSet) ownedFrameSet {
+	out := ownedFrameSet{
+		ids: make(map[string]bool, len(base.ids)),
+	}
+	for id, ok := range base.ids {
+		if ok && id != "" {
+			out.ids[id] = true
+		}
+	}
+	if capturePageID == "" {
+		return out
+	}
+	for {
+		added := false
+		for _, t := range targets {
+			if t.ID == "" || out.ids[t.ID] || t.ParentID == "" {
+				continue
+			}
+			if t.ParentID == capturePageID || out.ids[t.ParentID] {
+				out.ids[t.ID] = true
+				added = true
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return out
+}
+
 // isTargetInCaptureScope reports whether t belongs to the active capture page
 // (either the page tab itself or one of its child iframes in ownedFrames) so
 // unrelated open or restored browser tabs are never scraped or attached.
@@ -692,9 +2446,9 @@ func isTargetInCaptureScope(t cdpTargetInfo, capturePageID string, ownedFrames o
 	// Real Chromium/Edge /json/list populates parentId on out-of-process
 	// iframes (OOPIFs such as cross-origin SharePoint xplatplugins.aspx), while
 	// Page.getFrameTree only lists same-process local frames. Check parentId
-	// first when present, and fall back to Page.getFrameTree frame IDs.
+	// against capturePageID and ownedFrames first, then fall back to frame IDs.
 	if t.ParentID != "" {
-		return t.ParentID == capturePageID
+		return t.ParentID == capturePageID || ownedFrames.ids[t.ParentID] || ownedFrames.contains(t)
 	}
 	return ownedFrames.contains(t)
 }
@@ -1164,7 +2918,8 @@ const extractRecapTranscriptJS = `(() => {
 	const fi = window.g_fileInfo || {};
 	const fileTitle = fi.title ? String(fi.title).trim() : '';
 	const fileName = fi.name ? String(fi.name).trim() : '';
-	const itemId = String(fi.id || fi.VroomItemID || fi.VroomItemId || fi.docId || '').trim();
+	const itemId = String(fi.VroomItemID || fi.VroomItemId || fi.itemId || fi.driveItemId || fi.id || fi.docId || '').trim();
+	const driveItemId = String(fi.VroomItemID || fi.VroomItemId || fi.itemId || fi.driveItemId || '').trim();
 	const pageUrl = String(location.href || '');
 	const fileStart = String(fi.CreatedDateTime || fi.TimeCreated || fi.creationTime || fi.lastModifiedTime || fi.name || '').trim();
 	const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '';
@@ -1181,13 +2936,13 @@ const extractRecapTranscriptJS = `(() => {
 					text: String(it.text || '').trim(),
 					type: String(it.type || 'Text')
 				}));
-				return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
+				return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, driveItemId: driveItemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
 			}
 		}
 	}
 	const cells = Array.from(document.querySelectorAll('.ms-List-cell, [data-transcript-entry-id]'));
 	if (cells.length === 0) {
-		return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries: [] });
+		return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, driveItemId: driveItemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries: [] });
 	}
 	const entries = [];
 	const seen = new Set();
@@ -1209,7 +2964,7 @@ const extractRecapTranscriptJS = `(() => {
 			type: 'Text'
 		});
 	}
-	return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
+	return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, driveItemId: driveItemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
 })()`
 
 const extractRecapPageMetadataJS = `(() => {
@@ -1224,13 +2979,14 @@ const extractRecapPageMetadataJS = `(() => {
 })()`
 
 type rawRecapPayload struct {
-	Title     string `json:"title"`
-	FileName  string `json:"fileName"`
-	ItemID    string `json:"itemId"`
-	PageURL   string `json:"pageUrl"`
-	StartTime string `json:"startTime"`
-	Timezone  string `json:"timezone"`
-	Entries   []struct {
+	Title       string `json:"title"`
+	FileName    string `json:"fileName"`
+	ItemID      string `json:"itemId"`
+	DriveItemID string `json:"driveItemId"`
+	PageURL     string `json:"pageUrl"`
+	StartTime   string `json:"startTime"`
+	Timezone    string `json:"timezone"`
+	Entries     []struct {
 		Speaker   string `json:"speaker"`
 		Timestamp string `json:"timestamp"`
 		Text      string `json:"text"`
@@ -1590,6 +3346,65 @@ func evalInCDPTargetWithin(ctx context.Context, wsURL, expr string, timeout time
 	return evalInCDPTargetWithLimit(ctx, wsURL, expr, timeout, int64(maxRecapAudioPCMBytes)*2+65536)
 }
 
+type cdpEvalSession struct {
+	wsURL string
+	limit int64
+	conn  net.Conn
+	reqID int
+}
+
+func newCDPEvalSession(ctx context.Context, wsURL string, limit int64) (*cdpEvalSession, error) {
+	s := &cdpEvalSession{wsURL: wsURL, limit: limit}
+	if err := s.dial(ctx); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *cdpEvalSession) dial(ctx context.Context) error {
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, _, _, err := ws.Dial(dialCtx, s.wsURL)
+	if err != nil {
+		return err
+	}
+	s.conn = conn
+	return nil
+}
+
+func (s *cdpEvalSession) close() {
+	if s.conn != nil {
+		_ = s.conn.Close() // Best-effort CDP WebSocket close on session teardown.
+		s.conn = nil
+	}
+}
+
+func (s *cdpEvalSession) eval(ctx context.Context, expr string, timeout time.Duration) (string, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		if s.conn == nil {
+			if err := s.dial(ctx); err != nil {
+				return "", err
+			}
+		}
+		s.reqID++
+		res, err := evalOnCDPConn(ctx, s.conn, s.reqID, expr, timeout, s.limit)
+		if err == nil {
+			return res, nil
+		}
+		if ctx.Err() != nil {
+			s.close()
+			return "", ctx.Err()
+		}
+		// If a single-request mock server closed the socket after the previous reply,
+		// reconnect once transparently; real Chromium keeps the socket open.
+		s.close()
+		if attempt == 1 {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("browser: cdp eval failed")
+}
+
 func evalInCDPTargetWithLimit(ctx context.Context, wsURL, expr string, timeout time.Duration, limit int64) (string, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -1598,12 +3413,16 @@ func evalInCDPTargetWithLimit(ctx context.Context, wsURL, expr string, timeout t
 		return "", err
 	}
 	defer func() { _ = conn.Close() }()
+	return evalOnCDPConn(ctx, conn, 1, expr, timeout, limit)
+}
+
+func evalOnCDPConn(ctx context.Context, conn net.Conn, reqID int, expr string, timeout time.Duration, limit int64) (string, error) {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() }) // unblocks the pending read on cancellation
 	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	req := map[string]any{
-		"id":     1,
+		"id":     reqID,
 		"method": "Runtime.evaluate",
 		"params": map[string]any{
 			"expression":    expr,
@@ -1640,7 +3459,7 @@ func evalInCDPTargetWithLimit(ctx context.Context, wsURL, expr string, timeout t
 				ExceptionDetails any `json:"exceptionDetails"`
 			} `json:"result"`
 		}
-		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == 1 {
+		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == reqID {
 			if resp.Error != nil {
 				return "", fmt.Errorf("browser: cdp error %d: %s", resp.Error.Code, resp.Error.Message)
 			}

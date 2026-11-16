@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,7 +21,10 @@ import (
 
 const maxTestEnvBytes = 64 << 10
 
-var loadedTestEnvTB sync.Map
+var (
+	loadedTestEnvTB        sync.Map
+	browserTestEnvExpandRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+)
 
 // LoadTestEnv loads test-suite configuration variables from the gitignored
 // .env.local.test file at the repository root when those variables are not
@@ -125,23 +129,109 @@ func loadTestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		}
 	}
 
+	resolveGoTeamsBinaryFallback := func(resolved string) string {
+		base := filepath.Base(resolved)
+		var altBase string
+		switch {
+		case strings.EqualFold(base, "teams-cli.exe"):
+			altBase = "go-teams.exe"
+		case base == "teams-cli":
+			altBase = "go-teams"
+		default:
+			return resolved
+		}
+		if _, statErr := os.Stat(resolved); errors.Is(statErr, os.ErrNotExist) {
+			alt := filepath.Join(filepath.Dir(resolved), altBase)
+			if _, altErr := os.Stat(alt); altErr == nil {
+				return alt
+			}
+		}
+		return resolved
+	}
+
 	resolveRelative := func(keyName, val string, isBrowserPath bool) string {
+		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.HasPrefix(val, "~") && !strings.ContainsAny(val, `/\%$:`) {
+			return val
+		}
 		hasDrive := len(val) >= 2 && ((val[0] >= 'A' && val[0] <= 'Z') || (val[0] >= 'a' && val[0] <= 'z')) && val[1] == ':'
 		if hasDrive && !filepath.IsAbs(val) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
-		if filepath.IsAbs(val) || strings.HasPrefix(val, "/") || strings.HasPrefix(val, `\`) {
-			return val
+		expanded := browserTestEnvExpandRe.ReplaceAllStringFunc(val, func(match string) string {
+			sub := browserTestEnvExpandRe.FindStringSubmatch(match)
+			name := ""
+			for i := 1; i < len(sub); i++ {
+				if sub[i] != "" {
+					name = sub[i]
+					break
+				}
+			}
+			if name == "" {
+				return match
+			}
+			if v, ok := os.LookupEnv(name); ok && strings.TrimSpace(v) != "" {
+				return v
+			}
+			if strings.HasPrefix(match, "%") && (strings.EqualFold(name, "USER") || strings.EqualFold(name, "USERPROFILE")) {
+				if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
+					return home
+				}
+			}
+			t.Fatalf("test env key %s references unset or empty environment variable", keyName)
+			return ""
+		})
+		if expanded == "~" || strings.HasPrefix(expanded, "~/") || strings.HasPrefix(expanded, `~\`) {
+			home, homeErr := os.UserHomeDir()
+			if homeErr != nil || strings.TrimSpace(home) == "" {
+				t.Fatalf("test env key %s failed to resolve home directory", keyName)
+			}
+			if expanded == "~" {
+				expanded = home
+			} else {
+				expanded = filepath.Join(home, expanded[2:])
+			}
 		}
-		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.ContainsAny(val, `/\`) {
-			return val
+		if runtime.GOOS != "windows" {
+			expanded = strings.ReplaceAll(expanded, `\`, "/")
 		}
-		norm := strings.NewReplacer("/", string(filepath.Separator), `\`, string(filepath.Separator)).Replace(val)
+		hasDriveExpanded := len(expanded) >= 2 && ((expanded[0] >= 'A' && expanded[0] <= 'Z') || (expanded[0] >= 'a' && expanded[0] <= 'z')) && expanded[1] == ':'
+		if hasDriveExpanded && !filepath.IsAbs(expanded) {
+			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
+		}
+		if isBrowserPath && !strings.HasPrefix(expanded, ".") && !strings.HasPrefix(expanded, "~") && !strings.ContainsAny(expanded, `/\%$:`) {
+			return expanded
+		}
+		if filepath.IsAbs(expanded) {
+			resolved := filepath.Clean(expanded)
+			if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
+				resolved = resolveExpandedProfileDir(resolved)
+			} else if keyName == "GO_TEAMS_BINARY" {
+				resolved = resolveGoTeamsBinaryFallback(resolved)
+			}
+			return resolved
+		}
+		norm := strings.NewReplacer("/", string(filepath.Separator), `\`, string(filepath.Separator)).Replace(expanded)
 		cleaned := filepath.Clean(norm)
 		if cleaned == "." || !filepath.IsLocal(cleaned) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
-		return filepath.Join(repoRoot, cleaned)
+		joined := filepath.Join(repoRoot, cleaned)
+		if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
+			if !hasTeamsSessionInExpandedProfile(joined) {
+				legacyRel := replaceRightmostPathSegment(cleaned, "go-teams", "teams-cli")
+				if legacyRel != cleaned {
+					legacyJoined := filepath.Join(repoRoot, legacyRel)
+					if hasTeamsSessionInExpandedProfile(legacyJoined) {
+						return legacyJoined
+					}
+				}
+			}
+			return joined
+		}
+		if keyName == "GO_TEAMS_BINARY" {
+			return resolveGoTeamsBinaryFallback(joined)
+		}
+		return joined
 	}
 
 	type aliasPair struct {
@@ -161,11 +251,17 @@ func loadTestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		procPrimary := strings.TrimSpace(os.Getenv(pair.primary))
 		procAlias := strings.TrimSpace(os.Getenv(pair.alias))
 		if procPrimary != "" || procAlias != "" {
-			if procPrimary != "" && procAlias == "" {
-				t.Setenv(pair.alias, os.Getenv(pair.primary))
-			} else if procPrimary == "" && procAlias != "" {
-				t.Setenv(pair.primary, os.Getenv(pair.alias))
+			selectedKey := pair.primary
+			val := procPrimary
+			if val == "" {
+				selectedKey = pair.alias
+				val = procAlias
 			}
+			if pair.isPath {
+				val = resolveRelative(selectedKey, val, pair.isBrowserPath)
+			}
+			t.Setenv(pair.primary, val)
+			t.Setenv(pair.alias, val)
 			continue
 		}
 		selectedKey := pair.primary
@@ -185,7 +281,10 @@ func loadTestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 	}
 
 	for _, key := range []string{"GO_TEAMS_BINARY", "GO_TEAMS_INTEGRATION", "TEAMS_DISABLE_SANDBOX"} {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
+		if procVal := strings.TrimSpace(os.Getenv(key)); procVal != "" {
+			if key == "GO_TEAMS_BINARY" {
+				t.Setenv(key, resolveRelative(key, procVal, false))
+			}
 			continue
 		}
 		val := filtered[key]
@@ -611,6 +710,57 @@ func TestLoadTestEnvPrecedenceAndPaths(t *testing.T) {
 		loadTestEnvFromFile(t, envPath, root)
 		assert.Equal(t, "https://teams.microsoft.com/l/meetingrecap?primary=1", os.Getenv("TEAMS_RECAP_URL"))
 	})
+
+	t.Run("expands %VAR%, $VAR, ~ and applies legacy go-teams profile fallback", func(t *testing.T) {
+		clearEnv(t)
+		appData := t.TempDir()
+		t.Setenv("TEST_APPDATA", appData)
+		t.Setenv("TEST_TOOL_DIR", filepath.Join(appData, "tools"))
+
+		legacyProfile := filepath.Join(appData, "teams-cli", "profile")
+		leveldbDir := filepath.Join(legacyProfile, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(leveldbDir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(leveldbDir, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+
+		toolsDir := filepath.Join(appData, "tools")
+		require.NoError(t, os.MkdirAll(toolsDir, 0o700))
+		goTeamsBin := filepath.Join(toolsDir, "go-teams.exe")
+		require.NoError(t, os.WriteFile(goTeamsBin, []byte("stub"), 0o600))
+
+		root := t.TempDir()
+		envPath := filepath.Join(root, ".env.local.test")
+		content := strings.Join([]string{
+			`TEAMS_PROFILE_DIR="%TEST_APPDATA%\go-teams\profile"`,
+			`GO_TEAMS_BINARY="${TEST_TOOL_DIR}/teams-cli.exe"`,
+		}, "\n")
+		require.NoError(t, os.WriteFile(envPath, []byte(content), 0o600))
+
+		loadTestEnvFromFile(t, envPath, root)
+
+		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_PROFILE_DIR"))
+		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_TEST_PROFILE_DIR"))
+		assert.Equal(t, goTeamsBin, os.Getenv("GO_TEAMS_BINARY"))
+
+		if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
+			t.Run("tilde", func(t *testing.T) {
+				clearEnv(t)
+				tildeRoot := t.TempDir()
+				homeEnvPath := filepath.Join(tildeRoot, ".env.local.test")
+				require.NoError(t, os.WriteFile(homeEnvPath, []byte("GO_TEAMS_BINARY=~/bin/go-teams.exe\n"), 0o600))
+				loadTestEnvFromFile(t, homeEnvPath, tildeRoot)
+				assert.Equal(t, filepath.Join(home, "bin", "go-teams.exe"), os.Getenv("GO_TEAMS_BINARY"))
+			})
+		}
+		t.Run("expands $BROWSER to bare executable", func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("TEST_BROWSER_NAME", "msedge")
+			bRoot := t.TempDir()
+			bEnv := filepath.Join(bRoot, ".env.local.test")
+			require.NoError(t, os.WriteFile(bEnv, []byte("TEAMS_BROWSER_PATH=$TEST_BROWSER_NAME\n"), 0o600))
+			loadTestEnvFromFile(t, bEnv, bRoot)
+			assert.Equal(t, "msedge", os.Getenv("TEAMS_BROWSER_PATH"))
+		})
+	})
 }
 
 type fatalSpyTB struct {
@@ -726,6 +876,30 @@ func TestLoadTestEnvSecurityAndTemplateGuardrails(t *testing.T) {
 		})
 		assert.Contains(t, msg, "escaping repository root")
 		assert.NotContains(t, msg, "outside-drive-secret")
+
+		browserDriveRelPath := filepath.Join(root, ".env.browserdriverel")
+		require.NoError(t, os.WriteFile(browserDriveRelPath, []byte("TEAMS_BROWSER_PATH=C:msedge.exe\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadTestEnvFromFile(tb, browserDriveRelPath, root)
+		})
+		assert.Contains(t, msg, "escaping repository root")
+		assert.NotContains(t, msg, "msedge.exe")
+
+		unsetWinVarPath := filepath.Join(root, ".env.unsetwin")
+		require.NoError(t, os.WriteFile(unsetWinVarPath, []byte(`TEAMS_PROFILE_DIR=%UNSET_SECRET_DIR%\go-teams\profile`+"\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadTestEnvFromFile(tb, unsetWinVarPath, root)
+		})
+		assert.Contains(t, msg, "unset or empty")
+		assert.NotContains(t, msg, "UNSET_SECRET_DIR")
+
+		unsetPosixVarPath := filepath.Join(root, ".env.unsetposix")
+		require.NoError(t, os.WriteFile(unsetPosixVarPath, []byte("GO_TEAMS_BINARY=$UNSET_SECRET_BIN/go-teams.exe\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadTestEnvFromFile(tb, unsetPosixVarPath, root)
+		})
+		assert.Contains(t, msg, "unset or empty")
+		assert.NotContains(t, msg, "UNSET_SECRET_BIN")
 
 		// Direct truncated git index check (no-git fallback invariant) scoped in a
 		// nested subtest so PATH is restored before the git-tracked check below.

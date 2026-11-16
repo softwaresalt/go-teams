@@ -1,8 +1,11 @@
 package browser
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -553,4 +556,216 @@ func TestFindBoundCapturePageRebindsSingleTabAcrossAuthAndTeamsHostsWithoutSwitc
 		Type: "iframe",
 		URL:  "https://contoso-my.sharepoint.com/personal/user/_layouts/15/xplatplugins.aspx",
 	}))
+}
+
+func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("TEST_APPDATA_DIR", base)
+
+	legacyProfile := filepath.Join(base, "teams-cli", "profile")
+	leveldbDir := filepath.Join(legacyProfile, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(leveldbDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(leveldbDir, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+
+	raw := `%TEST_APPDATA_DIR%\go-teams\profile`
+	got := resolveExistingProfileDir(raw)
+	assert.Equal(t, legacyProfile, got, "must expand %VAR% and fall back to teams-cli profile when go-teams lacks a session")
+
+	// When go-teams already has a Teams session, it must be preferred over teams-cli.
+	modernProfile := filepath.Join(base, "go-teams", "profile")
+	modernLeveldb := filepath.Join(modernProfile, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(modernLeveldb, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(modernLeveldb, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+	assert.Equal(t, modernProfile, resolveExistingProfileDir(raw))
+
+	// Rightmost go-teams segment only: ancestor go-teams dir must not be rewritten if rightmost segment matches.
+	nestedRoot := filepath.Join(base, "go-teams", "nested")
+	nestedLegacy := filepath.Join(nestedRoot, "teams-cli", "profile")
+	nestedLegacyLDB := filepath.Join(nestedLegacy, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(nestedLegacyLDB, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(nestedLegacyLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+	nestedRaw := filepath.Join(nestedRoot, "go-teams", "profile")
+	assert.Equal(t, nestedLegacy, resolveExistingProfileDir(nestedRaw))
+
+	// Repository root go-teams segment (containing go.mod) must never be rewritten to sibling teams-cli.
+	repoBase := t.TempDir()
+	fakeRepoRoot := filepath.Join(repoBase, "go-teams")
+	require.NoError(t, os.MkdirAll(filepath.Join(fakeRepoRoot, "bin"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(fakeRepoRoot, "go.mod"), []byte("module example\n"), 0o600))
+	siblingLegacy := filepath.Join(repoBase, "teams-cli", "bin", "profile")
+	siblingLDB := filepath.Join(siblingLegacy, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(siblingLDB, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(siblingLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+	repoLocalProfile := filepath.Join(fakeRepoRoot, "bin", "profile")
+	assert.Equal(t, repoLocalProfile, resolveExistingProfileDir(repoLocalProfile))
+}
+
+func TestNewLiveMeetingExpandsProfileOncePreservingLiteralVarTokens(t *testing.T) {
+	base := t.TempDir()
+	literalDir := filepath.Join(base, "$CACHE")
+	legacyProfile := filepath.Join(literalDir, "teams-cli", "profile")
+	leveldbDir := filepath.Join(legacyProfile, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(leveldbDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(leveldbDir, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+
+	t.Setenv("PROFILE_BASE", literalDir)
+	t.Setenv("CACHE", "wrong-cache-dir")
+
+	m, _, cleanup, err := NewLiveMeeting(context.Background(),
+		Options{Headless: true, UserDataDir: "%PROFILE_BASE%/go-teams/profile"},
+		MeetingOptions{MeetingURL: "https://teams.cloud.microsoft/l/meetingrecap?threadId=19%3Ameeting_x%40thread.v2", BotName: "Agent"})
+	require.NoError(t, err)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	cm, ok := m.(*chromeMeeting)
+	require.True(t, ok)
+	require.NotNil(t, cm.headedOpts)
+	assert.Equal(t, legacyProfile, cm.userDataDir)
+	assert.Equal(t, legacyProfile, cm.headedOpts.UserDataDir)
+	assert.True(t, cm.managedProfile)
+	assert.True(t, hasTeamsSessionInExpandedProfile(cm.headedOpts.UserDataDir))
+}
+
+func TestNewLiveMeetingRemoteHeadlessUsesCleanLauncherAndJoinOnWebSel(t *testing.T) {
+	assert.Contains(t, joinOnWebSel, "#openTeamsClientInBrowser")
+
+	base := t.TempDir()
+	profile := filepath.Join(base, "go-teams", "profile")
+	m, _, cleanup, err := NewLiveMeeting(context.Background(),
+		Options{Headless: true, UserDataDir: profile},
+		MeetingOptions{MeetingURL: "https://teams.cloud.microsoft/l/meetingrecap?threadId=19%3Ameeting_x%40thread.v2", BotName: "Agent"})
+	require.NoError(t, err)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	cm, ok := m.(*chromeMeeting)
+	require.True(t, ok)
+	require.NotNil(t, cm.headedOpts, "remote headless session with UserDataDir must route through cm.headedOpts")
+	assert.True(t, cm.headedOpts.Headless)
+
+	// Local loopback httptest URLs must remain on the fast cleanHeadlessAllocatorOptions path.
+	localM, _, localCleanup, err := NewLiveMeeting(context.Background(),
+		Options{Headless: true, UserDataDir: profile},
+		MeetingOptions{MeetingURL: "https://127.0.0.1:8443/meet/123", BotName: "Agent"})
+	require.NoError(t, err)
+	if localCleanup != nil {
+		defer localCleanup()
+	}
+	localCM, ok := localM.(*chromeMeeting)
+	require.True(t, ok)
+	assert.Nil(t, localCM.headedOpts)
+}
+
+func TestRecapJSVroomItemIdLowercaseAndIsDownloadBlocked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. extractRecapAudioJS handles VroomItemId (lowercase d) and reports isDownloadBlocked=true
+	// when SharePoint returns text/html (even across redirect URLs and trailing blob: candidates)
+	// without calling decodeAudioData.
+	audioProbeJS := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 8, maxRecapAudioDurationSec = 2, maxRecapAudioPCMBytes = 8;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+const media = {
+  currentSrc: 'blob:https://contoso.sharepoint.com/1234',
+  src: 'https://contoso.sharepoint.com/download?driveItemId=recording-a',
+  getAttribute: () => null
+};
+globalThis.location = { href: 'https://teams.cloud.microsoft/l/meetingrecap' };
+globalThis.window = globalThis;
+globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true };
+globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+let decodes = 0;
+globalThis.fetch = async (url) => {
+  if (String(url).startsWith('blob:')) {
+    throw new TypeError('Failed to fetch');
+  }
+  return {
+    ok: true,
+    status: 200,
+    url: 'https://contoso.sharepoint.com/_layouts/15/AccessDenied.aspx',
+    headers: { get: (k) => k.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null },
+    body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }
+  };
+};
+globalThis.AudioContext = class {
+  async decodeAudioData() { decodes++; throw new Error('decodeAudioData must not be called on text/html'); }
+  async close() {}
+};
+(async () => {
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('isDownloadBlocked=true')) {
+    throw new Error('expected isDownloadBlocked=true error, got: ' + String(failure));
+  }
+  if (decodes !== 0) {
+    throw new Error('decodeAudioData was called ' + decodes + ' times');
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`
+	cmd := exec.CommandContext(ctx, "node", "-e", audioProbeJS)
+	cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("extractRecapAudioJS VroomItemId/isDownloadBlocked probe failed: %v: %s", err, out)
+	}
+
+	// 2. extractRecapAudioJS reports isDownloadBlocked=true on HTTP 403 (!resp.ok) and fetch CORS TypeError.
+	for _, tc := range []struct {
+		name      string
+		fetchBody string
+	}{
+		{
+			name:      "http-403",
+			fetchBody: `return { ok: false, status: 403, headers: { get: () => null } };`,
+		},
+		{
+			name:      "cors-reject",
+			fetchBody: `throw new TypeError('Failed to fetch');`,
+		},
+	} {
+		probe := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 8, maxRecapAudioDurationSec = 2, maxRecapAudioPCMBytes = 8;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+const media = { src: 'https://contoso.sharepoint.com/download?driveItemId=recording-a', getAttribute: () => null };
+globalThis.location = { href: 'https://teams.cloud.microsoft/l/meetingrecap' };
+globalThis.window = globalThis;
+globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true };
+globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+globalThis.fetch = async () => { ` + tc.fetchBody + ` };
+(async () => {
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('isDownloadBlocked=true')) {
+    throw new Error('expected isDownloadBlocked=true error, got: ' + String(failure));
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`
+		c := exec.CommandContext(ctx, "node", "-e", probe)
+		c.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("extractRecapAudioJS %s probe failed: %v: %s", tc.name, err, out)
+		}
+	}
+
+	// 3. extractRecapTranscriptJS captures VroomItemId (lowercase d).
+	transcriptProbeJS := `
+const fs = require('fs');
+globalThis.location = { href: 'https://teams.cloud.microsoft/l/meetingrecap' };
+globalThis.window = globalThis;
+globalThis.g_fileInfo = { title: 'Sync', name: 'Sync.mp4', VroomItemId: '01LOWERCASEITEMID' };
+globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+const raw = eval(fs.readFileSync(0, 'utf8'));
+const parsed = JSON.parse(raw);
+if (parsed.itemId !== '01LOWERCASEITEMID') {
+  throw new Error('expected itemId 01LOWERCASEITEMID, got: ' + parsed.itemId);
+}
+`
+	cmd2 := exec.CommandContext(ctx, "node", "-e", transcriptProbeJS)
+	cmd2.Stdin = strings.NewReader(extractRecapTranscriptJS)
+	if out, err := cmd2.CombinedOutput(); err != nil {
+		t.Fatalf("extractRecapTranscriptJS VroomItemId probe failed: %v: %s", err, out)
+	}
 }

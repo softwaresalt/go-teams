@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,7 +25,10 @@ import (
 
 const maxCLITestEnvBytes = 64 << 10
 
-var loadedCLITestEnvTB sync.Map
+var (
+	loadedCLITestEnvTB sync.Map
+	cliEnvExpandRe     = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+)
 
 func loadCLITestEnv(t testing.TB) {
 	t.Helper()
@@ -125,23 +129,200 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		}
 	}
 
+	hasCLIProfileSession := func(dir string) bool {
+		if dir == "" {
+			return false
+		}
+		leveldbDir := filepath.Join(dir, "Default", "Local Storage", "leveldb")
+		entries, readErr := os.ReadDir(leveldbDir)
+		if readErr != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := strings.ToLower(e.Name())
+			if !strings.HasSuffix(name, ".ldb") && !strings.HasSuffix(name, ".log") {
+				continue
+			}
+			info, infoErr := e.Info()
+			if infoErr != nil || info.Size() <= 0 || info.Size() > 16*1024*1024 {
+				continue
+			}
+			data, fileErr := os.ReadFile(filepath.Join(leveldbDir, e.Name()))
+			if fileErr != nil {
+				continue
+			}
+			if bytes.Contains(data, []byte("SKYPE-TOKEN")) ||
+				bytes.Contains(data, []byte("UserAuthState")) ||
+				bytes.Contains(data, []byte("msal.2.account.keys")) {
+				return true
+			}
+		}
+		return false
+	}
+
+	isCLIRepoRootDir := func(dir string) bool {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return true
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr == nil {
+			return true
+		}
+		return false
+	}
+
+	replaceRightmostCLISegment := func(p, oldSeg, newSeg string) string {
+		vol := filepath.VolumeName(p)
+		rest := strings.TrimPrefix(p, vol)
+		hasLeadingSep := len(rest) > 0 && os.IsPathSeparator(rest[0])
+		parts := strings.FieldsFunc(rest, func(r rune) bool {
+			return r == '/' || r == '\\'
+		})
+		replaced := false
+		for i := len(parts) - 1; i >= 0; i-- {
+			if strings.EqualFold(parts[i], oldSeg) {
+				prefixJoined := strings.Join(parts[:i+1], string(filepath.Separator))
+				var candidateRoot string
+				if hasLeadingSep {
+					candidateRoot = filepath.Clean(vol + string(filepath.Separator) + prefixJoined)
+				} else if vol != "" {
+					candidateRoot = filepath.Clean(vol + prefixJoined)
+				} else {
+					candidateRoot = filepath.Clean(prefixJoined)
+				}
+				if isCLIRepoRootDir(candidateRoot) {
+					continue
+				}
+				parts[i] = newSeg
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			return p
+		}
+		joined := strings.Join(parts, string(filepath.Separator))
+		if hasLeadingSep {
+			return filepath.Clean(vol + string(filepath.Separator) + joined)
+		}
+		if vol != "" {
+			return filepath.Clean(vol + joined)
+		}
+		return filepath.Clean(joined)
+	}
+
+	resolveCLIGoTeamsBinaryFallback := func(resolved string) string {
+		base := filepath.Base(resolved)
+		var altBase string
+		switch {
+		case strings.EqualFold(base, "teams-cli.exe"):
+			altBase = "go-teams.exe"
+		case base == "teams-cli":
+			altBase = "go-teams"
+		default:
+			return resolved
+		}
+		if _, statErr := os.Stat(resolved); errors.Is(statErr, os.ErrNotExist) {
+			alt := filepath.Join(filepath.Dir(resolved), altBase)
+			if _, altErr := os.Stat(alt); altErr == nil {
+				return alt
+			}
+		}
+		return resolved
+	}
+
 	resolveRelative := func(keyName, val string, isBrowserPath bool) string {
+		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.HasPrefix(val, "~") && !strings.ContainsAny(val, `/\%$:`) {
+			return val
+		}
 		hasDrive := len(val) >= 2 && ((val[0] >= 'A' && val[0] <= 'Z') || (val[0] >= 'a' && val[0] <= 'z')) && val[1] == ':'
 		if hasDrive && !filepath.IsAbs(val) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
-		if filepath.IsAbs(val) || strings.HasPrefix(val, "/") || strings.HasPrefix(val, `\`) {
-			return val
+		expanded := cliEnvExpandRe.ReplaceAllStringFunc(val, func(match string) string {
+			sub := cliEnvExpandRe.FindStringSubmatch(match)
+			name := ""
+			for i := 1; i < len(sub); i++ {
+				if sub[i] != "" {
+					name = sub[i]
+					break
+				}
+			}
+			if name == "" {
+				return match
+			}
+			if v, ok := os.LookupEnv(name); ok && strings.TrimSpace(v) != "" {
+				return v
+			}
+			if strings.HasPrefix(match, "%") && (strings.EqualFold(name, "USER") || strings.EqualFold(name, "USERPROFILE")) {
+				if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
+					return home
+				}
+			}
+			t.Fatalf("test env key %s references unset or empty environment variable", keyName)
+			return ""
+		})
+		if expanded == "~" || strings.HasPrefix(expanded, "~/") || strings.HasPrefix(expanded, `~\`) {
+			home, homeErr := os.UserHomeDir()
+			if homeErr != nil || strings.TrimSpace(home) == "" {
+				t.Fatalf("test env key %s failed to resolve home directory", keyName)
+			}
+			if expanded == "~" {
+				expanded = home
+			} else {
+				expanded = filepath.Join(home, expanded[2:])
+			}
 		}
-		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.ContainsAny(val, `/\`) {
-			return val
+		if runtime.GOOS != "windows" {
+			expanded = strings.ReplaceAll(expanded, `\`, "/")
 		}
-		norm := strings.NewReplacer("/", string(filepath.Separator), `\`, string(filepath.Separator)).Replace(val)
+		hasDriveExpanded := len(expanded) >= 2 && ((expanded[0] >= 'A' && expanded[0] <= 'Z') || (expanded[0] >= 'a' && expanded[0] <= 'z')) && expanded[1] == ':'
+		if hasDriveExpanded && !filepath.IsAbs(expanded) {
+			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
+		}
+		if isBrowserPath && !strings.HasPrefix(expanded, ".") && !strings.HasPrefix(expanded, "~") && !strings.ContainsAny(expanded, `/\%$:`) {
+			return expanded
+		}
+		if filepath.IsAbs(expanded) {
+			resolved := filepath.Clean(expanded)
+			if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
+				if !hasCLIProfileSession(resolved) {
+					legacy := replaceRightmostCLISegment(resolved, "go-teams", "teams-cli")
+					if legacy != resolved && hasCLIProfileSession(legacy) {
+						return legacy
+					}
+				}
+				return resolved
+			}
+			if keyName == "GO_TEAMS_BINARY" {
+				return resolveCLIGoTeamsBinaryFallback(resolved)
+			}
+			return resolved
+		}
+		norm := strings.NewReplacer("/", string(filepath.Separator), `\`, string(filepath.Separator)).Replace(expanded)
 		cleaned := filepath.Clean(norm)
 		if cleaned == "." || !filepath.IsLocal(cleaned) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
-		return filepath.Join(repoRoot, cleaned)
+		joined := filepath.Join(repoRoot, cleaned)
+		if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
+			if !hasCLIProfileSession(joined) {
+				legacyRel := replaceRightmostCLISegment(cleaned, "go-teams", "teams-cli")
+				if legacyRel != cleaned {
+					legacyJoined := filepath.Join(repoRoot, legacyRel)
+					if hasCLIProfileSession(legacyJoined) {
+						return legacyJoined
+					}
+				}
+			}
+			return joined
+		}
+		if keyName == "GO_TEAMS_BINARY" {
+			return resolveCLIGoTeamsBinaryFallback(joined)
+		}
+		return joined
 	}
 
 	type aliasPair struct {
@@ -161,11 +342,17 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		procPrimary := strings.TrimSpace(os.Getenv(pair.primary))
 		procAlias := strings.TrimSpace(os.Getenv(pair.alias))
 		if procPrimary != "" || procAlias != "" {
-			if procPrimary != "" && procAlias == "" {
-				t.Setenv(pair.alias, os.Getenv(pair.primary))
-			} else if procPrimary == "" && procAlias != "" {
-				t.Setenv(pair.primary, os.Getenv(pair.alias))
+			selectedKey := pair.primary
+			val := procPrimary
+			if val == "" {
+				selectedKey = pair.alias
+				val = procAlias
 			}
+			if pair.isPath {
+				val = resolveRelative(selectedKey, val, pair.isBrowserPath)
+			}
+			t.Setenv(pair.primary, val)
+			t.Setenv(pair.alias, val)
 			continue
 		}
 		selectedKey := pair.primary
@@ -185,7 +372,10 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 	}
 
 	for _, key := range []string{"GO_TEAMS_BINARY", "GO_TEAMS_INTEGRATION", "TEAMS_DISABLE_SANDBOX"} {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
+		if procVal := strings.TrimSpace(os.Getenv(key)); procVal != "" {
+			if key == "GO_TEAMS_BINARY" {
+				t.Setenv(key, resolveRelative(key, procVal, false))
+			}
 			continue
 		}
 		val := filtered[key]
@@ -505,16 +695,60 @@ func TestLoadCLITestEnvPrecedenceAndPaths(t *testing.T) {
 
 	t.Run("process env wins over file", func(t *testing.T) {
 		clearEnv(t)
-		t.Setenv("GO_TEAMS_BINARY", `C:\custom\go-teams.exe`)
+		customBin := "/custom/go-teams"
+		if runtime.GOOS == "windows" {
+			customBin = `C:\custom\go-teams.exe`
+		}
+		t.Setenv("GO_TEAMS_BINARY", customBin)
 		t.Setenv("TEAMS_TEST_BROWSER_PATH", "msedge")
 		root := t.TempDir()
 		envPath := filepath.Join(root, ".env.local.test")
 		require.NoError(t, os.WriteFile(envPath, []byte("GO_TEAMS_BINARY=./bin/other.exe\nTEAMS_BROWSER_PATH=./bin/other-browser\nGO_TEAMS_INTEGRATION= # inline comment\n"), 0o600))
 
 		loadCLITestEnvFromFile(t, envPath, root)
-		assert.Equal(t, `C:\custom\go-teams.exe`, os.Getenv("GO_TEAMS_BINARY"))
+		assert.Equal(t, customBin, os.Getenv("GO_TEAMS_BINARY"))
 		assert.Equal(t, "msedge", os.Getenv("TEAMS_BROWSER_PATH"))
 		assert.Empty(t, os.Getenv("GO_TEAMS_INTEGRATION"))
+	})
+
+	t.Run("expands env vars and applies legacy teams-cli profile and binary fallback", func(t *testing.T) {
+		clearEnv(t)
+		appData := t.TempDir()
+		t.Setenv("CLI_TEST_APPDATA", appData)
+		t.Setenv("CLI_TEST_BIN_DIR", filepath.Join(appData, "bin"))
+
+		legacyProfile := filepath.Join(appData, "teams-cli", "profile")
+		legacyLevelDB := filepath.Join(legacyProfile, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(legacyLevelDB, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(legacyLevelDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+
+		binDir := filepath.Join(appData, "bin")
+		require.NoError(t, os.MkdirAll(binDir, 0o700))
+		goTeamsBin := filepath.Join(binDir, "go-teams.exe")
+		require.NoError(t, os.WriteFile(goTeamsBin, []byte("stub"), 0o600))
+
+		root := t.TempDir()
+		envPath := filepath.Join(root, ".env.local.test")
+		content := strings.Join([]string{
+			`TEAMS_PROFILE_DIR="%CLI_TEST_APPDATA%\go-teams\profile"`,
+			`GO_TEAMS_BINARY="${CLI_TEST_BIN_DIR}/teams-cli.exe"`,
+		}, "\n")
+		require.NoError(t, os.WriteFile(envPath, []byte(content), 0o600))
+
+		loadCLITestEnvFromFile(t, envPath, root)
+		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_PROFILE_DIR"))
+		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_TEST_PROFILE_DIR"))
+		assert.Equal(t, goTeamsBin, os.Getenv("GO_TEAMS_BINARY"))
+	})
+
+	t.Run("expands $BROWSER to bare executable", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("CLI_TEST_BROWSER_NAME", "msedge")
+		bRoot := t.TempDir()
+		bEnv := filepath.Join(bRoot, ".env.local.test")
+		require.NoError(t, os.WriteFile(bEnv, []byte("TEAMS_BROWSER_PATH=$CLI_TEST_BROWSER_NAME\n"), 0o600))
+		loadCLITestEnvFromFile(t, bEnv, bRoot)
+		assert.Equal(t, "msedge", os.Getenv("TEAMS_BROWSER_PATH"))
 	})
 }
 
@@ -615,6 +849,30 @@ func TestLoadCLITestEnvSecurityAndTemplateGuardrails(t *testing.T) {
 		})
 		assert.Contains(t, msg, "escaping repository root")
 		assert.NotContains(t, msg, "outside-cli-drive")
+
+		browserDriveRelPath := filepath.Join(root, ".env.browserdriverel")
+		require.NoError(t, os.WriteFile(browserDriveRelPath, []byte("TEAMS_BROWSER_PATH=C:msedge.exe\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadCLITestEnvFromFile(tb, browserDriveRelPath, root)
+		})
+		assert.Contains(t, msg, "escaping repository root")
+		assert.NotContains(t, msg, "msedge.exe")
+
+		unsetWinVarPath := filepath.Join(root, ".env.unsetwin")
+		require.NoError(t, os.WriteFile(unsetWinVarPath, []byte(`TEAMS_PROFILE_DIR=%CLI_UNSET_SECRET%\go-teams\profile`+"\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadCLITestEnvFromFile(tb, unsetWinVarPath, root)
+		})
+		assert.Contains(t, msg, "unset or empty")
+		assert.NotContains(t, msg, "CLI_UNSET_SECRET")
+
+		unsetPosixVarPath := filepath.Join(root, ".env.unsetposix")
+		require.NoError(t, os.WriteFile(unsetPosixVarPath, []byte("GO_TEAMS_BINARY=$CLI_UNSET_BIN/go-teams.exe\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadCLITestEnvFromFile(tb, unsetPosixVarPath, root)
+		})
+		assert.Contains(t, msg, "unset or empty")
+		assert.NotContains(t, msg, "CLI_UNSET_BIN")
 
 		badPath := filepath.Join(root, ".env.bad")
 		require.NoError(t, os.WriteFile(badPath, []byte("SECRET_WITHOUT_EQUALS_VALUE\n"), 0o600))

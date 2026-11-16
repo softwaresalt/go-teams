@@ -38,7 +38,7 @@ const extractRecapAudioJS = `(async () => {
 	const limitError = 'recap audio exceeds maximum supported size/duration';
 	const info = window.g_fileInfo || {};
 	const pageUrl = String(location.href || '');
-	const itemId = String(info.itemId || info.driveItemId || info.VroomItemID || new URL(pageUrl).searchParams.get('driveItemId') || '');
+	const itemId = String(info.itemId || info.driveItemId || info.VroomItemID || info.VroomItemId || new URL(pageUrl).searchParams.get('driveItemId') || '');
 	const fileName = String(info.fileName || info.name || '');
 	const enforceIdentity = typeof recapExpectedIdentity !== 'undefined';
 	const expected = enforceIdentity ? recapExpectedIdentity : {};
@@ -77,6 +77,7 @@ const extractRecapAudioJS = `(async () => {
 	checkField('DriveItemID', info.itemId);
 	checkField('DriveItemID', info.driveItemId);
 	checkField('DriveItemID', info.VroomItemID);
+	checkField('DriveItemID', info.VroomItemId);
 	checkField('RecordingName', info.fileName);
 	checkField('RecordingName', info.name);
 	const pcmEl = document.querySelector('[data-recap-audio-pcm]');
@@ -116,6 +117,7 @@ const extractRecapAudioJS = `(async () => {
 	}
 	const candidates = nonBlobCandidates.concat(blobCandidates);
 	if (!candidates.length) return '';
+	let blockedErr = null;
 	let lastFetchErr = null;
 	for (const candidateUrl of candidates) {
 		identityMatched = false;
@@ -139,16 +141,36 @@ const extractRecapAudioJS = `(async () => {
 				try {
 					resp = await fetch(candidateUrl, {credentials: 'omit', redirect: 'follow'});
 				} catch (retryErr) {
+					if (info.isDownloadBlocked) {
+						blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+					}
 					lastFetchErr = retryErr;
 					continue;
 				}
 			} else {
+				if (info.isDownloadBlocked) {
+					blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+				}
 				lastFetchErr = err;
 				continue;
 			}
 		}
 		if (!resp || !resp.ok) {
+			if (info.isDownloadBlocked) {
+				blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+				lastFetchErr = blockedErr;
+				continue;
+			}
 			lastFetchErr = new Error('recap audio fetch failed: ' + (resp ? resp.status : 'network error'));
+			continue;
+		}
+		const ct = String((resp.headers && resp.headers.get && resp.headers.get('content-type')) || '').toLowerCase();
+		if (ct.includes('text/html')) {
+			const err = new Error(info.isDownloadBlocked
+				? 'recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)'
+				: 'recap audio fetch returned unexpected text/html content');
+			if (info.isDownloadBlocked) blockedErr = err;
+			lastFetchErr = err;
 			continue;
 		}
 		let respHasIdentity = false;
@@ -237,7 +259,7 @@ const extractRecapAudioJS = `(async () => {
 			return JSON.stringify({pageUrl, itemId, fileName, mediaUrl: selectedUrl, sourceBytes, durationSec: buffer.duration, pcmChunks});
 		} finally { await audioContext.close(); }
 	}
-	throw (lastFetchErr || new Error('recap audio fetch failed'));
+	throw (blockedErr || lastFetchErr || new Error('recap audio fetch failed'));
 })()`
 
 const maxCDPDOMMessageBytes = 16 * 1024 * 1024
@@ -280,6 +302,15 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 	expr := fmt.Sprintf("(() => {\nconst maxRecapAudioSourceBytes=%d, maxRecapAudioDurationSec=%d, maxRecapAudioPCMBytes=%d, recapExpectedIdentity=%s;\nreturn %s;\n})()",
 		maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes, expectedJSON, extractRecapAudioJS)
 	var lastErr error
+	setLastErr := func(err error) {
+		if err == nil {
+			return
+		}
+		if lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true") && !strings.Contains(err.Error(), "isDownloadBlocked=true") {
+			return
+		}
+		lastErr = err
+	}
 	for _, target := range targets {
 		if !isTargetInCaptureScope(target, ownerID, frames) ||
 			hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
@@ -287,7 +318,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		}
 		raw, evalErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
 		if evalErr != nil {
-			lastErr = evalErr
+			setLastErr(evalErr)
 			continue
 		}
 		if raw == "" {
@@ -304,7 +335,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			Error       string   `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-			lastErr = fmt.Errorf("browser: invalid recap audio payload: %w", err)
+			setLastErr(fmt.Errorf("browser: invalid recap audio payload: %w", err))
 			continue
 		}
 		pageIdentity := recapAudioIdentity(payload.PageURL)
@@ -313,7 +344,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			hasMeetingIdentityConflict(expected, mediaIdentity) ||
 			(expected.DriveItemID != "" && payload.ItemID != "" && !strings.EqualFold(expected.DriveItemID, payload.ItemID)) ||
 			(expected.RecordingName != "" && payload.FileName != "" && !strings.EqualFold(expected.RecordingName, payload.FileName)) {
-			lastErr = fmt.Errorf("browser: recap audio recording identity mismatch")
+			setLastErr(fmt.Errorf("browser: recap audio recording identity mismatch"))
 			continue
 		}
 		if expected != (MeetingIdentity{}) &&
@@ -321,11 +352,11 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			!hasRecapAudioIdentityMatch(expected, mediaIdentity) &&
 			!(expected.DriveItemID != "" && strings.EqualFold(expected.DriveItemID, payload.ItemID)) &&
 			!(expected.RecordingName != "" && strings.EqualFold(expected.RecordingName, payload.FileName)) {
-			lastErr = fmt.Errorf("browser: recap audio recording identity unverified")
+			setLastErr(fmt.Errorf("browser: recap audio recording identity unverified"))
 			continue
 		}
 		if payload.Error != "" {
-			lastErr = fmt.Errorf("browser: recap audio extraction: %s", payload.Error)
+			setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
 			continue
 		}
 		if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
@@ -929,13 +960,128 @@ func isMicrosoftTeamsRecapURL(rawURL string) bool {
 	return isTeamsHostURL(rawURL) && strings.Contains(strings.ToLower(rawURL), "meetingrecap")
 }
 
+var profileEnvVarRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+func expandProfilePath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	expanded := profileEnvVarRe.ReplaceAllStringFunc(trimmed, func(match string) string {
+		sub := profileEnvVarRe.FindStringSubmatch(match)
+		name := ""
+		for i := 1; i < len(sub); i++ {
+			if sub[i] != "" {
+				name = sub[i]
+				break
+			}
+		}
+		if name == "" {
+			return match
+		}
+		if v, ok := os.LookupEnv(name); ok && v != "" {
+			return v
+		}
+		if strings.HasPrefix(match, "%") && (strings.EqualFold(name, "USER") || strings.EqualFold(name, "USERPROFILE")) {
+			if home, err := os.UserHomeDir(); err == nil && home != "" {
+				return home
+			}
+		}
+		return match
+	})
+	if expanded == "~" || strings.HasPrefix(expanded, "~/") || strings.HasPrefix(expanded, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			if expanded == "~" {
+				expanded = home
+			} else {
+				expanded = filepath.Join(home, expanded[2:])
+			}
+		}
+	}
+	if runtime.GOOS != "windows" {
+		expanded = strings.ReplaceAll(expanded, `\`, "/")
+	}
+	return filepath.Clean(expanded)
+}
+
+func isRepoRootDir(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	return false
+}
+
+func replaceRightmostPathSegment(p, oldSeg, newSeg string) string {
+	vol := filepath.VolumeName(p)
+	rest := strings.TrimPrefix(p, vol)
+	hasLeadingSep := len(rest) > 0 && os.IsPathSeparator(rest[0])
+	parts := strings.FieldsFunc(rest, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	replaced := false
+	for i := len(parts) - 1; i >= 0; i-- {
+		if strings.EqualFold(parts[i], oldSeg) {
+			prefixJoined := strings.Join(parts[:i+1], string(filepath.Separator))
+			var candidateRoot string
+			if hasLeadingSep {
+				candidateRoot = filepath.Clean(vol + string(filepath.Separator) + prefixJoined)
+			} else if vol != "" {
+				candidateRoot = filepath.Clean(vol + prefixJoined)
+			} else {
+				candidateRoot = filepath.Clean(prefixJoined)
+			}
+			if isRepoRootDir(candidateRoot) {
+				continue
+			}
+			parts[i] = newSeg
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		return p
+	}
+	joined := strings.Join(parts, string(filepath.Separator))
+	if hasLeadingSep {
+		return filepath.Clean(vol + string(filepath.Separator) + joined)
+	}
+	if vol != "" {
+		return filepath.Clean(vol + joined)
+	}
+	return filepath.Clean(joined)
+}
+
+func resolveExistingProfileDir(raw string) string {
+	return resolveExpandedProfileDir(expandProfilePath(raw))
+}
+
+func resolveExpandedProfileDir(expanded string) string {
+	if expanded == "" {
+		return ""
+	}
+	if hasTeamsSessionInExpandedProfile(expanded) {
+		return expanded
+	}
+	legacy := replaceRightmostPathSegment(expanded, "go-teams", "teams-cli")
+	if legacy != expanded && hasTeamsSessionInExpandedProfile(legacy) {
+		return legacy
+	}
+	return expanded
+}
+
 // hasTeamsSessionInProfile reports whether profileDir already contains a
 // persisted Microsoft Teams web session in Chromium's Default Local Storage.
 // When false on a cold or newly configured profile directory, headed recap
 // capture bootstraps authentication at https://teams.cloud.microsoft/v2/ first
 // to avoid Teams' cold-profile /l/meetingrecap OAuth redirect loop.
 func hasTeamsSessionInProfile(profileDir string) bool {
-	trimmed := strings.TrimSpace(profileDir)
+	return hasTeamsSessionInExpandedProfile(expandProfilePath(profileDir))
+}
+
+func hasTeamsSessionInExpandedProfile(trimmed string) bool {
 	if trimmed == "" {
 		return false
 	}
@@ -1018,7 +1164,7 @@ const extractRecapTranscriptJS = `(() => {
 	const fi = window.g_fileInfo || {};
 	const fileTitle = fi.title ? String(fi.title).trim() : '';
 	const fileName = fi.name ? String(fi.name).trim() : '';
-	const itemId = String(fi.id || fi.VroomItemID || fi.docId || '').trim();
+	const itemId = String(fi.id || fi.VroomItemID || fi.VroomItemId || fi.docId || '').trim();
 	const pageUrl = String(location.href || '');
 	const fileStart = String(fi.CreatedDateTime || fi.TimeCreated || fi.creationTime || fi.lastModifiedTime || fi.name || '').trim();
 	const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '';
@@ -1272,14 +1418,18 @@ func parseRecapStartTimeInLocation(raw, tz string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, string, <-chan struct{}, func(), error) {
+func launchCleanHeadedBrowser(opts Options, initialURL string, profileResolved bool) (int, string, string, <-chan struct{}, func(), error) {
 	execPath := ResolveExecPath(opts.ExecPath)
 	if execPath == "" {
 		return 0, "", "", nil, nil, fmt.Errorf("browser: no Chromium-based browser executable found")
 	}
 	var absProfile string
 	if opts.UserDataDir != "" {
-		abs, err := filepath.Abs(opts.UserDataDir)
+		resolvedProfile := opts.UserDataDir
+		if !profileResolved {
+			resolvedProfile = resolveExistingProfileDir(opts.UserDataDir)
+		}
+		abs, err := filepath.Abs(resolvedProfile)
 		if err != nil {
 			return 0, "", "", nil, nil, fmt.Errorf("browser: resolve profile dir: %w", err)
 		}
@@ -1328,6 +1478,18 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 		}
 		if runtime.GOOS == "windows" {
 			terminateSurvivingCDPBrowserOnPort(port, execPath)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		teardownClean := false
+		for time.Now().Before(deadline) {
+			if _, probeErr := listCDPTargets(port); probeErr != nil {
+				teardownClean = true
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !teardownClean {
+			slog.Warn("browser: CDP port still reachable after browser cleanup", "cdp_port", port)
 		}
 	}
 

@@ -166,6 +166,7 @@ func TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd(t *testing.T)
 		visit := visits.Add(1)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if visit == 1 {
+			// httptest handler; write failure surfaces as test timeout.
 			_, _ = w.Write([]byte(`<!doctype html>
 <html>
 <head><title>Microsoft Teams</title></head>
@@ -210,33 +211,41 @@ func TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd(t *testing.T)
       stage.innerHTML = '<div data-tid="closed-caption-renderer-wrapper" id="cc"></div>';
       const cc = document.getElementById('cc');
 
-      setTimeout(() => {
-        cc.innerHTML = '' +
-          '<div class="fui-ChatMessageCompact" id="msg1">' +
-          '  <span data-tid="author">Alice</span>' +
-          '  <span data-tid="closed-caption-text" id="t1">Initial scheduled utterance.</span>' +
-          '</div>';
-      }, 150);
-
-      setTimeout(() => {
-        const div = document.createElement('div');
-        div.className = 'fui-ChatMessageCompact';
-        div.innerHTML = '' +
-          '<span data-tid="author">Alice</span>' +
-          '  <span data-tid="closed-caption-text" id="t2">Overtime scheduled utterance</span>';
-        cc.appendChild(div);
-      }, 750);
-
-      setTimeout(() => {
-        const t2 = document.getElementById('t2');
-        if (t2) {
-          t2.textContent = 'Overtime scheduled utterance after nominal duration.';
+      function emitWhenObserverReady() {
+        if (typeof window.sendCaptionToGo !== 'function') {
+          setTimeout(emitWhenObserverReady, 50);
+          return;
         }
-      }, 1350);
+        setTimeout(() => {
+          cc.innerHTML = '' +
+            '<div class="fui-ChatMessageCompact" id="msg1">' +
+            '  <span data-tid="author">Alice</span>' +
+            '  <span data-tid="closed-caption-text" id="t1">Initial scheduled utterance.</span>' +
+            '</div>';
+        }, 150);
 
-      setTimeout(() => {
-        app.innerHTML = '<div data-tid="call-ended-screen">You left the meeting</div>';
-      }, 1550);
+        setTimeout(() => {
+          const div = document.createElement('div');
+          div.className = 'fui-ChatMessageCompact';
+          div.innerHTML = '' +
+            '<span data-tid="author">Alice</span>' +
+            '  <span data-tid="closed-caption-text" id="t2">Overtime scheduled utterance</span>';
+          cc.appendChild(div);
+        }, 1000);
+
+        setTimeout(() => {
+          const t2 = document.getElementById('t2');
+          if (t2) {
+            t2.textContent = 'Overtime scheduled utterance after nominal duration.';
+          }
+        }, 1900);
+
+        setTimeout(() => {
+          app.innerHTML = '<div data-tid="call-ended-screen">You left the meeting</div>';
+        }, 2100);
+      }
+
+      emitWhenObserverReady();
     }
   </script>
 </body>
@@ -244,6 +253,7 @@ func TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd(t *testing.T)
 			return
 		}
 
+		// httptest handler; write failure surfaces as test timeout.
 		_, _ = w.Write([]byte(`<!doctype html>
 <html>
 <head><title>Meeting Recap</title></head>
@@ -302,8 +312,8 @@ func TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd(t *testing.T)
 		srv.URL + "/meet/sched123?p=synthetic-placeholder-passcode",
 		"--config", cfgPath,
 		"--mode", "live-with-summary",
-		"--duration", "1000ms",
-		"--idle-timeout", "1500ms",
+		"--duration", "1500ms",
+		"--idle-timeout", "2500ms",
 		"--ai-summary-delay", "250ms",
 		"--category", "SCHED",
 		"--output-dir", outDir,

@@ -50,8 +50,11 @@ func recapIntegrationURL(t *testing.T) (string, string) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err, "resolve repository root")
 
-	absProfile, err := filepath.Abs(profileDir)
-	require.NoError(t, err, "resolve TEAMS_PROFILE_DIR")
+	absProfile := profileDir
+	if !filepath.IsAbs(absProfile) {
+		absProfile = filepath.Join(realRoot, absProfile)
+	}
+	absProfile = filepath.Clean(absProfile)
 	cur := absProfile
 	var trailing []string
 	for {
@@ -86,7 +89,7 @@ func recapIntegrationURL(t *testing.T) (string, string) {
 
 	mutated, err := teams.MutateJoinURL(raw)
 	require.NoError(t, err, "invalid recap URL in test environment")
-	return mutated, profileDir
+	return mutated, realProfile
 }
 
 // TestMeetingLiveScheduledOvertimeAndCallEnd exercises live-tenant meeting
@@ -114,8 +117,11 @@ func TestMeetingLiveScheduledOvertimeAndCallEnd(t *testing.T) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err, "resolve repository root")
 
-	absProfile, err := filepath.Abs(profile)
-	require.NoError(t, err, "resolve TEAMS_PROFILE_DIR")
+	absProfile := profile
+	if !filepath.IsAbs(absProfile) {
+		absProfile = filepath.Join(realRoot, absProfile)
+	}
+	absProfile = filepath.Clean(absProfile)
 	cur := absProfile
 	var trailing []string
 	for {
@@ -150,7 +156,7 @@ func TestMeetingLiveScheduledOvertimeAndCallEnd(t *testing.T) {
 		context.Background(),
 		browser.Options{
 			Headless:       true,
-			UserDataDir:    profile,
+			UserDataDir:    realProfile,
 			ExecPath:       os.Getenv("TEAMS_BROWSER_PATH"),
 			DefaultAccount: os.Getenv("TEAMS_ACCOUNT"),
 		},
@@ -178,6 +184,7 @@ func TestMeetingLiveScheduledOvertimeAndCallEnd(t *testing.T) {
 	nominalDeadline := time.Now().Add(liveNominalDuration)
 
 	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
 	captionErrCh := make(chan error, 1)
 	audioErrCh := make(chan error, 1)
 	var audioBuf bytes.Buffer
@@ -205,16 +212,10 @@ func TestMeetingLiveScheduledOvertimeAndCallEnd(t *testing.T) {
 	case <-time.After(liveNominalDuration + liveOvertimeWindow):
 	}
 
-	require.GreaterOrEqual(
-		t,
-		lastActivityUnixNano.Load(),
-		nominalDeadline.UnixNano(),
-		"expected live caption or voice activity past nominal duration during overtime window",
-	)
-
 	select {
 	case <-callEndedCh:
 	default:
+		// Best-effort in-browser hangup click; callEndedCh timeout below surfaces any failure to terminate.
 		_ = chromedp.Run(streamCtx, chromedp.Evaluate(`(() => {
 			const btn = document.querySelector('#hangup-button, [data-tid="hangup-button"], [data-tid="hangup-main-btn"]');
 			if (btn) { btn.click(); return true; }
@@ -222,18 +223,25 @@ func TestMeetingLiveScheduledOvertimeAndCallEnd(t *testing.T) {
 		})()`, nil))
 	}
 
+	var callEndedTimedOut bool
 	select {
 	case <-callEndedCh:
 	case <-time.After(15 * time.Second):
-		cancelStream()
-		<-captionErrCh
-		<-audioErrCh
-		t.Fatal("timed out waiting for OnCallEnded callback after call termination")
+		callEndedTimedOut = true
 	}
 
 	cancelStream()
-	require.NoError(t, <-captionErrCh)
-	require.NoError(t, <-audioErrCh)
+	capErr := <-captionErrCh
+	audErr := <-audioErrCh
+	require.NoError(t, capErr)
+	require.NoError(t, audErr)
+	require.False(t, callEndedTimedOut, "timed out waiting for OnCallEnded callback after call termination")
+	require.GreaterOrEqual(
+		t,
+		lastActivityUnixNano.Load(),
+		nominalDeadline.UnixNano(),
+		"expected live caption or voice activity past nominal duration during overtime window",
+	)
 }
 
 // TestMeetingLiveRecapAISummaryEnrichment verifies ForceRecap and AISummaryOnly

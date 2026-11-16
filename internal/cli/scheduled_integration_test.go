@@ -56,8 +56,11 @@ func requireCLIIntegration(t *testing.T) string {
 	realRoot, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err, "resolve repository root")
 
-	absProfile, err := filepath.Abs(profile)
-	require.NoError(t, err, "resolve TEAMS_PROFILE_DIR")
+	absProfile := profile
+	if !filepath.IsAbs(absProfile) {
+		absProfile = filepath.Join(realRoot, absProfile)
+	}
+	absProfile = filepath.Clean(absProfile)
 	cur := absProfile
 	var trailing []string
 	for {
@@ -79,7 +82,7 @@ func requireCLIIntegration(t *testing.T) string {
 	ignoreCmd.Dir = realRoot
 	require.NoError(t, ignoreCmd.Run(), "TEAMS_PROFILE_DIR must be ignored by git")
 
-	return profile
+	return realProfile
 }
 
 // TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown exercises `go-teams
@@ -148,6 +151,8 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 			require.NoError(t, err, "live join command exited before persisting deferred queue entry")
 			t.Fatal("live join command exited before persisting deferred queue entry")
 		case <-outerCtx.Done():
+			cancelRun()
+			<-errCh
 			t.Fatal("timed out waiting for live join session self-termination and deferred queue persistence")
 		case <-ticker.C:
 			qBytes, qErr := os.ReadFile(queuePath)
@@ -189,6 +194,9 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		require.Equal(t, os.FileMode(0o600), mdInfo.Mode().Perm(), "expected owner-only 0600 transcript file permissions")
 	}
+	mdBytes, err := os.ReadFile(mdPath)
+	require.NoError(t, err)
+	require.True(t, strings.Contains(string(mdBytes), "## Transcript"), "expected transcript body section in saved Markdown")
 
 	require.True(t, strings.Contains(qStr, "--append-ai-summary"), "expected deferred --append-ai-summary entry in queue file")
 	require.True(t, strings.Contains(qStr, filepath.Base(mdPath)), "expected deferred queue entry to reference saved transcript")

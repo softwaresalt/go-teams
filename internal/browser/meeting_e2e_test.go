@@ -234,6 +234,7 @@ func TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			// httptest handler; write failure surfaces as test timeout.
 			_, _ = w.Write([]byte(`<!doctype html>
 <html>
 <head><title>Microsoft Teams</title></head>
@@ -282,24 +283,32 @@ func TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd(t *testing.T) {
       stage.innerHTML = '<div data-tid="closed-caption-renderer-wrapper" id="cc"></div>';
       const cc = document.getElementById('cc');
 
-      setTimeout(() => {
-        cc.innerHTML = '' +
-          '<div class="fui-ChatMessageCompact" id="msg1">' +
-          '  <span data-tid="author">Alice</span>' +
-          '  <span data-tid="closed-caption-text" id="t1">Overtime discussion still</span>' +
-          '</div>';
-      }, 100);
-
-      setTimeout(() => {
-        const el = document.getElementById('t1');
-        if (el) {
-          el.textContent = 'Overtime discussion still active.';
+      function emitWhenObserverReady() {
+        if (typeof window.sendCaptionToGo !== 'function') {
+          setTimeout(emitWhenObserverReady, 50);
+          return;
         }
-      }, 700);
+        setTimeout(() => {
+          cc.innerHTML = '' +
+            '<div class="fui-ChatMessageCompact" id="msg1">' +
+            '  <span data-tid="author">Alice</span>' +
+            '  <span data-tid="closed-caption-text" id="t1">Overtime discussion still</span>' +
+            '</div>';
+        }, 100);
 
-      setTimeout(() => {
-        app.innerHTML = '<div data-tid="call-ended-screen">You left the meeting</div>';
-      }, 1100);
+        setTimeout(() => {
+          const el = document.getElementById('t1');
+          if (el) {
+            el.textContent = 'Overtime discussion still active.';
+          }
+        }, 700);
+
+        setTimeout(() => {
+          app.innerHTML = '<div data-tid="call-ended-screen">You left the meeting</div>';
+        }, 1100);
+      }
+
+      emitWhenObserverReady();
     }
   </script>
 </body>
@@ -401,9 +410,8 @@ func TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			// httptest handler; write failure surfaces as test timeout.
 			_, _ = w.Write([]byte(`<!doctype html>
-<html>
-<head><title>Meeting Recap</title></head>
 <body>
   <div data-tid="intelligent-recap-header">Recap</div>
   <button role="tab" data-tid="Notes" aria-selected="false">Notes</button>

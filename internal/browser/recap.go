@@ -681,6 +681,8 @@ const extractRecapAudioJS = `(async () => {
 		let mseSeq = 0;
 		let mseLastAppendAt = 0;
 		let mseMaxBufferedEnd = 0;
+		let mseContiguousEnd = 0;
+		let mseHasBufferedGap = false;
 		let audioSBRef = null;
 		let activeTimers = new Set();
 		const trackedListeners = [];
@@ -717,8 +719,17 @@ const extractRecapAudioJS = `(async () => {
 		function toUint8Array(data) {
 			if (!data) return null;
 			if (data instanceof Uint8Array) return data;
-			if (data instanceof ArrayBuffer) return new Uint8Array(data);
-			if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+			if (data instanceof ArrayBuffer ||
+				(playerWin && playerWin.ArrayBuffer && data instanceof playerWin.ArrayBuffer) ||
+				Object.prototype.toString.call(data) === '[object ArrayBuffer]') {
+				return new Uint8Array(data);
+			}
+			if (ArrayBuffer.isView(data) ||
+				(playerWin && playerWin.ArrayBuffer && typeof playerWin.ArrayBuffer.isView === 'function' && playerWin.ArrayBuffer.isView(data)) ||
+				(data.buffer && Object.prototype.toString.call(data.buffer) === '[object ArrayBuffer]' &&
+					typeof data.byteOffset === 'number' && typeof data.byteLength === 'number')) {
+				return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+			}
 			return null;
 		}
 		function mseBytesTotal() {
@@ -813,24 +824,36 @@ const extractRecapAudioJS = `(async () => {
 		function stepVideoPlayback() {
 			if (pathAActive || fatalErr) return;
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-			if (!m) return;
-			try {
-				m.muted = true;
-				m.volume = 0;
-				if (m.playbackRate !== 16) m.playbackRate = 16;
-			} catch (_) {}
+			if (m) {
+				try {
+					m.muted = true;
+					m.volume = 0;
+					if (m.playbackRate !== 16) m.playbackRate = 16;
+				} catch (_) {}
+			}
 			const sb = audioSBRef;
 			if (sb && sb.buffered && sb.buffered.length > 0) {
 				try {
-					const bufEnd = sb.buffered.end(sb.buffered.length - 1);
-					if (Number.isFinite(bufEnd) && bufEnd > 0) {
-						if (bufEnd > mseMaxBufferedEnd) mseMaxBufferedEnd = bufEnd;
-						const targetTime = Math.max(0, bufEnd - 0.05);
-						if (Number.isFinite(m.currentTime) && targetTime > m.currentTime + 0.01) {
+					const range0Start = sb.buffered.start(0);
+					const range0End = sb.buffered.end(0);
+					const lastRangeEnd = sb.buffered.end(sb.buffered.length - 1);
+					if (Number.isFinite(lastRangeEnd)) {
+						mseMaxBufferedEnd = Math.max(mseMaxBufferedEnd, lastRangeEnd);
+					}
+					mseHasBufferedGap = sb.buffered.length > 1;
+					if (Number.isFinite(range0Start) && range0Start <= mseContiguousEnd + 0.5 &&
+						Number.isFinite(range0End) && range0End > mseContiguousEnd) {
+						mseContiguousEnd = range0End;
+					}
+					if (Number.isFinite(range0End) && range0End > 0) {
+						const targetTime = Math.max(0, range0End - 0.05);
+						if (m && Number.isFinite(m.currentTime) && targetTime > m.currentTime + 0.01) {
 							m.currentTime = targetTime;
 						}
-						if (bufEnd > 30 && !sb.updating && typeof sb.remove === 'function') {
-							try { sb.remove(0, bufEnd - 30); } catch (_) {}
+						const bufStart = range0Start;
+						const cutoff = range0End - 30;
+						if (Number.isFinite(bufStart) && cutoff > bufStart + 0.5 && !sb.updating && typeof sb.remove === 'function') {
+							try { sb.remove(bufStart, cutoff); } catch (_) {}
 						}
 					}
 				} catch (_) {}
@@ -896,7 +919,7 @@ const extractRecapAudioJS = `(async () => {
 			activityObserved = true;
 			signalWake();
 			maybeStartPathA();
-			return { isVideoSegment: track === 'video' && part === 'mediasegment' && pathAActive, parsedUrl: u };
+			return { isVideoSegment: track === 'video' && part === 'mediasegment' && (pathAActive || pathAStarted || (Boolean(transcodeAudioTemplateUrl) && !pathAFailed)), parsedUrl: u };
 		}
 		function maybeStartPathA() {
 			if (pathAStarted || pathAFailed || fatalErr || pathAPromise) return;
@@ -931,84 +954,161 @@ const extractRecapAudioJS = `(async () => {
 				return null;
 			});
 		}
-		async function fetchBytesWithCap(urlStr, origFetchFn, hookWin, signal) {
+		async function fetchBytesOnce(urlStr, origFetchFn, hookWin, signal) {
 			if (fatalErr) throw fatalErr;
-			const activeSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
-			if (activeSignal && activeSignal.aborted) {
+			const parentSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
+			if (parentSignal && parentSignal.aborted) {
 				throw new Error('transcode fetch aborted');
 			}
 			if (!isAllowedSameOriginTranscodeURL(urlStr, hookWin || playerWin)) {
 				throw new Error('recap audio transcode URL disallowed');
 			}
-			const u = new URL(urlStr);
-			const originHdrs = capturedAuthHeadersByOrigin[u.origin];
-			const hdrs = (originHdrs && Object.keys(originHdrs).length)
-				? Object.assign({}, originHdrs)
-				: undefined;
-			const fetchOpts = {
-				credentials: 'include',
-				signal: activeSignal,
-				headers: hdrs
+			const reqCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+			let timedOut = false;
+			const onParentAbort = () => {
+				if (reqCtrl) {
+					try { reqCtrl.abort(); } catch (_) {}
+				}
 			};
-			const resp = await origFetchFn.call(hookWin, urlStr, fetchOpts);
-			if (fatalErr) throw fatalErr;
-			if (activeSignal && activeSignal.aborted) {
-				throw new Error('transcode fetch aborted');
+			if (parentSignal && typeof parentSignal.addEventListener === 'function') {
+				parentSignal.addEventListener('abort', onParentAbort, { once: true });
 			}
-			if (!resp || !resp.ok) {
-				throw new Error('transcode fetch failed: ' + (resp ? resp.status : 'network error'));
-			}
-			const cl = Number(resp.headers && resp.headers.get && resp.headers.get('content-length'));
-			if (Number.isFinite(cl) && cl > 0 && streamSourceBytes + cl > maxRecapAudioSourceBytes) {
-				fatalErr = new Error(limitError);
-				if (abortCtrl) abortCtrl.abort();
-				throw fatalErr;
-			}
-			if (!resp.body || !resp.body.getReader) {
-				const ab = await resp.arrayBuffer();
+			const reqTimer = setTimeout(() => {
+				timedOut = true;
+				if (reqCtrl) {
+					try { reqCtrl.abort(); } catch (_) {}
+				}
+			}, 15000);
+			activeTimers.add(reqTimer);
+			try {
+				const u = new URL(urlStr);
+				const originHdrs = capturedAuthHeadersByOrigin[u.origin];
+				const hdrs = (originHdrs && Object.keys(originHdrs).length)
+					? Object.assign({}, originHdrs)
+					: undefined;
+				const fetchOpts = {
+					credentials: 'include',
+					signal: reqCtrl ? reqCtrl.signal : parentSignal,
+					headers: hdrs
+				};
+				const resp = await origFetchFn.call(hookWin, urlStr, fetchOpts);
 				if (fatalErr) throw fatalErr;
-				if (activeSignal && activeSignal.aborted) {
+				if (parentSignal && parentSignal.aborted) {
 					throw new Error('transcode fetch aborted');
 				}
-				const u8 = new Uint8Array(ab);
-				if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+				if (timedOut) {
+					const err = new Error('transcode fetch timeout');
+					err.retryable = true;
+					throw err;
+				}
+				if (!resp || !resp.ok) {
+					const st = resp ? Number(resp.status) : 0;
+					const err = new Error('transcode fetch failed: ' + (resp ? resp.status : 'network error'));
+					if (!resp || st === 429 || st >= 500) err.retryable = true;
+					throw err;
+				}
+				const cl = Number(resp.headers && resp.headers.get && resp.headers.get('content-length'));
+				if (Number.isFinite(cl) && cl > 0 && streamSourceBytes + cl > maxRecapAudioSourceBytes) {
 					fatalErr = new Error(limitError);
 					if (abortCtrl) abortCtrl.abort();
 					throw fatalErr;
 				}
-				streamSourceBytes += u8.byteLength;
-				return u8;
-			}
-			const reader = resp.body.getReader();
-			const chunks = [];
-			let total = 0;
-			while (true) {
-				if (fatalErr || (activeSignal && activeSignal.aborted)) {
-					try { await reader.cancel(); } catch (_) {}
-					throw (fatalErr || new Error('transcode fetch aborted'));
+				if (!resp.body || !resp.body.getReader) {
+					const ab = await resp.arrayBuffer();
+					if (fatalErr) throw fatalErr;
+					if (parentSignal && parentSignal.aborted) {
+						throw new Error('transcode fetch aborted');
+					}
+					const u8 = new Uint8Array(ab);
+					if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+						fatalErr = new Error(limitError);
+						if (abortCtrl) abortCtrl.abort();
+						throw fatalErr;
+					}
+					streamSourceBytes += u8.byteLength;
+					return u8;
 				}
-				const part = await reader.read();
-				if (fatalErr || (activeSignal && activeSignal.aborted)) {
-					try { await reader.cancel(); } catch (_) {}
-					throw (fatalErr || new Error('transcode fetch aborted'));
+				const reader = resp.body.getReader();
+				const chunks = [];
+				let total = 0;
+				while (true) {
+					if (fatalErr || (parentSignal && parentSignal.aborted)) {
+						try { await reader.cancel(); } catch (_) {}
+						throw (fatalErr || new Error('transcode fetch aborted'));
+					}
+					if (timedOut) {
+						try { await reader.cancel(); } catch (_) {}
+						const err = new Error('transcode fetch timeout');
+						err.retryable = true;
+						throw err;
+					}
+					const part = await reader.read();
+					if (fatalErr || (parentSignal && parentSignal.aborted)) {
+						try { await reader.cancel(); } catch (_) {}
+						throw (fatalErr || new Error('transcode fetch aborted'));
+					}
+					if (part.done) break;
+					const v = part.value;
+					if (!v || !v.byteLength) continue;
+					if (streamSourceBytes + total + v.byteLength > maxRecapAudioSourceBytes) {
+						try { await reader.cancel(); } catch (_) {}
+						fatalErr = new Error(limitError);
+						if (abortCtrl) abortCtrl.abort();
+						throw fatalErr;
+					}
+					total += v.byteLength;
+					chunks.push(v);
 				}
-				if (part.done) break;
-				const v = part.value;
-				if (!v || !v.byteLength) continue;
-				if (streamSourceBytes + v.byteLength > maxRecapAudioSourceBytes) {
-					try { await reader.cancel(); } catch (_) {}
+				if (streamSourceBytes + total > maxRecapAudioSourceBytes) {
 					fatalErr = new Error(limitError);
 					if (abortCtrl) abortCtrl.abort();
 					throw fatalErr;
 				}
-				streamSourceBytes += v.byteLength;
-				total += v.byteLength;
-				chunks.push(v);
+				streamSourceBytes += total;
+				const out = new Uint8Array(total);
+				let off = 0;
+				for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+				return out;
+			} catch (err) {
+				if (timedOut && (!parentSignal || !parentSignal.aborted)) {
+					const tErr = new Error('transcode fetch timeout');
+					tErr.retryable = true;
+					throw tErr;
+				}
+				if (err && (err.name === 'TypeError' || err.name === 'NetworkError') && (!parentSignal || !parentSignal.aborted)) {
+					err.retryable = true;
+				}
+				throw err;
+			} finally {
+				clearTimeout(reqTimer);
+				activeTimers.delete(reqTimer);
+				if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
+					parentSignal.removeEventListener('abort', onParentAbort);
+				}
 			}
-			const out = new Uint8Array(total);
-			let off = 0;
-			for (const c of chunks) { out.set(c, off); off += c.byteLength; }
-			return out;
+		}
+		async function fetchBytesWithCap(urlStr, origFetchFn, hookWin, signal) {
+			const parentSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
+			let lastAttemptErr = null;
+			for (let attempt = 0; attempt < 3; attempt++) {
+				if (fatalErr) throw fatalErr;
+				if (parentSignal && parentSignal.aborted) {
+					throw new Error('transcode fetch aborted');
+				}
+				try {
+					return await fetchBytesOnce(urlStr, origFetchFn, hookWin, signal);
+				} catch (err) {
+					lastAttemptErr = err;
+					if (fatalErr || !err || !err.retryable || attempt === 2 || (parentSignal && parentSignal.aborted)) {
+						throw err;
+					}
+					await new Promise(resolve => {
+						const tid = setTimeout(() => { activeTimers.delete(tid); resolve(); }, 250 * (attempt + 1));
+						activeTimers.add(tid);
+					});
+				}
+			}
+			throw lastAttemptErr;
 		}
 		async function decryptSegmentBytes(rawU8, keyInfo, origDecryptFn, subtleCtx) {
 			if (isFMP4InitSegment(rawU8) || isFMP4MediaSegment(rawU8)) return rawU8;
@@ -1116,7 +1216,7 @@ const extractRecapAudioJS = `(async () => {
 						segments[k] = decSeg;
 					}
 				}
-				for (let i = 0; i < Math.min(16, totalSegments); i++) workers.push(worker());
+				for (let i = 0; i < Math.min(8, totalSegments); i++) workers.push(worker());
 				await Promise.all(workers);
 				if (fatalErr) throw fatalErr;
 				if (segments.some(s => !s)) throw new Error('incomplete Path A segment set');
@@ -1451,9 +1551,10 @@ const extractRecapAudioJS = `(async () => {
 						return 0;
 					})();
 					if (mseInitSegment && mseSegments.size > 0) {
-						if (m && m.ended) break;
-						if (targetDur > 0) {
-							if (mseMaxBufferedEnd >= targetDur - 0.5 && Date.now() - mseLastAppendAt >= 150) break;
+						if (m && m.ended) {
+							if (!(targetDur > 0) || (!mseHasBufferedGap && mseContiguousEnd >= targetDur - 0.5)) break;
+						} else if (targetDur > 0) {
+							if (!mseHasBufferedGap && mseContiguousEnd >= targetDur - 0.5 && Date.now() - mseLastAppendAt >= 150) break;
 						} else if (mseLastAppendAt > 0 && Date.now() - mseLastAppendAt >= 3000) {
 							break;
 						}
@@ -1506,6 +1607,7 @@ const extractRecapAudioJS = `(async () => {
 			}
 			const curMedia = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 			if (!pathAResult && mseInitSegment && mseSegments.size > 0) {
+				stepVideoPlayback();
 				const finalTargetDur = (() => {
 					for (const raw of [curMedia && curMedia.duration, info.duration, info.durationSeconds]) {
 						const d = Number(raw);
@@ -1514,7 +1616,7 @@ const extractRecapAudioJS = `(async () => {
 					if (transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
 					return 0;
 				})();
-				if (finalTargetDur > 0 && !(curMedia && curMedia.ended) && mseMaxBufferedEnd < finalTargetDur - 0.5) {
+				if (finalTargetDur > 0 && (mseHasBufferedGap || mseContiguousEnd < finalTargetDur - 0.5)) {
 					throw new Error('recap audio MSE stream incomplete before deadline');
 				}
 			}
@@ -1660,7 +1762,8 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		switch {
 		case strings.Contains(msg, "exceeds maximum supported size/duration"):
 			return 3
-		case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"):
+		case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"),
+			strings.Contains(msg, "MSE stream incomplete"), strings.Contains(msg, "Path A capture deadline exceeded"):
 			return 2
 		case strings.Contains(msg, "isDownloadBlocked=true"):
 			return 1
@@ -1796,10 +1899,15 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				if payload.ChunkCount <= 0 {
 					continue
 				}
+				pullSess, sessErr := newCDPEvalSession(ctx, target.WebSocketDebuggerURL, int64(maxRecapAudioPCMBytes)*2+65536)
+				if sessErr != nil {
+					return fmt.Errorf("browser: open recap audio transfer session: %w", sessErr)
+				}
 				cleanupTransfer := func() {
 					cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Second)
 					defer cleanCancel()
-					_, _ = evalInCDPTarget(cleanCtx, target.WebSocketDebuggerURL, `(() => { delete window.__goTeamsRecapAudioTransfer; return ""; })()`)
+					_, _ = pullSess.eval(cleanCtx, `(() => { delete window.__goTeamsRecapAudioTransfer; return ""; })()`, 2*time.Second)
+					pullSess.close()
 				}
 				enc := audio.NewEncoder(w, audio.SampleRate)
 				var size int64
@@ -1808,10 +1916,10 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 						cleanupTransfer()
 						return fmt.Errorf("browser: recap audio cancelled: %w", err)
 					}
-					batchRaw, pullErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, `(() => {
+					batchRaw, pullErr := pullSess.eval(ctx, `(() => {
 						const t = window.__goTeamsRecapAudioTransfer;
 						if (!t || !Array.isArray(t.chunks)) return "[]";
-						return JSON.stringify(t.chunks.splice(0, 32));
+						return JSON.stringify(t.chunks.splice(0, 64));
 					})()`, 30*time.Second)
 					if pullErr != nil {
 						cleanupTransfer()
@@ -1823,7 +1931,8 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 						return fmt.Errorf("browser: decode recap audio chunk batch: %w", err)
 					}
 					if len(batch) == 0 {
-						break
+						cleanupTransfer()
+						return fmt.Errorf("browser: incomplete recap audio chunk transfer (%d of %d chunks)", pulled, payload.ChunkCount)
 					}
 					for _, chunk := range batch {
 						n := int64(base64.StdEncoding.DecodedLen(len(chunk)))
@@ -3128,6 +3237,65 @@ func evalInCDPTargetWithin(ctx context.Context, wsURL, expr string, timeout time
 	return evalInCDPTargetWithLimit(ctx, wsURL, expr, timeout, int64(maxRecapAudioPCMBytes)*2+65536)
 }
 
+type cdpEvalSession struct {
+	wsURL string
+	limit int64
+	conn  net.Conn
+	reqID int
+}
+
+func newCDPEvalSession(ctx context.Context, wsURL string, limit int64) (*cdpEvalSession, error) {
+	s := &cdpEvalSession{wsURL: wsURL, limit: limit}
+	if err := s.dial(ctx); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *cdpEvalSession) dial(ctx context.Context) error {
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, _, _, err := ws.Dial(dialCtx, s.wsURL)
+	if err != nil {
+		return err
+	}
+	s.conn = conn
+	return nil
+}
+
+func (s *cdpEvalSession) close() {
+	if s.conn != nil {
+		_ = s.conn.Close() // Best-effort CDP WebSocket close on session teardown.
+		s.conn = nil
+	}
+}
+
+func (s *cdpEvalSession) eval(ctx context.Context, expr string, timeout time.Duration) (string, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		if s.conn == nil {
+			if err := s.dial(ctx); err != nil {
+				return "", err
+			}
+		}
+		s.reqID++
+		res, err := evalOnCDPConn(ctx, s.conn, s.reqID, expr, timeout, s.limit)
+		if err == nil {
+			return res, nil
+		}
+		if ctx.Err() != nil {
+			s.close()
+			return "", ctx.Err()
+		}
+		// If a single-request mock server closed the socket after the previous reply,
+		// reconnect once transparently; real Chromium keeps the socket open.
+		s.close()
+		if attempt == 1 {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("browser: cdp eval failed")
+}
+
 func evalInCDPTargetWithLimit(ctx context.Context, wsURL, expr string, timeout time.Duration, limit int64) (string, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -3136,12 +3304,16 @@ func evalInCDPTargetWithLimit(ctx context.Context, wsURL, expr string, timeout t
 		return "", err
 	}
 	defer func() { _ = conn.Close() }()
+	return evalOnCDPConn(ctx, conn, 1, expr, timeout, limit)
+}
+
+func evalOnCDPConn(ctx context.Context, conn net.Conn, reqID int, expr string, timeout time.Duration, limit int64) (string, error) {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() }) // unblocks the pending read on cancellation
 	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	req := map[string]any{
-		"id":     1,
+		"id":     reqID,
 		"method": "Runtime.evaluate",
 		"params": map[string]any{
 			"expression":    expr,
@@ -3178,7 +3350,7 @@ func evalInCDPTargetWithLimit(ctx context.Context, wsURL, expr string, timeout t
 				ExceptionDetails any `json:"exceptionDetails"`
 			} `json:"result"`
 		}
-		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == 1 {
+		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID == reqID {
 			if resp.Error != nil {
 				return "", fmt.Errorf("browser: cdp error %d: %s", resp.Error.Code, resp.Error.Message)
 			}

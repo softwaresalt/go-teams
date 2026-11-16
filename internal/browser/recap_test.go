@@ -2540,4 +2540,450 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 			}
 		})
 	})
+
+	t.Run("copilot-pr76-review-fixes", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		t.Run("path-b-rejects-gapped-buffered-ranges-even-when-ended", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const audioInit = buildAudioInitSegment();
+  const seg0 = buildMediaSegment(0, 0x01);
+  const seg2 = buildMediaSegment(441000, 0x02);
+  let fakeNow = 1000000;
+  let polls = 0;
+  Date.now = () => fakeNow;
+
+  const ranges = [[0, 5], [10, 15]];
+  class FakeSourceBuffer extends EventTarget {
+    constructor(mime) {
+      super();
+      this.mime = mime;
+      this.updating = false;
+      this.buffered = {
+        get length() { return ranges.length; },
+        start: (i) => ranges[i][0],
+        end: (i) => ranges[i][1]
+      };
+    }
+    appendBuffer() {}
+    remove() {}
+    abort() {}
+  }
+  class FakeMediaSource extends EventTarget {
+    addSourceBuffer(mime) { return new FakeSourceBuffer(mime); }
+    removeSourceBuffer() {}
+  }
+
+  let _time = 0;
+  const observedCurrentTimes = [];
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    duration: 15,
+    ended: true,
+    paused: true,
+    muted: false,
+    volume: 1,
+    playbackRate: 1,
+    get currentTime() { return _time; },
+    set currentTime(v) { _time = Number(v); observedCurrentTimes.push(_time); },
+    play: async () => {},
+    pause: () => {},
+    getAttribute: () => null
+  };
+
+  let decodes = 0;
+  globalThis.AudioContext = class {
+    async decodeAudioData() { decodes++; throw new Error('must not decode gapped MSE stream'); }
+    async close() {}
+  };
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 15 };
+
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    return origSetTimeout(() => {
+      polls++;
+      if (polls === 3) {
+        fakeNow += 125000;
+      }
+      fn(...args);
+    }, Math.min(ms || 0, 5));
+  };
+
+  const playBtn = {
+    click: () => {
+      const ms = new FakeMediaSource();
+      const audioSB = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      audioSB.appendBuffer(audioInit);
+      audioSB.appendBuffer(seg0);
+      audioSB.appendBuffer(seg2);
+    }
+  };
+  globalThis.document = {
+    querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null),
+    querySelectorAll: () => []
+  };
+
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('recap audio MSE stream incomplete before deadline')) {
+    throw new Error('expected incomplete MSE stream error on gapped ranges, got: ' + String(failure));
+  }
+  if (decodes !== 0) {
+    throw new Error('decodeAudioData called ' + decodes + ' times on gapped stream');
+  }
+  if (observedCurrentTimes.some(t => t > 5)) {
+    throw new Error('currentTime jumped across unbuffered gap: ' + JSON.stringify(observedCurrentTimes));
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("gapped buffered ranges probe failed: %v\n%s", err, out)
+			}
+		})
+
+		t.Run("transfer-pending-empty-batch-mid-transfer-returns-error", func(t *testing.T) {
+			var evalCalls atomic.Int32
+			var cleanupSeen atomic.Bool
+			var serverURL string
+			pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					require.NoError(t, json.NewEncoder(w).Encode([]cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+						{ID: "frame", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/frame"},
+					}))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					t.Errorf("read: %v", err)
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+					Params struct {
+						Expression string `json:"expression"`
+					} `json:"params"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var result map[string]any
+				switch {
+				case req.Method == "Page.getFrameTree":
+					result = map[string]any{"frameTree": map[string]any{
+						"frame": map[string]string{"id": "owner", "url": harnessRecapURL},
+					}}
+				case r.URL.Path == "/frame":
+					if len(req.Params.Expression) < 200 && strings.Contains(req.Params.Expression, "delete window.__goTeamsRecapAudioTransfer") {
+						cleanupSeen.Store(true)
+						result = map[string]any{"result": map[string]string{"value": ""}}
+						break
+					}
+					n := evalCalls.Add(1)
+					var value string
+					switch n {
+					case 1:
+						value = `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-a","sourceBytes":1024,"durationSec":1.0,"transferPending":true,"chunkCount":3}`
+					case 2:
+						batch, _ := json.Marshal([]string{pcm})
+						value = string(batch)
+					default:
+						value = "[]"
+					}
+					result = map[string]any{"result": map[string]string{"value": value}}
+				default:
+					result = map[string]any{"result": map[string]string{"value": ""}}
+				}
+				resp, err := json.Marshal(map[string]any{"id": req.ID, "result": result})
+				require.NoError(t, err)
+				require.NoError(t, wsutil.WriteServerText(conn, resp))
+			}))
+			defer srv.Close()
+			serverURL = srv.URL
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
+			tCtx, tCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer tCancel()
+			var out bytes.Buffer
+			err = captureRecapAudioFromTargets(tCtx, port, "owner", harnessRecapURL, &out)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "incomplete recap audio chunk transfer (1 of 3 chunks)")
+			assert.True(t, cleanupSeen.Load(), "expected transfer buffer cleanup evaluation on incomplete transfer")
+		})
+
+		t.Run("path-b-cross-realm-arraybuffer-from-child-iframe", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const vm = require('vm');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const iframeRealm = vm.createContext({});
+  const thirdRealm = vm.createContext({});
+  function toCrossRealmAB(u8, realm) {
+    const ab = vm.runInNewContext('new ArrayBuffer(' + u8.byteLength + ')', realm);
+    new Uint8Array(ab).set(u8);
+    return ab;
+  }
+  function toCrossRealmView(u8, realm) {
+    const ab = toCrossRealmAB(u8, realm);
+    return vm.runInNewContext('(ab) => new Uint8Array(ab)', realm)(ab);
+  }
+
+  const audioInitAB = toCrossRealmAB(buildAudioInitSegment(), iframeRealm);
+  const segAAB = toCrossRealmAB(buildMediaSegment(0, 0x01), thirdRealm);
+  const segBView = toCrossRealmView(buildMediaSegment(220500, 0x02), thirdRealm);
+  if (audioInitAB instanceof ArrayBuffer) {
+    throw new Error('test setup error: expected cross-realm ArrayBuffer not instanceof host ArrayBuffer');
+  }
+
+  class FakeSourceBuffer extends EventTarget {
+    constructor(mime) {
+      super();
+      this.mime = mime;
+      this.updating = false;
+      this._end = 0;
+      this.buffered = {
+        get length() { return this._sb._end > 0 ? 1 : 0; },
+        start: () => 0,
+        end: () => this._end,
+        _sb: null
+      };
+      this.buffered._sb = this;
+    }
+    appendBuffer() {}
+    remove() {}
+    abort() {}
+  }
+  class FakeMediaSource extends EventTarget {
+    addSourceBuffer(mime) { return new FakeSourceBuffer(mime); }
+    removeSourceBuffer() {}
+  }
+
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/mse-cross-realm',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/mse-cross-realm',
+    duration: 10,
+    ended: false,
+    paused: true,
+    muted: true,
+    volume: 0,
+    playbackRate: 16,
+    currentTime: 0,
+    play: async () => {},
+    pause: () => {},
+    getAttribute: () => null,
+    querySelector: () => null
+  };
+
+  let decodedBytes = null;
+  class FakeAudioContext {
+    async decodeAudioData(ab) {
+      decodedBytes = new Uint8Array(ab);
+      return {
+        sampleRate: 44100,
+        length: 4410,
+        duration: 0.1,
+        numberOfChannels: 1,
+        getChannelData: () => new Float32Array(4410).fill(0.5)
+      };
+    }
+    async close() {}
+  }
+
+  const childPlayBtn = {
+    click: () => {
+      const ms = new childWin.MediaSource();
+      const sb = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      sb._end = 10;
+      videoEl.ended = true;
+      sb.appendBuffer(audioInitAB);
+      sb.appendBuffer(segAAB);
+      sb.appendBuffer(segBView);
+    }
+  };
+  const childDoc = {
+    querySelector: sel => sel.includes('Play video') ? childPlayBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null),
+    querySelectorAll: () => []
+  };
+  const childWin = {
+    ArrayBuffer: vm.runInNewContext('ArrayBuffer', iframeRealm),
+    location: { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a' },
+    g_fileInfo: { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 10 },
+    document: childDoc,
+    MediaSource: FakeMediaSource,
+    SourceBuffer: FakeSourceBuffer,
+    AudioContext: FakeAudioContext
+  };
+  childWin.window = childWin;
+
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/xplatplugins.aspx?driveItemId=recording-a' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true };
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.AudioContext = FakeAudioContext;
+  globalThis.document = {
+    querySelector: () => null,
+    querySelectorAll: sel => sel.includes('iframe') ? [{
+      src: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a',
+      contentWindow: childWin,
+      contentDocument: childDoc
+    }] : []
+  };
+
+  const rawResult = await eval(fs.readFileSync(0, 'utf8'));
+  if (!rawResult) throw new Error('expected JSON payload from cross-realm iframe');
+  const parsed = JSON.parse(rawResult);
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected non-empty pcmChunks');
+  if (!decodedBytes) throw new Error('expected decodeAudioData call');
+  const tfdts = collectTFDTs(decodedBytes.buffer);
+  if (JSON.stringify(tfdts) !== JSON.stringify([0, 220500])) {
+    throw new Error('expected cross-realm tfdt [0,220500], got: ' + JSON.stringify(tfdts));
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("cross-realm ArrayBuffer probe failed: %v\n%s", err, out)
+			}
+		})
+
+		t.Run("path-b-sb-remove-not-repeated-after-eviction", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const audioInit = buildAudioInitSegment();
+  const seg0 = buildMediaSegment(0, 0x01);
+  const seg1 = buildMediaSegment(220500, 0x02);
+  const removeCalls = [];
+
+  class FakeSourceBuffer extends EventTarget {
+    constructor(mime) {
+      super();
+      this.mime = mime;
+      this.updating = false;
+      this._start = 0;
+      this._end = 0;
+      const self = this;
+      this.buffered = {
+        get length() { return self._end > self._start ? 1 : 0; },
+        start: () => self._start,
+        end: () => self._end
+      };
+    }
+    appendBuffer() {}
+    remove(start, end) {
+      removeCalls.push([start, end]);
+      if (removeCalls.length > 5) {
+        throw new Error('sb.remove invoked repeatedly: ' + JSON.stringify(removeCalls));
+      }
+      this.updating = true;
+      this._start = end;
+      setTimeout(() => {
+        this.updating = false;
+        this.dispatchEvent(new Event('updateend'));
+      }, 2);
+    }
+    abort() {}
+  }
+  class FakeMediaSource extends EventTarget {
+    addSourceBuffer(mime) { return new FakeSourceBuffer(mime); }
+    removeSourceBuffer() {}
+  }
+
+  let audioSB = null;
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    duration: 40,
+    ended: false,
+    paused: true,
+    muted: false,
+    volume: 1,
+    playbackRate: 1,
+    currentTime: 0,
+    play: async () => {},
+    pause: () => {},
+    getAttribute: () => null
+  };
+
+  globalThis.AudioContext = class {
+    async decodeAudioData() {
+      return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) };
+    }
+    async close() {}
+  };
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 40 };
+
+  let removeCallsBeforeAdvance = -1;
+  const playBtn = {
+    click: () => {
+      const ms = new FakeMediaSource();
+      audioSB = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      audioSB._end = 35;
+      audioSB.appendBuffer(audioInit);
+      audioSB.appendBuffer(seg0);
+      // Wait across multiple polling ticks and updateend events while _end stays 35 (cutoff = 5).
+      setTimeout(() => {
+        removeCallsBeforeAdvance = removeCalls.length;
+        audioSB._end = 40;
+        videoEl.ended = true;
+        audioSB.appendBuffer(seg1);
+      }, 90);
+    }
+  };
+  globalThis.document = {
+    querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null),
+    querySelectorAll: () => []
+  };
+
+  const rawResult = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(rawResult);
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected valid PCM');
+  if (removeCallsBeforeAdvance !== 1) {
+    throw new Error('expected exactly 1 sb.remove call while buffered end=35, got ' + removeCallsBeforeAdvance + ' calls=' + JSON.stringify(removeCalls));
+  }
+  if (JSON.stringify(removeCalls) !== JSON.stringify([[0, 5], [5, 10]])) {
+    throw new Error('expected bounded sb.remove calls [[0,5],[5,10]], got: ' + JSON.stringify(removeCalls));
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("sb.remove bounded eviction probe failed: %v\n%s", err, out)
+			}
+		})
+	})
 }

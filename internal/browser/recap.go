@@ -821,6 +821,19 @@ const extractRecapAudioJS = `(async () => {
 			shim.changeType = () => {};
 			return shim;
 		}
+		function emitSuppressedSBUpdate(sb) {
+			if (!sb || typeof sb.dispatchEvent !== 'function') return;
+			const tid = setTimeout(() => {
+				activeTimers.delete(tid);
+				try {
+					const Ev = playerWin.Event || Event;
+					sb.dispatchEvent(new Ev('updatestart'));
+					sb.dispatchEvent(new Ev('update'));
+					sb.dispatchEvent(new Ev('updateend'));
+				} catch (_) {}
+			}, 0);
+			activeTimers.add(tid);
+		}
 		function stepVideoPlayback() {
 			if (pathAActive || fatalErr) return;
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
@@ -862,12 +875,12 @@ const extractRecapAudioJS = `(async () => {
 		function normalizeHeaders(hdrs) {
 			const out = {};
 			if (!hdrs) return out;
-			if (typeof hdrs.forEach === 'function') {
-				hdrs.forEach((v, k) => { out[String(k).toLowerCase()] = String(v); });
-			} else if (Array.isArray(hdrs)) {
+			if (Array.isArray(hdrs)) {
 				for (const pair of hdrs) {
 					if (Array.isArray(pair) && pair.length >= 2) out[String(pair[0]).toLowerCase()] = String(pair[1]);
 				}
+			} else if (typeof hdrs.forEach === 'function') {
+				hdrs.forEach((v, k) => { out[String(k).toLowerCase()] = String(v); });
 			} else if (typeof hdrs === 'object') {
 				for (const [k, v] of Object.entries(hdrs)) out[String(k).toLowerCase()] = String(v);
 			}
@@ -1378,12 +1391,15 @@ const extractRecapAudioJS = `(async () => {
 								activeTimers.delete(tid);
 								try {
 									const Ev = w.Event || Event;
-									if (typeof self.onreadystatechange === 'function') self.onreadystatechange(new Ev('readystatechange'));
-									self.dispatchEvent(new Ev('readystatechange'));
-									if (typeof self.onload === 'function') self.onload(new Ev('load'));
-									self.dispatchEvent(new Ev('load'));
-									if (typeof self.onloadend === 'function') self.onloadend(new Ev('loadend'));
-									self.dispatchEvent(new Ev('loadend'));
+									if (typeof self.dispatchEvent === 'function') {
+										self.dispatchEvent(new Ev('readystatechange'));
+										self.dispatchEvent(new Ev('load'));
+										self.dispatchEvent(new Ev('loadend'));
+									} else {
+										if (typeof self.onreadystatechange === 'function') self.onreadystatechange(new Ev('readystatechange'));
+										if (typeof self.onload === 'function') self.onload(new Ev('load'));
+										if (typeof self.onloadend === 'function') self.onloadend(new Ev('loadend'));
+									}
 								} catch (_) {}
 							}, 0);
 							activeTimers.add(tid);
@@ -1441,18 +1457,22 @@ const extractRecapAudioJS = `(async () => {
 				const origAppend = sbProto.appendBuffer;
 				sbProto.appendBuffer = function(data) {
 					if (this && this.__isRecapVideoShim) return this.appendBuffer(data);
-					if (this && this.mime && String(this.mime).toLowerCase().includes('video')) {
+					if (this && (sbTrackMap.get(this) === 'video' || (this.mime && String(this.mime).toLowerCase().includes('video')))) {
 						sbTrackMap.set(this, 'video');
+						emitSuppressedSBUpdate(this);
 						return;
 					}
 					const u8 = toUint8Array(data);
 					if (u8 && isFMP4InitSegment(u8)) {
 						const initCls = classifyInitSegmentTrack(u8);
-						if (this) {
-							if (initCls === 'video') {
+						if (initCls === 'video') {
+							if (this) {
 								sbTrackMap.set(this, 'video');
-								return;
+								emitSuppressedSBUpdate(this);
 							}
+							return;
+						}
+						if (this) {
 							if (initCls === 'audio') {
 								sbTrackMap.set(this, 'audio');
 								this.__isRecapAudioSB = true;
@@ -1460,8 +1480,6 @@ const extractRecapAudioJS = `(async () => {
 							} else if (!sbTrackMap.has(this)) {
 								sbTrackMap.set(this, 'unknown');
 							}
-						} else if (initCls === 'video') {
-							return;
 						}
 						if ((this && sbTrackMap.get(this) === 'audio') || initCls === 'audio') {
 							recordMSESegment(u8);
@@ -1581,8 +1599,6 @@ const extractRecapAudioJS = `(async () => {
 							if (!(targetDur > 0) || (!mseHasBufferedGap && mseContiguousEnd >= targetDur - 0.5)) break;
 						} else if (targetDur > 0) {
 							if (!mseHasBufferedGap && mseContiguousEnd >= targetDur - 0.5 && Date.now() - mseLastAppendAt >= 150) break;
-						} else if (mseLastAppendAt > 0 && Date.now() - mseLastAppendAt >= 3000) {
-							break;
 						}
 					}
 				}
@@ -1642,7 +1658,7 @@ const extractRecapAudioJS = `(async () => {
 					if (Number.isFinite(transcodePpd) && transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
 					return 0;
 				})();
-				if (finalTargetDur <= 0 && !(mseMaxBufferedEnd > 0)) {
+				if (finalTargetDur <= 0 && (!(curMedia && curMedia.ended) || !(mseMaxBufferedEnd > 0))) {
 					throw new Error('recap audio MSE stream duration unverified');
 				}
 				if (finalTargetDur > 0 && (mseHasBufferedGap || mseContiguousEnd < finalTargetDur - 0.5)) {

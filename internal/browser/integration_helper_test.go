@@ -525,7 +525,7 @@ func TestLoadTestEnvPrecedenceAndPaths(t *testing.T) {
 		content := strings.Join([]string{
 			"GO_TEAMS_INTEGRATION=1",
 			"TEAMS_ACCOUNT=alice@contoso.com",
-			"TEAMS_MEETING_URL=https://teams.microsoft.com/meet/111?p=realpass",
+			"TEAMS_MEETING_URL=https://teams.microsoft.com/meet/111?p=samplepass",
 			"TEAMS_RECAP_URL=https://teams.microsoft.com/l/meetingrecap?id=222",
 			"TEAMS_PROFILE_DIR=./bin/teams-profile",
 			`TEAMS_BROWSER_PATH=".\bin\msedge.exe"`,
@@ -540,8 +540,8 @@ func TestLoadTestEnvPrecedenceAndPaths(t *testing.T) {
 		assert.Equal(t, "1", os.Getenv("GO_TEAMS_INTEGRATION"))
 		assert.Equal(t, "alice@contoso.com", os.Getenv("TEAMS_ACCOUNT"))
 		assert.Equal(t, "alice@contoso.com", os.Getenv("TEAMS_TEST_ACCOUNT"))
-		assert.Equal(t, "https://teams.microsoft.com/meet/111?p=realpass", os.Getenv("TEAMS_MEETING_URL"))
-		assert.Equal(t, "https://teams.microsoft.com/meet/111?p=realpass", os.Getenv("TEAMS_TEST_MEETING_URL"))
+		assert.Equal(t, "https://teams.microsoft.com/meet/111?p=samplepass", os.Getenv("TEAMS_MEETING_URL"))
+		assert.Equal(t, "https://teams.microsoft.com/meet/111?p=samplepass", os.Getenv("TEAMS_TEST_MEETING_URL"))
 		assert.Equal(t, "https://teams.microsoft.com/l/meetingrecap?id=222", os.Getenv("TEAMS_RECAP_URL"))
 		assert.Equal(t, "https://teams.microsoft.com/l/meetingrecap?id=222", os.Getenv("TEAMS_TEST_RECAP_URL"))
 		assert.Equal(t, filepath.Join(root, "bin", "teams-profile"), os.Getenv("TEAMS_PROFILE_DIR"))

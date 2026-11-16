@@ -919,9 +919,9 @@ GO_TEAMS_INTEGRATION=1 TEAMS_MEETING_URL="https://teams.microsoft.com/l/meetup-j
 | `TEAMS_ACCOUNT` | `TEAMS_TEST_ACCOUNT` | Microsoft Entra account (UPN/email or display name) passed as `DefaultAccount` in browser integration tests |
 | `TEAMS_MEETING_URL` | `TEAMS_TEST_MEETING_URL` | Joinable Teams meeting URL for the live meeting tests |
 | `TEAMS_RECAP_URL` | `TEAMS_TEST_RECAP_URL` | Teams Meeting Recap URL consumed by `TestMeetingLiveRecapAISummaryEnrichment` (`internal/browser`) and `TestLiveTenantDelayedAISummaryQueueReplay` (`internal/cli`) |
-| `TEAMS_PROFILE_DIR` | `TEAMS_TEST_PROFILE_DIR` | Authenticated Chromium profile directory for live integration tests (relative paths resolve from the repository root) |
-| `TEAMS_BROWSER_PATH` | `TEAMS_TEST_BROWSER_PATH` | Chromium/Edge/Chrome executable path or binary name (relative paths resolve from the repository root) |
-| `GO_TEAMS_BINARY` | | Compiled `go-teams` executable path for `TestCompiledBinaryCapturesRecapToExplicitOutput` (relative paths resolve from the repository root) |
+| `TEAMS_PROFILE_DIR` | `TEAMS_TEST_PROFILE_DIR` | Authenticated Chromium profile directory for live integration tests; expands `%VAR%`, `$VAR`, and `~` in a single pass, resolves relative paths from the repository root, and falls back from `go-teams` to an existing `teams-cli` profile with a persisted Teams session |
+| `TEAMS_BROWSER_PATH` | `TEAMS_TEST_BROWSER_PATH` | Chromium/Edge/Chrome executable path or bare binary name; expands `%VAR%`, `$VAR`, and `~` before resolving relative paths from the repository root |
+| `GO_TEAMS_BINARY` | | Compiled `go-teams` executable path for `TestCompiledBinaryCapturesRecapToExplicitOutput`; expands `%VAR%`, `$VAR`, and `~`, resolves relative paths from the repository root, and falls back from `teams-cli.exe` to `go-teams.exe` when present in the same directory |
 | `TEAMS_DISABLE_SANDBOX` | | Set to `1` or `true` in container environments without user namespaces where Chromium requires `--no-sandbox` |
 
 The local synthetic-page end-to-end harness verifies browser caption delivery.
@@ -949,11 +949,15 @@ Microsoft Teams tenant.
 **Prerequisite setup (`.env.local.test`, gitignored):**
 
 * `GO_TEAMS_INTEGRATION="1"`
-* `TEAMS_MEETING_URL`: joinable meeting link for an active scheduled test call
+* `TEAMS_MEETING_URL`: joinable meeting link for an active scheduled test call (or a `/l/meetingrecap` URL for finite Recap transcript/summary verification)
 * `TEAMS_RECAP_URL`: Meeting Recap URL carrying a `threadId` or `meetingrecap`
   route (required when `TEAMS_MEETING_URL` uses `/meet/<id>?p=<passcode>`)
-* `TEAMS_PROFILE_DIR`: workspace-contained, gitignored authenticated browser
-  profile directory (for example `./bin/teams-profile`)
+* `TEAMS_PROFILE_DIR`: authenticated browser profile directory (for example
+  `"%APPDATA%\go-teams\profile"` or gitignored `./bin/teams-profile`; profiles
+  inside the repository root must be git-ignored, while external profiles
+  outside the workspace root are permitted when they do not contain the
+  repository root; falls back to `teams-cli` when `go-teams` has no persisted
+  Teams session yet)
 * `TEAMS_BROWSER_PATH`: path or binary name for Edge/Chrome/Chromium
 * `TEAMS_ACCOUNT`: Microsoft Entra UPN or display name used for account selection
 

@@ -116,10 +116,14 @@ password entry, MFA, or lobby admission themselves.
    mutates it with `teams.MutateJoinURL`.
 2. `internal/browser` allocates Chromium and walks the pre-join state machine
    within any configured `LobbyTimeout` (`ErrLobbyTimeout` on expiration):
-   when `DefaultAccount` is configured and an Entra account picker appears, it
-   clicks the matching account tile (`selectEntraAccountJS`), then dismisses
-   the launcher interstitial, mutes the microphone, injects the bot name for
-   guests, and waits through lobby admission.
+   remote authenticated sessions with a `UserDataDir` (both headed and
+   `--headless=new`) launch through the direct-exec CDP launcher so host
+   profile cookies and cross-origin Entra/Teams `targetId` rebinding work
+   consistently; when `DefaultAccount` is configured and an Entra account picker
+   appears, it clicks the matching account tile (`selectEntraAccountJS`), then
+   dismisses the launcher interstitial (`#openTeamsClientInBrowser` or
+   `joinOnWeb`), mutes the microphone, injects the bot name for guests, and
+   waits through lobby admission.
 3. A `MutationObserver` in the page reports caption rows (emitting both
    throttled 1000 ms interim activity heartbeats and settled/punctuated
    utterances). A `payloadPump` forwards them to the Go side, where
@@ -157,8 +161,10 @@ transcript instead of listening live:
    control, retried up to 20 times with 500 ms between attempts. Transcript
    export still succeeds when no summary appears.
 3. With audio enabled, the recording is decoded through Web Audio over CDP and
-   encoded to MP3, but only after the recording identity is verified against
-   the requested recap and size and duration limits pass.
+   encoded to MP3, but only after the recording identity (`VroomItemID` or
+   `VroomItemId`) is verified against the requested recap and size and duration
+   limits pass; SharePoint `isDownloadBlocked=true` HTML/error responses fail
+   explicitly rather than decoding HTML bytes as audio.
 4. `capture.Session` writes the transcript, a Markdown horizontal rule, and the
    summary, then the process exits.
 

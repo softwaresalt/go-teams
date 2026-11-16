@@ -954,29 +954,35 @@ func isMicrosoftTeamsRecapURL(rawURL string) bool {
 	return isTeamsHostURL(rawURL) && strings.Contains(strings.ToLower(rawURL), "meetingrecap")
 }
 
-var winProfileEnvVarRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%`)
+var profileEnvVarRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
 func expandProfilePath(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return ""
 	}
-	expanded := winProfileEnvVarRe.ReplaceAllStringFunc(trimmed, func(match string) string {
-		sub := winProfileEnvVarRe.FindStringSubmatch(match)
-		if len(sub) != 2 {
+	expanded := profileEnvVarRe.ReplaceAllStringFunc(trimmed, func(match string) string {
+		sub := profileEnvVarRe.FindStringSubmatch(match)
+		name := ""
+		for i := 1; i < len(sub); i++ {
+			if sub[i] != "" {
+				name = sub[i]
+				break
+			}
+		}
+		if name == "" {
 			return match
 		}
-		if v, ok := os.LookupEnv(sub[1]); ok && v != "" {
+		if v, ok := os.LookupEnv(name); ok && v != "" {
 			return v
 		}
-		if strings.EqualFold(sub[1], "USER") || strings.EqualFold(sub[1], "USERPROFILE") {
+		if strings.HasPrefix(match, "%") && (strings.EqualFold(name, "USER") || strings.EqualFold(name, "USERPROFILE")) {
 			if home, err := os.UserHomeDir(); err == nil && home != "" {
 				return home
 			}
 		}
 		return match
 	})
-	expanded = os.ExpandEnv(expanded)
 	if expanded == "~" || strings.HasPrefix(expanded, "~/") || strings.HasPrefix(expanded, `~\`) {
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			if expanded == "~" {
@@ -1021,15 +1027,18 @@ func replaceRightmostPathSegment(p, oldSeg, newSeg string) string {
 }
 
 func resolveExistingProfileDir(raw string) string {
-	expanded := expandProfilePath(raw)
+	return resolveExpandedProfileDir(expandProfilePath(raw))
+}
+
+func resolveExpandedProfileDir(expanded string) string {
 	if expanded == "" {
 		return ""
 	}
-	if hasTeamsSessionInProfile(expanded) {
+	if hasTeamsSessionInExpandedProfile(expanded) {
 		return expanded
 	}
 	legacy := replaceRightmostPathSegment(expanded, "go-teams", "teams-cli")
-	if legacy != expanded && hasTeamsSessionInProfile(legacy) {
+	if legacy != expanded && hasTeamsSessionInExpandedProfile(legacy) {
 		return legacy
 	}
 	return expanded
@@ -1041,7 +1050,10 @@ func resolveExistingProfileDir(raw string) string {
 // capture bootstraps authentication at https://teams.cloud.microsoft/v2/ first
 // to avoid Teams' cold-profile /l/meetingrecap OAuth redirect loop.
 func hasTeamsSessionInProfile(profileDir string) bool {
-	trimmed := expandProfilePath(profileDir)
+	return hasTeamsSessionInExpandedProfile(expandProfilePath(profileDir))
+}
+
+func hasTeamsSessionInExpandedProfile(trimmed string) bool {
 	if trimmed == "" {
 		return false
 	}

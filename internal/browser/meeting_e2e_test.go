@@ -565,12 +565,10 @@ func TestChromeRecapDownloadBlockedStreamEmbedAudioEndToEnd(t *testing.T) {
         const initResp = await fetch(base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=150000000&driveItemId=recording-e2e');
         const initBuf = await initResp.arrayBuffer();
         await window.crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, key, initBuf);
+        await fetch(base + '?part=mediasegment&track=video&quality=high&segmentTime=50000000&wsd=50000000&ppd=150000000&driveItemId=recording-e2e').catch(() => {});
         const seg0Resp = await fetch(base + '?part=mediasegment&track=audio&quality=audcopy&segmentTime=0&wsd=50000000&ppd=150000000&driveItemId=recording-e2e');
         const seg0Buf = await seg0Resp.arrayBuffer();
         await window.crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, key, seg0Buf);
-        setTimeout(() => {
-          fetch(base + '?part=mediasegment&track=video&quality=high&segmentTime=50000000&wsd=50000000&ppd=150000000&driveItemId=recording-e2e').catch(() => {});
-        }, 20);
       } catch (_) {}
     });
   </script>

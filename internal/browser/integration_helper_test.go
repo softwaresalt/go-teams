@@ -741,9 +741,10 @@ func TestLoadTestEnvPrecedenceAndPaths(t *testing.T) {
 		if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
 			t.Run("tilde", func(t *testing.T) {
 				clearEnv(t)
-				homeEnvPath := filepath.Join(t.TempDir(), ".env.local.test")
+				tildeRoot := t.TempDir()
+				homeEnvPath := filepath.Join(tildeRoot, ".env.local.test")
 				require.NoError(t, os.WriteFile(homeEnvPath, []byte("GO_TEAMS_BINARY=~/bin/go-teams.exe\n"), 0o600))
-				loadTestEnvFromFile(t, homeEnvPath, root)
+				loadTestEnvFromFile(t, homeEnvPath, tildeRoot)
 				assert.Equal(t, filepath.Join(home, "bin", "go-teams.exe"), os.Getenv("GO_TEAMS_BINARY"))
 			})
 		}

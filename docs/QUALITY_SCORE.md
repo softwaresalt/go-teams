@@ -36,7 +36,7 @@ signal, not a target; CI reports its own figure with
 | `internal/capture` | A | 84.8% | Output path resolution, filename templates, activity-aware nominal duration/overtime/idle shutdown, call-end early stop, fallback `MeetingTitle`, and idempotent `AppendAISummaryToFile` are covered. `internal/capture/output_unix_test.go` asserts the `0o700` (`dirPerm`) directory and `0o600` (`filePerm`) file creation modes under `syscall.Umask(0)`, the preservation of a pre-existing directory's mode, and `AppendAISummaryToFile` mode preservation, so the owner-only guarantee has a POSIX regression test. The coverage figure was measured on a Windows host, where the `//go:build unix` tests do not run |
 | `internal/cli` | A | 80.6% | Flag binding, the `generate-config` subcommand (aliases, positional file-versus-directory handling, `--force` collision, and invalid-name rejection, with the root `--config` flag proven unused), capture protocols, Idea 2C delayed AI summary timer + inter-process locked queue fallback, `--not-before` gating, schedule overrides, output precedence, and flag inheritance are covered through the injected `deps`; the compiled-binary harness adds an end-to-end check |
 | `internal/config` | A | 81.6% | Load, `TemplateYAML` / `ResolveTemplatePath` / `WriteTemplate` (template parses before and after uncommenting, filename traversal rejection, `O_EXCL` and atomic `--force` writes, owner-only modes, and `config.example.yaml` parity), capture modes, lifecycle durations, per-meeting overrides (`cron` vs `at`), `default_account` (`entra_account` / `account`) and output alias precedence (`output` versus `output_file` versus `output_folder` versus `default_path`), `headless` / `headed` and `audio` pointer combinations, `expandUserPath`, `defaultProfileDir`, atomic `Save`, and validation are table-tested, and the tracked-file secret scan lives here |
-| `internal/browser` | B | 71.6% | Synthetic-page and unit tests cover the pre-join machine, lobby timeout (`ErrLobbyTimeout`), `ForceRecap`, PCM RMS voice activity (`PCMRMS`/`HasVoiceActivity`), interim caption heartbeats, call-end probes (`shouldNotifyCallEnded`), recap export, and sandbox flags. The Teams DOM changes without notice, and no automated test runs against a real tenant (queued in `010-S`) |
+| `internal/browser` | B | 71.6% | Synthetic-page and unit tests cover the pre-join machine, lobby timeout (`ErrLobbyTimeout`), `ForceRecap`, PCM RMS voice activity (`PCMRMS`/`HasVoiceActivity`), interim caption heartbeats, call-end probes (`shouldNotifyCallEnded`), recap export, and sandbox flags. The Teams DOM changes without notice, and no automated test runs against a real tenant (queued in `010-S` and `029-S`) |
 | `cmd/go-teams` | B | none | Thin `main` with signal wiring and no tests of its own; exercised only through the compiled-binary harness |
 
 Documentation grade for the repository as a whole is B: the README cover page,
@@ -64,17 +64,26 @@ the Windows commit limit.
 
 ### Tier 2: synthetic browser and compiled-binary end to end
 
-* `TestChromeMeetingEndToEnd` in `internal/browser/meeting_e2e_test.go`
-  drives a real Chromium against a simulated Teams single-page app served over
-  `httptest`. It covers the sign-in wait, the launcher interstitial, pre-join
-  (mute, bot name, Join), lobby admission, the caption menu, and the live
-  caption `MutationObserver`. It falls back to gitignored root `.env.local.test`
-  (seeded from `.env.example`) when environment variables such as
-  `TEAMS_BROWSER_PATH` are not already set in the process environment, and
-  skips unless the host is Windows and a Chromium-based browser is installed
-  (`ResolveExecPath("")` must find one). The `test-windows` job in `ci.yml`
-  and `release.yml` runs it in a dedicated step that fails if the test skips,
-  so CI enforces a non-skipped pass on `windows-latest`.
+* `TestChromeMeetingEndToEnd` and `TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd`
+  in `internal/browser/meeting_e2e_test.go` drive a real Chromium against
+  simulated Teams single-page apps served over `httptest`. Together they cover
+  the sign-in wait, the launcher interstitial, pre-join (mute, bot name, Join),
+  lobby admission, the caption menu, the live caption `MutationObserver`
+  (including interim activity heartbeats), in-browser `OnCallEnded` DOM teardown
+  detection, and `ForceRecap` + `AISummaryOnly` extraction. They fall back to
+  gitignored root `.env.local.test` (seeded from `.env.example`) when
+  environment variables such as `TEAMS_BROWSER_PATH` are not already set in the
+  process environment, and skip unless the host is Windows and a Chromium-based
+  browser is installed (`ResolveExecPath("")` must find one). The `test-windows`
+  job in `ci.yml` and `release.yml` runs `TestChromeMeetingEndToEnd` in a
+  dedicated step that fails if the test skips and runs the full `go test -race ./...`
+  suite on `windows-latest`.
+* `TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd` in
+  `internal/cli/e2e_test.go` runs `go-teams join --mode live-with-summary`
+  end-to-end across two headless Chromium sessions on Windows (`go test -race ./...`),
+  verifying scheduled join, overtime caption continuation past `--duration`,
+  in-browser call-end silence shutdown, `transcription_queue.txt` persistence,
+  and delayed Recap `--append-ai-summary` enrichment + `::` queue completion.
 * `TestCompiledBinaryCapturesRecapToExplicitOutput` in
   `internal/cli/binary_automation_test.go` runs a freshly built `go-teams`
   executable against a synthetic Meeting Recap page and checks the transcript
@@ -108,10 +117,12 @@ documentation-only pull requests.
 
 ### Tier 5: integration-tagged live harness
 
-Tests behind the `integration` build tag launch a real browser and, with
-`TEAMS_MEETING_URL`, a real meeting. Test helpers load gitignored root
-`.env.local.test` (seeded from `.env.example`) when environment variables are
-not already set in the process environment. They run only when
+Tests behind the `integration` build tag (including `meeting_integration_test.go`,
+`scheduled_lifecycle_integration_test.go`, and `scheduled_integration_test.go`
+for `010-S` and `029-S`) launch a real browser and, with `TEAMS_MEETING_URL`
+and `TEAMS_RECAP_URL`, a real meeting or Recap. Test helpers load gitignored
+root `.env.local.test` (seeded from `.env.example`) when environment variables
+are not already set in the process environment. They run only when
 `GO_TEAMS_INTEGRATION` is set (and not `"0"` or `"false"`). CI compiles them
 with `go vet -tags=integration ./...` to prevent bit-rot but never runs them.
 
@@ -121,15 +132,17 @@ These gaps are known and unresolved. Tiers 1 to 4 cannot close them.
 
 | Gap | Impact | Tracking |
 |---|---|---|
-| No automated run against a real Microsoft Teams tenant: login, MFA, tenant policy, lobby, and caption DOM selectors are verified only against synthetic pages | A Teams UI change can break capture without failing any test | `010-S` |
-| Real Meeting Recap completeness and AI Summary availability are unverified | Recap export can miss entries or the summary in production | `010-S` |
+| No automated run against a real Microsoft Teams tenant: login, MFA, tenant policy, lobby, overtime continuation, call-end teardown, and caption DOM selectors are verified only against synthetic pages | A Teams UI change can break capture without failing any test | `010-S`, `029-S` |
+| Real Meeting Recap completeness and delayed Idea 2C AI Summary availability are unverified | Recap export can miss entries or the summary in production | `010-S`, `029-S` |
 | Real meeting audio fidelity (levels, sync, long recordings) is unverified; only the encoder is pinned by golden output | MP3 output may differ from the meeting audio in ways tests cannot see | `010-S` |
 | The `darwin/{amd64,arm64}`, `linux/arm64`, and `windows/arm64` release binaries are cross-compiled on `ubuntu-latest` at release time and never execute a test suite; only `linux/amd64` (`ubuntu-latest`) and `windows/amd64` (`windows-latest`) run native tests in CI | Platform-specific regressions on the cross-compiled targets surface only after release | `023-S` |
 
 ## Improvement roadmap
 
-1. Complete `010-S` to qualify live capture, recap, and audio against an
-   authorized tenant, then upgrade `internal/browser` toward A.
+1. Complete `010-S` and `029-S` live-tenant runs to qualify live capture,
+   scheduled overtime/call-end shutdown, delayed Recap AI Summary enrichment,
+   and audio against an authorized tenant, then upgrade `internal/browser`
+   toward A.
 2. ~~Add table cases to `internal/config` for alias and precedence interactions
    and raise its coverage above 80%.~~ Completed in `021-S` (83.3% statement
    coverage, Grade A).

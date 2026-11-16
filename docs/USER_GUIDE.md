@@ -918,7 +918,7 @@ GO_TEAMS_INTEGRATION=1 TEAMS_MEETING_URL="https://teams.microsoft.com/l/meetup-j
 | `GO_TEAMS_INTEGRATION` | | Set to `1` (or any value other than `""`, `"0"`, or `"false"`) to enable integration tests |
 | `TEAMS_ACCOUNT` | `TEAMS_TEST_ACCOUNT` | Microsoft Entra account (UPN/email or display name) passed as `DefaultAccount` in browser integration tests |
 | `TEAMS_MEETING_URL` | `TEAMS_TEST_MEETING_URL` | Joinable Teams meeting URL for the live meeting tests |
-| `TEAMS_RECAP_URL` | `TEAMS_TEST_RECAP_URL` | Teams Meeting Recap URL reserved for live recap integration tests (no live recap test consumes it yet) |
+| `TEAMS_RECAP_URL` | `TEAMS_TEST_RECAP_URL` | Teams Meeting Recap URL consumed by `TestMeetingLiveRecapAISummaryEnrichment` (`internal/browser`) and `TestLiveTenantDelayedAISummaryQueueReplay` (`internal/cli`) |
 | `TEAMS_PROFILE_DIR` | `TEAMS_TEST_PROFILE_DIR` | Authenticated Chromium profile directory for live integration tests (relative paths resolve from the repository root) |
 | `TEAMS_BROWSER_PATH` | `TEAMS_TEST_BROWSER_PATH` | Chromium/Edge/Chrome executable path or binary name (relative paths resolve from the repository root) |
 | `GO_TEAMS_BINARY` | | Compiled `go-teams` executable path for `TestCompiledBinaryCapturesRecapToExplicitOutput` (relative paths resolve from the repository root) |
@@ -936,3 +936,62 @@ go test ./internal/cli -run TestCompiledBinaryCapturesRecapToExplicitOutput -cou
 
 Synthetic checks do not qualify real Teams login, tenant policy, audio fidelity,
 or recap completeness. Those require an authorized operator-assisted live run.
+
+#### Live-tenant scheduled call and Recap AI Summary validation
+
+Shipment `029-S` adds dedicated `-tags=integration` harnesses in
+`internal/browser/scheduled_lifecycle_integration_test.go` and
+`internal/cli/scheduled_integration_test.go` to validate scheduled meeting join,
+overtime continuation past nominal duration, in-browser call-end silence
+shutdown, and Idea 2C delayed AI Summary enrichment against an authorized
+Microsoft Teams tenant.
+
+**Prerequisite setup (`.env.local.test`, gitignored):**
+
+* `GO_TEAMS_INTEGRATION="1"`
+* `TEAMS_MEETING_URL`: joinable meeting link for an active scheduled test call
+* `TEAMS_RECAP_URL`: Meeting Recap URL carrying a `threadId` or `meetingrecap`
+  route (required when `TEAMS_MEETING_URL` uses `/meet/<id>?p=<passcode>`)
+* `TEAMS_PROFILE_DIR`: workspace-contained, gitignored authenticated browser
+  profile directory (for example `./bin/teams-profile`)
+* `TEAMS_BROWSER_PATH`: path or binary name for Edge/Chrome/Chromium
+* `TEAMS_ACCOUNT`: Microsoft Entra UPN or display name used for account selection
+
+**Run commands:**
+
+```bash
+# Browser-level scheduled overtime and call-end teardown:
+go test -tags=integration -v ./internal/browser/... -run TestMeetingLiveScheduledOvertimeAndCallEnd
+
+# Browser-level ForceRecap + AISummaryOnly extraction:
+go test -tags=integration -v ./internal/browser/... -run TestMeetingLiveRecapAISummaryEnrichment
+
+# CLI-level scheduled join (--mode live-with-summary), overtime, call-end shutdown, and queue write:
+go test -tags=integration -v ./internal/cli/... -run TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown
+
+# CLI-level delayed AI Summary queue replay (--queue):
+go test -tags=integration -v ./internal/cli/... -run TestLiveTenantDelayedAISummaryQueueReplay
+```
+
+**Operator human checkpoints:**
+
+1. **Organizer start and lobby admission**: start the Teams meeting from an
+   organizer client and admit the `Transcription Agent` session from the lobby
+   within the `2m` lobby timeout.
+2. **Overtime speech/caption stimulus and call-end transition**: speak or
+   generate live captions past the `15s` nominal duration into the `15s`
+   overtime window, then hang up from the organizer client (or remain silent for
+   `--idle-timeout`) so `OnCallEnded` / `Session.Run` self-terminates cleanly.
+3. **Post-call Recap AI Summary window**: Microsoft Teams typically publishes the
+   Meeting Recap AI Summary `5-30m` after the call ends; either wait for Recap
+   publication or point `TEAMS_RECAP_URL` at an already-published Meeting Recap
+   for immediate queue replay verification.
+
+**URL shape rules for Idea 2C Recap enrichment:**
+
+* Classic `/l/meetup-join/19%3ameeting_<redacted-id>@thread.v2/0?...` URLs embed
+  `threadId`, so `deriveRecapURLFromMeetingURL` derives the
+  `/l/meetingrecap?threadId=...` route automatically during delayed enrichment.
+* Modern `/meet/<redacted-id>?p=<redacted-passcode>` URLs do not embed
+  `threadId` in the URL query string, so Recap enrichment tests require
+  `TEAMS_RECAP_URL` to be set alongside `TEAMS_MEETING_URL`.

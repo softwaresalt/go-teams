@@ -135,6 +135,16 @@ Blocking findings: `P0=0, P1=0, P2=0, P3=0`. Outcome: `READY`.
   delayed AI summary Recap enrichment (`--ai-summary-delay` timer and
   `--append-ai-summary --not-before` queue replay) against an authorized
   Microsoft Teams tenant.
+  * **Cross-reference (`029-S` / `029-F`, deliberation `018-DL`)**: Stash
+    `3EB89E2D` is implemented by shipment `029-S` (sequenced
+    `028-S -> 029-S -> 010-S`), adding Tier 2 real-Chromium E2E tests
+    (`TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd` and
+    `TestJoinLiveWithSummaryOvertimeCallEndAndDelayedRecapEndToEnd`) and Tier 5
+    `-tags=integration` harnesses
+    (`internal/browser/scheduled_lifecycle_integration_test.go` and
+    `internal/cli/scheduled_integration_test.go`). See the structured runbook and
+    validator evidence matrix in
+    [2026-11-15-scheduled-call-and-recap-validation-runbook.md](browser-automation/2026-11-15-scheduled-call-and-recap-validation-runbook.md).
 * Previously stashed low-priority items (`70ABBB2C`, `D3A9CBD0`, `EC6D1CAF`) and
   queued live verification shipment `010-S` remain untouched.
 
@@ -180,7 +190,7 @@ and `docs/archive/memory/2026-11-13/stage-021-S-022-S-memory.md`.
 | Secret hygiene | `go test -race ./internal/config/... -run TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` | PASS |
 | Full test suite & coverage | `go test -race -cover ./...` (local Windows + GitHub Actions `ubuntu-latest` run `43571245461`): `version` 97.8%, `teams` 93.8%, `scheduler` 93.5%, `transcript` 91.2%, `audio` 87.5%, `config` 86.9%, `capture` 84.8%, `updater` 84.5%, `cli` 80.0%, `browser` 71.6% | PASS |
 | Backlog integrity | `backlogit sync` and `backlogit doctor` ("No issues found.") | PASS |
-| Manual checkpoint (`scheduled-meeting-join` & `teams-auth-mfa`) | Live Microsoft Teams scheduled meeting join, overtime continuation, in-browser call-end silence shutdown, and post-call Recap AI summary enrichment against a real tenant require an active scheduled meeting and authenticated profile. Hermetic unit and synthetic Chromium tests verify the watchdog, RMS voice detector, interim caption heartbeats, one-shot `at` triggers, and Idea 2C timer + queue fallback | PENDING (operator live-tenant observation window; tracked by dedicated follow-up stash `3EB89E2D` alongside `010-S`) |
+| Manual checkpoint (`scheduled-meeting-join` & `teams-auth-mfa`) | Live Microsoft Teams scheduled meeting join, overtime continuation, in-browser call-end silence shutdown, and post-call Recap AI summary enrichment against a real tenant require an active scheduled meeting and authenticated profile. Hermetic unit and synthetic Chromium tests verify the watchdog, RMS voice detector, interim caption heartbeats, one-shot `at` triggers, and Idea 2C timer + queue fallback | PENDING (operator live-tenant observation window; tracked by dedicated follow-up stash `3EB89E2D` -> shipment `029-S` / `029-F` (`018-DL`), runbook in [2026-11-15-scheduled-call-and-recap-validation-runbook.md](browser-automation/2026-11-15-scheduled-call-and-recap-validation-runbook.md), alongside `010-S`) |
 
 ## Strict-safety action record
 

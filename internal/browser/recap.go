@@ -141,10 +141,16 @@ const extractRecapAudioJS = `(async () => {
 				try {
 					resp = await fetch(candidateUrl, {credentials: 'omit', redirect: 'follow'});
 				} catch (retryErr) {
+					if (info.isDownloadBlocked) {
+						blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+					}
 					lastFetchErr = retryErr;
 					continue;
 				}
 			} else {
+				if (info.isDownloadBlocked) {
+					blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+				}
 				lastFetchErr = err;
 				continue;
 			}
@@ -998,6 +1004,16 @@ func expandProfilePath(raw string) string {
 	return filepath.Clean(expanded)
 }
 
+func isRepoRootDir(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	return false
+}
+
 func replaceRightmostPathSegment(p, oldSeg, newSeg string) string {
 	vol := filepath.VolumeName(p)
 	rest := strings.TrimPrefix(p, vol)
@@ -1008,6 +1024,18 @@ func replaceRightmostPathSegment(p, oldSeg, newSeg string) string {
 	replaced := false
 	for i := len(parts) - 1; i >= 0; i-- {
 		if strings.EqualFold(parts[i], oldSeg) {
+			prefixJoined := strings.Join(parts[:i+1], string(filepath.Separator))
+			var candidateRoot string
+			if hasLeadingSep {
+				candidateRoot = filepath.Clean(vol + string(filepath.Separator) + prefixJoined)
+			} else if vol != "" {
+				candidateRoot = filepath.Clean(vol + prefixJoined)
+			} else {
+				candidateRoot = filepath.Clean(prefixJoined)
+			}
+			if isRepoRootDir(candidateRoot) {
+				continue
+			}
 			parts[i] = newSeg
 			replaced = true
 			break
@@ -1449,11 +1477,16 @@ func launchCleanHeadedBrowser(opts Options, initialURL string) (int, string, str
 			terminateSurvivingCDPBrowserOnPort(port, execPath)
 		}
 		deadline := time.Now().Add(2 * time.Second)
+		teardownClean := false
 		for time.Now().Before(deadline) {
 			if _, probeErr := listCDPTargets(port); probeErr != nil {
+				teardownClean = true
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
+		}
+		if !teardownClean {
+			slog.Warn("browser: CDP port still reachable after browser cleanup", "cdp_port", port)
 		}
 	}
 

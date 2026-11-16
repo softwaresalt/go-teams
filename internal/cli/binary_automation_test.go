@@ -25,7 +25,10 @@ import (
 
 const maxCLITestEnvBytes = 64 << 10
 
-var loadedCLITestEnvTB sync.Map
+var (
+	loadedCLITestEnvTB sync.Map
+	cliEnvExpandRe     = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+)
 
 func loadCLITestEnv(t testing.TB) {
 	t.Helper()
@@ -126,14 +129,48 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		}
 	}
 
-	cliEnvExpandRe := regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
-
-	hasCLIProfileLevelDB := func(dir string) bool {
+	hasCLIProfileSession := func(dir string) bool {
 		if dir == "" {
 			return false
 		}
-		info, statErr := os.Stat(filepath.Join(dir, "Default", "Local Storage", "leveldb"))
-		return statErr == nil && info.IsDir()
+		leveldbDir := filepath.Join(dir, "Default", "Local Storage", "leveldb")
+		entries, readErr := os.ReadDir(leveldbDir)
+		if readErr != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := strings.ToLower(e.Name())
+			if !strings.HasSuffix(name, ".ldb") && !strings.HasSuffix(name, ".log") {
+				continue
+			}
+			info, infoErr := e.Info()
+			if infoErr != nil || info.Size() <= 0 || info.Size() > 16*1024*1024 {
+				continue
+			}
+			data, fileErr := os.ReadFile(filepath.Join(leveldbDir, e.Name()))
+			if fileErr != nil {
+				continue
+			}
+			if bytes.Contains(data, []byte("SKYPE-TOKEN")) ||
+				bytes.Contains(data, []byte("UserAuthState")) ||
+				bytes.Contains(data, []byte("msal.2.account.keys")) {
+				return true
+			}
+		}
+		return false
+	}
+
+	isCLIRepoRootDir := func(dir string) bool {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return true
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr == nil {
+			return true
+		}
+		return false
 	}
 
 	replaceRightmostCLISegment := func(p, oldSeg, newSeg string) string {
@@ -146,6 +183,18 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		replaced := false
 		for i := len(parts) - 1; i >= 0; i-- {
 			if strings.EqualFold(parts[i], oldSeg) {
+				prefixJoined := strings.Join(parts[:i+1], string(filepath.Separator))
+				var candidateRoot string
+				if hasLeadingSep {
+					candidateRoot = filepath.Clean(vol + string(filepath.Separator) + prefixJoined)
+				} else if vol != "" {
+					candidateRoot = filepath.Clean(vol + prefixJoined)
+				} else {
+					candidateRoot = filepath.Clean(prefixJoined)
+				}
+				if isCLIRepoRootDir(candidateRoot) {
+					continue
+				}
 				parts[i] = newSeg
 				replaced = true
 				break
@@ -185,7 +234,7 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 	}
 
 	resolveRelative := func(keyName, val string, isBrowserPath bool) string {
-		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.HasPrefix(val, "~") && !strings.ContainsAny(val, `/\%$`) {
+		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.HasPrefix(val, "~") && !strings.ContainsAny(val, `/\%$:`) {
 			return val
 		}
 		hasDrive := len(val) >= 2 && ((val[0] >= 'A' && val[0] <= 'Z') || (val[0] >= 'a' && val[0] <= 'z')) && val[1] == ':'
@@ -233,15 +282,13 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		if hasDriveExpanded && !filepath.IsAbs(expanded) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
-		if filepath.IsAbs(expanded) || strings.HasPrefix(expanded, "/") || strings.HasPrefix(expanded, `\`) {
+		if filepath.IsAbs(expanded) {
 			resolved := filepath.Clean(expanded)
 			if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
-				if !hasCLIProfileLevelDB(resolved) {
+				if !hasCLIProfileSession(resolved) {
 					legacy := replaceRightmostCLISegment(resolved, "go-teams", "teams-cli")
-					if legacy != resolved {
-						if lInfo, lErr := os.Stat(legacy); lErr == nil && lInfo.IsDir() {
-							return legacy
-						}
+					if legacy != resolved && hasCLIProfileSession(legacy) {
+						return legacy
 					}
 				}
 				return resolved
@@ -258,11 +305,11 @@ func loadCLITestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		}
 		joined := filepath.Join(repoRoot, cleaned)
 		if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
-			if !hasCLIProfileLevelDB(joined) {
+			if !hasCLIProfileSession(joined) {
 				legacyRel := replaceRightmostCLISegment(cleaned, "go-teams", "teams-cli")
 				if legacyRel != cleaned {
 					legacyJoined := filepath.Join(repoRoot, legacyRel)
-					if lInfo, lErr := os.Stat(legacyJoined); lErr == nil && lInfo.IsDir() {
+					if hasCLIProfileSession(legacyJoined) {
 						return legacyJoined
 					}
 				}
@@ -645,14 +692,18 @@ func TestLoadCLITestEnvPrecedenceAndPaths(t *testing.T) {
 
 	t.Run("process env wins over file", func(t *testing.T) {
 		clearEnv(t)
-		t.Setenv("GO_TEAMS_BINARY", `C:\custom\go-teams.exe`)
+		customBin := "/custom/go-teams"
+		if runtime.GOOS == "windows" {
+			customBin = `C:\custom\go-teams.exe`
+		}
+		t.Setenv("GO_TEAMS_BINARY", customBin)
 		t.Setenv("TEAMS_TEST_BROWSER_PATH", "msedge")
 		root := t.TempDir()
 		envPath := filepath.Join(root, ".env.local.test")
 		require.NoError(t, os.WriteFile(envPath, []byte("GO_TEAMS_BINARY=./bin/other.exe\nTEAMS_BROWSER_PATH=./bin/other-browser\nGO_TEAMS_INTEGRATION= # inline comment\n"), 0o600))
 
 		loadCLITestEnvFromFile(t, envPath, root)
-		assert.Equal(t, `C:\custom\go-teams.exe`, os.Getenv("GO_TEAMS_BINARY"))
+		assert.Equal(t, customBin, os.Getenv("GO_TEAMS_BINARY"))
 		assert.Equal(t, "msedge", os.Getenv("TEAMS_BROWSER_PATH"))
 		assert.Empty(t, os.Getenv("GO_TEAMS_INTEGRATION"))
 	})
@@ -664,7 +715,9 @@ func TestLoadCLITestEnvPrecedenceAndPaths(t *testing.T) {
 		t.Setenv("CLI_TEST_BIN_DIR", filepath.Join(appData, "bin"))
 
 		legacyProfile := filepath.Join(appData, "teams-cli", "profile")
-		require.NoError(t, os.MkdirAll(filepath.Join(legacyProfile, "Default", "Local Storage", "leveldb"), 0o700))
+		legacyLevelDB := filepath.Join(legacyProfile, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(legacyLevelDB, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(legacyLevelDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
 
 		binDir := filepath.Join(appData, "bin")
 		require.NoError(t, os.MkdirAll(binDir, 0o700))
@@ -675,7 +728,7 @@ func TestLoadCLITestEnvPrecedenceAndPaths(t *testing.T) {
 		envPath := filepath.Join(root, ".env.local.test")
 		content := strings.Join([]string{
 			`TEAMS_PROFILE_DIR="%CLI_TEST_APPDATA%\go-teams\profile"`,
-			`GO_TEAMS_BINARY="$CLI_TEST_BIN_DIR/teams-cli.exe"`,
+			`GO_TEAMS_BINARY="${CLI_TEST_BIN_DIR}/teams-cli.exe"`,
 		}, "\n")
 		require.NoError(t, os.WriteFile(envPath, []byte(content), 0o600))
 
@@ -783,6 +836,14 @@ func TestLoadCLITestEnvSecurityAndTemplateGuardrails(t *testing.T) {
 		})
 		assert.Contains(t, msg, "escaping repository root")
 		assert.NotContains(t, msg, "outside-cli-drive")
+
+		browserDriveRelPath := filepath.Join(root, ".env.browserdriverel")
+		require.NoError(t, os.WriteFile(browserDriveRelPath, []byte("TEAMS_BROWSER_PATH=C:msedge.exe\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadCLITestEnvFromFile(tb, browserDriveRelPath, root)
+		})
+		assert.Contains(t, msg, "escaping repository root")
+		assert.NotContains(t, msg, "msedge.exe")
 
 		unsetWinVarPath := filepath.Join(root, ".env.unsetwin")
 		require.NoError(t, os.WriteFile(unsetWinVarPath, []byte(`TEAMS_PROFILE_DIR=%CLI_UNSET_SECRET%\go-teams\profile`+"\n"), 0o600))

@@ -586,6 +586,18 @@ func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(nestedLegacyLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
 	nestedRaw := filepath.Join(nestedRoot, "go-teams", "profile")
 	assert.Equal(t, nestedLegacy, resolveExistingProfileDir(nestedRaw))
+
+	// Repository root go-teams segment (containing go.mod) must never be rewritten to sibling teams-cli.
+	repoBase := t.TempDir()
+	fakeRepoRoot := filepath.Join(repoBase, "go-teams")
+	require.NoError(t, os.MkdirAll(filepath.Join(fakeRepoRoot, "bin"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(fakeRepoRoot, "go.mod"), []byte("module example\n"), 0o600))
+	siblingLegacy := filepath.Join(repoBase, "teams-cli", "bin", "profile")
+	siblingLDB := filepath.Join(siblingLegacy, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(siblingLDB, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(siblingLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+	repoLocalProfile := filepath.Join(fakeRepoRoot, "bin", "profile")
+	assert.Equal(t, repoLocalProfile, resolveExistingProfileDir(repoLocalProfile))
 }
 
 func TestNewLiveMeetingRemoteHeadlessUsesCleanLauncherAndJoinOnWebSel(t *testing.T) {
@@ -672,7 +684,46 @@ globalThis.AudioContext = class {
 		t.Fatalf("extractRecapAudioJS VroomItemId/isDownloadBlocked probe failed: %v: %s", err, out)
 	}
 
-	// 2. extractRecapTranscriptJS captures VroomItemId (lowercase d).
+	// 2. extractRecapAudioJS reports isDownloadBlocked=true on HTTP 403 (!resp.ok) and fetch CORS TypeError.
+	for _, tc := range []struct {
+		name      string
+		fetchBody string
+	}{
+		{
+			name:      "http-403",
+			fetchBody: `return { ok: false, status: 403, headers: { get: () => null } };`,
+		},
+		{
+			name:      "cors-reject",
+			fetchBody: `throw new TypeError('Failed to fetch');`,
+		},
+	} {
+		probe := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 8, maxRecapAudioDurationSec = 2, maxRecapAudioPCMBytes = 8;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+const media = { src: 'https://contoso.sharepoint.com/download?driveItemId=recording-a', getAttribute: () => null };
+globalThis.location = { href: 'https://teams.cloud.microsoft/l/meetingrecap' };
+globalThis.window = globalThis;
+globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true };
+globalThis.document = { querySelector: selector => selector === 'audio, video' ? media : null };
+globalThis.fetch = async () => { ` + tc.fetchBody + ` };
+(async () => {
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('isDownloadBlocked=true')) {
+    throw new Error('expected isDownloadBlocked=true error, got: ' + String(failure));
+  }
+})().catch(e => { console.error(e.message); process.exitCode = 1; });
+`
+		c := exec.CommandContext(ctx, "node", "-e", probe)
+		c.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("extractRecapAudioJS %s probe failed: %v: %s", tc.name, err, out)
+		}
+	}
+
+	// 3. extractRecapTranscriptJS captures VroomItemId (lowercase d).
 	transcriptProbeJS := `
 const fs = require('fs');
 globalThis.location = { href: 'https://teams.cloud.microsoft/l/meetingrecap' };

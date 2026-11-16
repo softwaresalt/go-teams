@@ -26,8 +26,9 @@ const (
 )
 
 // recapIntegrationURL resolves the live Meeting Recap URL and validates that
-// TEAMS_PROFILE_DIR is workspace-contained and git-ignored without echoing
-// sensitive values.
+// TEAMS_PROFILE_DIR does not contain the repository root (and is git-ignored
+// whenever it resolves inside the repository root) without echoing sensitive
+// values.
 func recapIntegrationURL(t *testing.T) (string, string) {
 	t.Helper()
 	requireIntegration(t)

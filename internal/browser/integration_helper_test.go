@@ -21,7 +21,10 @@ import (
 
 const maxTestEnvBytes = 64 << 10
 
-var loadedTestEnvTB sync.Map
+var (
+	loadedTestEnvTB        sync.Map
+	browserTestEnvExpandRe = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+)
 
 // LoadTestEnv loads test-suite configuration variables from the gitignored
 // .env.local.test file at the repository root when those variables are not
@@ -147,16 +150,15 @@ func loadTestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 	}
 
 	resolveRelative := func(keyName, val string, isBrowserPath bool) string {
-		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.HasPrefix(val, "~") && !strings.ContainsAny(val, `/\%$`) {
+		if isBrowserPath && !strings.HasPrefix(val, ".") && !strings.HasPrefix(val, "~") && !strings.ContainsAny(val, `/\%$:`) {
 			return val
 		}
 		hasDrive := len(val) >= 2 && ((val[0] >= 'A' && val[0] <= 'Z') || (val[0] >= 'a' && val[0] <= 'z')) && val[1] == ':'
 		if hasDrive && !filepath.IsAbs(val) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
-		envExpandRe := regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
-		expanded := envExpandRe.ReplaceAllStringFunc(val, func(match string) string {
-			sub := envExpandRe.FindStringSubmatch(match)
+		expanded := browserTestEnvExpandRe.ReplaceAllStringFunc(val, func(match string) string {
+			sub := browserTestEnvExpandRe.FindStringSubmatch(match)
 			name := ""
 			for i := 1; i < len(sub); i++ {
 				if sub[i] != "" {
@@ -196,7 +198,7 @@ func loadTestEnvFromFile(t testing.TB, envPath, repoRoot string) {
 		if hasDriveExpanded && !filepath.IsAbs(expanded) {
 			t.Fatalf("test env key %s has invalid relative path escaping repository root", keyName)
 		}
-		if filepath.IsAbs(expanded) || strings.HasPrefix(expanded, "/") || strings.HasPrefix(expanded, `\`) {
+		if filepath.IsAbs(expanded) {
 			resolved := filepath.Clean(expanded)
 			if keyName == "TEAMS_PROFILE_DIR" || keyName == "TEAMS_TEST_PROFILE_DIR" {
 				resolved = resolveExpandedProfileDir(resolved)
@@ -726,7 +728,7 @@ func TestLoadTestEnvPrecedenceAndPaths(t *testing.T) {
 		envPath := filepath.Join(root, ".env.local.test")
 		content := strings.Join([]string{
 			`TEAMS_PROFILE_DIR="%TEST_APPDATA%\go-teams\profile"`,
-			`GO_TEAMS_BINARY="$TEST_TOOL_DIR/teams-cli.exe"`,
+			`GO_TEAMS_BINARY="${TEST_TOOL_DIR}/teams-cli.exe"`,
 		}, "\n")
 		require.NoError(t, os.WriteFile(envPath, []byte(content), 0o600))
 
@@ -735,6 +737,16 @@ func TestLoadTestEnvPrecedenceAndPaths(t *testing.T) {
 		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_PROFILE_DIR"))
 		assert.Equal(t, legacyProfile, os.Getenv("TEAMS_TEST_PROFILE_DIR"))
 		assert.Equal(t, goTeamsBin, os.Getenv("GO_TEAMS_BINARY"))
+
+		if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
+			t.Run("tilde", func(t *testing.T) {
+				clearEnv(t)
+				homeEnvPath := filepath.Join(t.TempDir(), ".env.local.test")
+				require.NoError(t, os.WriteFile(homeEnvPath, []byte("GO_TEAMS_BINARY=~/bin/go-teams.exe\n"), 0o600))
+				loadTestEnvFromFile(t, homeEnvPath, root)
+				assert.Equal(t, filepath.Join(home, "bin", "go-teams.exe"), os.Getenv("GO_TEAMS_BINARY"))
+			})
+		}
 	})
 }
 
@@ -851,6 +863,14 @@ func TestLoadTestEnvSecurityAndTemplateGuardrails(t *testing.T) {
 		})
 		assert.Contains(t, msg, "escaping repository root")
 		assert.NotContains(t, msg, "outside-drive-secret")
+
+		browserDriveRelPath := filepath.Join(root, ".env.browserdriverel")
+		require.NoError(t, os.WriteFile(browserDriveRelPath, []byte("TEAMS_BROWSER_PATH=C:msedge.exe\n"), 0o600))
+		msg = runExpectFatal(t, func(tb testing.TB) {
+			loadTestEnvFromFile(tb, browserDriveRelPath, root)
+		})
+		assert.Contains(t, msg, "escaping repository root")
+		assert.NotContains(t, msg, "msedge.exe")
 
 		unsetWinVarPath := filepath.Join(root, ".env.unsetwin")
 		require.NoError(t, os.WriteFile(unsetWinVarPath, []byte(`TEAMS_PROFILE_DIR=%UNSET_SECRET_DIR%\go-teams\profile`+"\n"), 0o600))

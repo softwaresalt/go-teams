@@ -6,10 +6,10 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/softwaresalt/go-teams/internal/browser"
@@ -30,38 +30,31 @@ func meetingURL(t *testing.T) string {
 	return mutated
 }
 
-// browserContext allocates a chromedp browser context using the persisted
-// profile (TEAMS_PROFILE_DIR) so the bot session is already authenticated. The
-// context is cancelled via t.Cleanup, reaping the browser process.
-func browserContext(t *testing.T) context.Context {
+func newMeeting(t *testing.T) (browser.Meeting, context.Context) {
 	t.Helper()
-	requireIntegration(t)
+	url := meetingURL(t)
 	profile := os.Getenv("TEAMS_PROFILE_DIR")
 	if profile == "" {
 		t.Skip("set TEAMS_PROFILE_DIR to an authenticated profile for live meeting tests")
 	}
-	opts := browser.AllocatorOptions(browser.Options{
-		Headless:       true,
-		UserDataDir:    profile,
-		ExecPath:       os.Getenv("TEAMS_BROWSER_PATH"),
-		DefaultAccount: os.Getenv("TEAMS_ACCOUNT"),
-	})
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
-	t.Cleanup(cancelAlloc)
-	bctx, cancelBrowser := chromedp.NewContext(allocCtx)
-	t.Cleanup(cancelBrowser)
-	return bctx
-}
-
-func newMeeting(t *testing.T) (browser.Meeting, context.Context) {
-	t.Helper()
-	url := meetingURL(t)
-	m := browser.NewMeeting(browser.MeetingOptions{
-		MeetingURL:     url,
-		BotName:        "Transcription Agent",
-		DefaultAccount: os.Getenv("TEAMS_ACCOUNT"),
-	})
-	return m, browserContext(t)
+	m, bctx, cleanup, err := browser.NewLiveMeeting(
+		context.Background(),
+		browser.Options{
+			Headless:       true,
+			UserDataDir:    profile,
+			ExecPath:       os.Getenv("TEAMS_BROWSER_PATH"),
+			DefaultAccount: os.Getenv("TEAMS_ACCOUNT"),
+		},
+		browser.MeetingOptions{
+			MeetingURL:     url,
+			BotName:        "Transcription Agent",
+			DefaultAccount: os.Getenv("TEAMS_ACCOUNT"),
+			LobbyTimeout:   2 * time.Minute,
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	return m, bctx
 }
 
 // TestMeetingJoin exercises the pre-join / lobby FSM against a live meeting.
@@ -99,7 +92,11 @@ func TestMeetingEnableCaptions(t *testing.T) {
 		// A finalized caption was delivered.
 	case err := <-errCh:
 		require.NoError(t, err, "EnableCaptions exited before delivering a caption")
-		t.Fatal("EnableCaptions returned before delivering a caption")
+		select {
+		case <-got:
+		default:
+			t.Fatal("EnableCaptions returned before delivering a caption")
+		}
 	case <-ctx.Done():
 		t.Fatal("no caption delivered before timeout")
 	}
@@ -119,6 +116,20 @@ func TestMeetingCaptureAudio(t *testing.T) {
 	var buf bytes.Buffer
 	errCh := make(chan error, 1)
 	go func() { errCh <- m.CaptureAudio(ctx, &buf) }()
+
+	if rm, ok := m.(browser.RecapMeeting); ok && rm.IsRecap() {
+		select {
+		case err := <-errCh:
+			if err != nil && strings.Contains(err.Error(), "isDownloadBlocked=true") {
+				t.Skip("recap recording has SharePoint download blocked (isDownloadBlocked=true); skipping raw audio download assertion")
+			}
+			require.NoError(t, err, "CaptureAudio failed for RecapMeeting")
+			require.NotZero(t, buf.Len(), "expected captured MP3 bytes")
+			return
+		case <-ctx.Done():
+			t.Fatal("CaptureAudio did not complete before timeout for RecapMeeting")
+		}
+	}
 
 	select {
 	case err := <-errCh:

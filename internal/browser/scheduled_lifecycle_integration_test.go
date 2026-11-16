@@ -69,12 +69,15 @@ func recapIntegrationURL(t *testing.T) (string, string) {
 	realCur, err := filepath.EvalSymlinks(cur)
 	require.NoError(t, err, "evaluate TEAMS_PROFILE_DIR symlinks")
 	realProfile := filepath.Join(append([]string{realCur}, trailing...)...)
+	relRoot, relErr := filepath.Rel(realProfile, realRoot)
+	require.False(t, relErr == nil && filepath.IsLocal(relRoot), "TEAMS_PROFILE_DIR must not contain repository root")
 	relProfile, err := filepath.Rel(realRoot, realProfile)
-	require.True(t, err == nil && filepath.IsLocal(relProfile) && relProfile != ".", "TEAMS_PROFILE_DIR must resolve within repository root")
-
-	ignoreCmd := exec.Command("git", "check-ignore", "-q", "--", filepath.ToSlash(relProfile))
-	ignoreCmd.Dir = realRoot
-	require.NoError(t, ignoreCmd.Run(), "TEAMS_PROFILE_DIR must be ignored by git")
+	if err == nil && filepath.IsLocal(relProfile) {
+		require.NotEqual(t, ".", relProfile, "TEAMS_PROFILE_DIR must not be the repository root")
+		ignoreCmd := exec.Command("git", "check-ignore", "-q", "--", filepath.ToSlash(relProfile))
+		ignoreCmd.Dir = realRoot
+		require.NoError(t, ignoreCmd.Run(), "TEAMS_PROFILE_DIR must be ignored by git")
+	}
 
 	raw := strings.TrimSpace(os.Getenv("TEAMS_RECAP_URL"))
 	if raw == "" {
@@ -136,12 +139,15 @@ func TestMeetingLiveScheduledOvertimeAndCallEnd(t *testing.T) {
 	realCur, err := filepath.EvalSymlinks(cur)
 	require.NoError(t, err, "evaluate TEAMS_PROFILE_DIR symlinks")
 	realProfile := filepath.Join(append([]string{realCur}, trailing...)...)
+	relRoot, relErr := filepath.Rel(realProfile, realRoot)
+	require.False(t, relErr == nil && filepath.IsLocal(relRoot), "TEAMS_PROFILE_DIR must not contain repository root")
 	relProfile, err := filepath.Rel(realRoot, realProfile)
-	require.True(t, err == nil && filepath.IsLocal(relProfile) && relProfile != ".", "TEAMS_PROFILE_DIR must resolve within repository root")
-
-	ignoreCmd := exec.Command("git", "check-ignore", "-q", "--", filepath.ToSlash(relProfile))
-	ignoreCmd.Dir = realRoot
-	require.NoError(t, ignoreCmd.Run(), "TEAMS_PROFILE_DIR must be ignored by git")
+	if err == nil && filepath.IsLocal(relProfile) {
+		require.NotEqual(t, ".", relProfile, "TEAMS_PROFILE_DIR must not be the repository root")
+		ignoreCmd := exec.Command("git", "check-ignore", "-q", "--", filepath.ToSlash(relProfile))
+		ignoreCmd.Dir = realRoot
+		require.NoError(t, ignoreCmd.Run(), "TEAMS_PROFILE_DIR must be ignored by git")
+	}
 
 	var (
 		lastActivityUnixNano atomic.Int64
@@ -185,6 +191,14 @@ func TestMeetingLiveScheduledOvertimeAndCallEnd(t *testing.T) {
 
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
+	if rm, ok := m.(browser.RecapMeeting); ok && rm.IsRecap() {
+		err := m.EnableCaptions(streamCtx, func(_, _ string) {
+			recordActivity()
+		})
+		require.NoError(t, err, "EnableCaptions on RecapMeeting must deliver transcript utterances")
+		require.NotZero(t, lastActivityUnixNano.Load(), "expected delivered recap transcript utterances")
+		return
+	}
 	captionErrCh := make(chan error, 1)
 	audioErrCh := make(chan error, 1)
 	var audioBuf bytes.Buffer

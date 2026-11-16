@@ -13,7 +13,7 @@ import (
 // the guest lightweight client and the authenticated full v2 client while
 // preserving legacy data-tid selectors.
 const (
-	joinOnWebSel        = `button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]`
+	joinOnWebSel        = `#openTeamsClientInBrowser, button[data-tid="joinOnWeb"], [data-tid="joinOnWeb"]`
 	micToggleSel        = `[data-tid="toggle-mute"]`
 	displayNameInputSel = `input[data-tid="prejoin-display-name-input"]`
 	joinNowSel          = `[data-tid="prejoin-join-button"]`

@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,4 +198,273 @@ func TestChromeMeetingEndToEnd(t *testing.T) {
 		{"Alice", "Second sentence from Alice."},
 		{"Bob", "Sounds good to me"},
 	}, captured)
+}
+
+// TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd verifies scheduled
+// live call overtime caption activity, in-browser call-end teardown detection,
+// and ForceRecap + AISummaryOnly extraction against simulated Teams SPAs in
+// real headless Chromium.
+func TestChromeScheduledLifecycleAndRecapAISummaryEndToEnd(t *testing.T) {
+	LoadTestEnv(t)
+	for _, k := range []string{
+		"TEAMS_ACCOUNT",
+		"TEAMS_TEST_ACCOUNT",
+		"TEAMS_MEETING_URL",
+		"TEAMS_TEST_MEETING_URL",
+		"TEAMS_RECAP_URL",
+		"TEAMS_TEST_RECAP_URL",
+		"TEAMS_PROFILE_DIR",
+		"TEAMS_TEST_PROFILE_DIR",
+		"GO_TEAMS_BINARY",
+	} {
+		t.Setenv(k, "")
+	}
+	if runtime.GOOS != "windows" {
+		t.Skip("live browser e2e test targets Windows consumer hosts only")
+	}
+	if ResolveExecPath("") == "" {
+		t.Skip("no Chromium-based browser executable found on host")
+	}
+
+	// Phase 1: Overtime caption activity (interim + final) and call-end teardown.
+	func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasPrefix(r.URL.Path, "/meet/") {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			// httptest handler; write failure surfaces as test timeout.
+			_, _ = w.Write([]byte(`<!doctype html>
+<html>
+<head><title>Microsoft Teams</title></head>
+<body>
+  <div id="app">
+    <button data-tid="joinOnWeb">Continue on this browser</button>
+  </div>
+  <script>
+    const app = document.getElementById('app');
+    document.querySelector('[data-tid="joinOnWeb"]').addEventListener('click', showPreJoin);
+
+    function showPreJoin() {
+      app.innerHTML = '' +
+        '<input type="checkbox" role="switch" data-tid="toggle-mute" checked />' +
+        '<input data-tid="prejoin-display-name-input" value="" />' +
+        '<button data-tid="prejoin-join-button">Join now</button>';
+      document.querySelector('[data-tid="prejoin-join-button"]').addEventListener('click', showLobby);
+    }
+
+    function showLobby() {
+      app.innerHTML = '<div>Someone will let you in shortly</div>';
+      setTimeout(showCall, 200);
+    }
+
+    function showCall() {
+      app.innerHTML = '' +
+        '<div id="toolbar">' +
+        '  <button id="hangup-button">Leave</button>' +
+        '  <button id="callingButtons-showMoreBtn">More</button>' +
+        '</div>' +
+        '<div id="menu"></div>' +
+        '<div id="stage"></div>';
+      document.getElementById('callingButtons-showMoreBtn').addEventListener('click', () => {
+        document.getElementById('menu').innerHTML =
+          '<button id="LanguageSpeechMenuControl-id">Language and speech</button>';
+        document.getElementById('LanguageSpeechMenuControl-id').addEventListener('click', () => {
+          document.getElementById('menu').innerHTML =
+            '<button id="closed-captions-button">Turn on live captions</button>';
+          document.getElementById('closed-captions-button').addEventListener('click', startCaptions);
+        });
+      });
+    }
+
+    function startCaptions() {
+      const stage = document.getElementById('stage');
+      stage.innerHTML = '<div data-tid="closed-caption-renderer-wrapper" id="cc"></div>';
+      const cc = document.getElementById('cc');
+
+      function emitWhenObserverReady() {
+        if (typeof window.sendCaptionToGo !== 'function') {
+          setTimeout(emitWhenObserverReady, 50);
+          return;
+        }
+        setTimeout(() => {
+          cc.innerHTML = '' +
+            '<div class="fui-ChatMessageCompact" id="msg1">' +
+            '  <span data-tid="author">Alice</span>' +
+            '  <span data-tid="closed-caption-text" id="t1">Overtime discussion still</span>' +
+            '</div>';
+        }, 100);
+
+        setTimeout(() => {
+          const el = document.getElementById('t1');
+          if (el) {
+            el.textContent = 'Overtime discussion still active.';
+          }
+        }, 700);
+
+        setTimeout(() => {
+          app.innerHTML = '<div data-tid="call-ended-screen">You left the meeting</div>';
+        }, 1100);
+      }
+
+      emitWhenObserverReady();
+    }
+  </script>
+</body>
+</html>`))
+		}))
+		defer srv.Close()
+
+		liveProfileDir := t.TempDir()
+		t.Cleanup(func() {
+			for range 10 {
+				if os.RemoveAll(liveProfileDir) == nil {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		})
+
+		var (
+			captionActivityCount atomic.Int32
+			finalCaptionOnce     sync.Once
+			finalCaptionCh       = make(chan struct{})
+			callEndedOnce        sync.Once
+			callEndedCh          = make(chan struct{})
+			mu                   sync.Mutex
+			captured             [][2]string
+		)
+
+		m, bctx, cleanup, err := NewLiveMeeting(
+			context.Background(),
+			Options{UserDataDir: liveProfileDir, Headless: true},
+			MeetingOptions{
+				MeetingURL:   srv.URL + "/meet/sched-e2e?p=synthetic-placeholder-passcode",
+				BotName:      "Sched Bot",
+				LobbyTimeout: 20 * time.Second,
+				OnCaptionActivity: func() {
+					captionActivityCount.Add(1)
+				},
+				OnCallEnded: func() {
+					callEndedOnce.Do(func() { close(callEndedCh) })
+				},
+			},
+		)
+		require.NoError(t, err)
+		defer cleanup()
+
+		cm, ok := m.(*chromeMeeting)
+		require.True(t, ok)
+		cm.callEndPoll = 250 * time.Millisecond
+
+		ctx, cancel := context.WithTimeout(bctx, 30*time.Second)
+		defer cancel()
+
+		require.NoError(t, m.Join(ctx))
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- m.EnableCaptions(ctx, func(speaker, text string) {
+				mu.Lock()
+				captured = append(captured, [2]string{speaker, text})
+				mu.Unlock()
+				if text == "Overtime discussion still active." {
+					finalCaptionOnce.Do(func() { close(finalCaptionCh) })
+				}
+			})
+		}()
+
+		select {
+		case <-finalCaptionCh:
+		case err := <-errCh:
+			require.NoError(t, err)
+			t.Fatal("EnableCaptions returned before finalized caption arrived")
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for finalized caption: %v", ctx.Err())
+		}
+
+		select {
+		case <-callEndedCh:
+		case err := <-errCh:
+			require.NoError(t, err)
+			t.Fatal("EnableCaptions returned before OnCallEnded fired")
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for OnCallEnded: %v", ctx.Err())
+		}
+
+		cancel()
+		require.NoError(t, <-errCh)
+
+		assert.GreaterOrEqual(t, captionActivityCount.Load(), int32(2))
+		mu.Lock()
+		assert.Equal(t, [][2]string{{"Alice", "Overtime discussion still active."}}, captured)
+		mu.Unlock()
+	}()
+
+	// Phase 2: ForceRecap + AISummaryOnly extraction.
+	func() {
+		recapSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasPrefix(r.URL.Path, "/meet/") {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			// httptest handler; write failure surfaces as test timeout.
+			_, _ = w.Write([]byte(`<!doctype html>
+<body>
+  <div data-tid="intelligent-recap-header">Recap</div>
+  <button role="tab" data-tid="Notes" aria-selected="false">Notes</button>
+  <button role="tab" data-tid="AINotes" aria-selected="false">AI notes</button>
+  <button aria-label="Copy all">Copy all</button>
+  <script>
+    document.querySelector('[data-tid="Notes"]').addEventListener('click', (e) => {
+      e.currentTarget.setAttribute('aria-selected', 'true');
+    });
+    document.querySelector('[data-tid="AINotes"]').addEventListener('click', (e) => {
+      e.currentTarget.setAttribute('aria-selected', 'true');
+    });
+    document.querySelector('button[aria-label="Copy all"]').addEventListener('click', () => {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText("Meeting notes:\nFollow-up actions confirmed.");
+      }
+    });
+  </script>
+</body>
+</html>`))
+		}))
+		defer recapSrv.Close()
+
+		recapProfileDir := t.TempDir()
+		t.Cleanup(func() {
+			for range 10 {
+				if os.RemoveAll(recapProfileDir) == nil {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		})
+
+		recapMeeting, recapBctx, recapCleanup, err := NewLiveMeeting(
+			context.Background(),
+			Options{UserDataDir: recapProfileDir, Headless: true},
+			MeetingOptions{
+				MeetingURL:    recapSrv.URL + "/meet/recap-e2e?p=synthetic-placeholder-passcode",
+				ForceRecap:    true,
+				AISummaryOnly: true,
+				LobbyTimeout:  20 * time.Second,
+			},
+		)
+		require.NoError(t, err)
+		defer recapCleanup()
+
+		recapCtx, recapCancel := context.WithTimeout(recapBctx, 30*time.Second)
+		defer recapCancel()
+
+		require.NoError(t, recapMeeting.Join(recapCtx))
+
+		sp, ok := recapMeeting.(AISummaryProvider)
+		require.True(t, ok)
+		assert.Equal(t, "Meeting notes:\nFollow-up actions confirmed.", sp.AISummary())
+	}()
 }

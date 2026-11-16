@@ -978,7 +978,7 @@ func (m *chromeMeeting) extractRecapFromTargets(ctx context.Context, port int, m
 					m.recapEntries = entries
 					var rawPayload rawRecapPayload
 					if json.Unmarshal([]byte(raw), &rawPayload) == nil {
-						if trimmedID := strings.TrimSpace(rawPayload.ItemID); recapItemIDRe.MatchString(trimmedID) {
+						if trimmedID := strings.TrimSpace(rawPayload.DriveItemID); recapItemIDRe.MatchString(trimmedID) {
 							m.recapItemID = trimmedID
 						}
 					}

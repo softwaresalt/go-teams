@@ -2986,4 +2986,543 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 			}
 		})
 	})
+
+	t.Run("round4-review-fixes-js", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		// U2-R3: Path B rejects unknown/zero duration before allocating combined or calling decodeAudioData.
+		t.Run("U2-R3-path-b-rejects-unknown-duration-before-decode", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const audioInit = buildAudioInitSegment();
+  const seg0 = buildMediaSegment(0, 0x01);
+
+  class FakeSourceBuffer extends EventTarget {
+    constructor(mime) {
+      super();
+      this.mime = mime;
+      this.updating = false;
+      this.buffered = { length: 0, start: () => 0, end: () => 0 };
+    }
+    appendBuffer() {}
+    remove() {}
+    abort() {}
+  }
+  class FakeMediaSource extends EventTarget {
+    addSourceBuffer(mime) { return new FakeSourceBuffer(mime); }
+    removeSourceBuffer() {}
+  }
+
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    duration: 0,
+    ended: true,
+    paused: true,
+    muted: false,
+    volume: 1,
+    playbackRate: 1,
+    currentTime: 0,
+    play: async () => {},
+    pause: () => {},
+    getAttribute: () => null
+  };
+
+  let decodes = 0;
+  globalThis.AudioContext = class {
+    async decodeAudioData() { decodes++; throw new Error('must not decode stream with unverified duration'); }
+    async close() {}
+  };
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true };
+
+  const playBtn = {
+    click: () => {
+      const ms = new FakeMediaSource();
+      const audioSB = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      audioSB.appendBuffer(audioInit);
+      audioSB.appendBuffer(seg0);
+    }
+  };
+  globalThis.document = {
+    querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null),
+    querySelectorAll: () => []
+  };
+
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('recap audio MSE stream duration unverified')) {
+    throw new Error('expected unverified MSE stream duration error, got: ' + String(failure));
+  }
+  if (decodes !== 0) {
+    throw new Error('decodeAudioData called ' + decodes + ' times when duration was unverified');
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("U2-R3 probe failed: %v\n%s", err, out)
+			}
+		})
+
+		// U1-R4: fetchBytesWithCap retry backoff aborts immediately on parentSignal abort.
+		t.Run("U1-R4-path-a-retry-backoff-aborts-immediately", func(t *testing.T) {
+			probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(7);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const audioInit = buildAudioInitSegment();
+  const seg0 = buildMediaSegment(0, 0x01);
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, audioInit));
+
+  let trackedBackoffTid = null;
+  let backoffScheduled = false;
+  let backoffCleared = false;
+  let backoffFired = false;
+  const origSetTimeout = globalThis.setTimeout;
+  const origClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms === 250 && trackedBackoffTid === null) {
+      backoffScheduled = true;
+      const tid = origSetTimeout(() => {
+        backoffFired = true;
+        fn(...args);
+      }, ms, ...args);
+      trackedBackoffTid = tid;
+      return tid;
+    }
+    return origSetTimeout(fn, ms, ...args);
+  };
+  globalThis.clearTimeout = (tid) => {
+    if (tid && tid === trackedBackoffTid && !backoffFired) {
+      backoffCleared = true;
+    }
+    return origClearTimeout(tid);
+  };
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  class FakeSourceBuffer extends EventTarget {
+    constructor(mime) {
+      super();
+      this.mime = mime;
+      this.updating = false;
+      this._end = 0;
+      this.buffered = { get length() { return this._sb._end > 0 ? 1 : 0; }, start: () => 0, end: () => this._end, _sb: null };
+      this.buffered._sb = this;
+    }
+    appendBuffer() {} remove() {} abort() {}
+  }
+  class FakeMediaSource extends EventTarget {
+    addSourceBuffer(mime) { return new FakeSourceBuffer(mime); }
+    removeSourceBuffer() {}
+  }
+
+  let audioSB = null;
+  let pathBResumed = false;
+  let pathAAbortObservedBeforeBackoffTimer = false;
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    duration: 1,
+    ended: false,
+    paused: true,
+    muted: false,
+    volume: 1,
+    playbackRate: 1,
+    currentTime: 0,
+    play: async () => {
+      if (videoEl.paused === false && audioSB && !pathBResumed) {
+        pathBResumed = true;
+        pathAAbortObservedBeforeBackoffTimer = backoffCleared;
+        audioSB._end = 1;
+        videoEl.ended = true;
+        audioSB.appendBuffer(seg0);
+      }
+      videoEl.paused = false;
+    },
+    pause: () => {},
+    getAttribute: () => null
+  };
+
+  globalThis.fetch = async (url) => {
+    const s = String(url);
+    if (s.includes('initsegment')) {
+      return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, arrayBuffer: async () => encInit.slice().buffer };
+    }
+    if (s.includes('segmentTime=0')) {
+      // Retryable 500 puts worker 0 into 250ms retry backoff.
+      return { ok: false, status: 500, url: s, headers: { get: () => null } };
+    }
+    if (s.includes('segmentTime=50000000')) {
+      // Wait 20ms so worker 0 is inside the 250ms backoff, then fail with non-retryable 403.
+      await new Promise(r => origSetTimeout(r, 20));
+      return { ok: false, status: 403, url: s, headers: { get: () => null } };
+    }
+    throw new Error('unexpected fetch: ' + s);
+  };
+  globalThis.crypto = { subtle };
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 1 };
+
+  const playBtn = {
+    click: () => {
+      const ms = new FakeMediaSource();
+      audioSB = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      audioSB.appendBuffer(audioInit);
+      audioSB.appendBuffer(seg0);
+      (async () => {
+        const r = await globalThis.fetch(base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=100000000&driveItemId=recording-a');
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await r.arrayBuffer());
+      })().catch(() => {});
+    }
+  };
+  globalThis.document = {
+    querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null),
+    querySelectorAll: () => []
+  };
+
+  const started = Date.now();
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const elapsedMs = Date.now() - started;
+  const parsed = JSON.parse(raw);
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected Path B fallback PCM');
+  if (!backoffScheduled) throw new Error('test setup error: expected 250ms retry backoff to be scheduled');
+  if (!backoffCleared || !pathAAbortObservedBeforeBackoffTimer) {
+    throw new Error('retry backoff timer was not cleared immediately on parentSignal abort (backoffCleared=' + backoffCleared + ', beforeResume=' + pathAAbortObservedBeforeBackoffTimer + ', elapsedMs=' + elapsedMs + ')');
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("U1-R4 probe failed: %v\n%s", err, out)
+			}
+		})
+	})
+}
+
+func TestRecapRound4ReviewFixes(t *testing.T) {
+	const testRecapURL = "https://teams.cloud.microsoft/l/meetingrecap?driveItemId=recording-a"
+
+	// U1-R3: Retry when xplatplugins.aspx returns "" (lastErr == nil) before streamembed.aspx mounts.
+	t.Run("U1-R3-retries-when-xplat-returns-empty-before-streamembed-mounts", func(t *testing.T) {
+		var listCalls atomic.Int32
+		var serverURL string
+		pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/json/list" {
+				n := listCalls.Add(1)
+				wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+				targets := []cdpTargetInfo{
+					{ID: "owner", Type: "page", URL: testRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+					{ID: "xplat", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/personal/u/_layouts/15/xplatplugins.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/xplat"},
+				}
+				if n >= 2 {
+					targets = append(targets, cdpTargetInfo{
+						ID:                   "streamembed",
+						ParentID:             "xplat",
+						Type:                 "iframe",
+						URL:                  "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a",
+						WebSocketDebuggerURL: wsBase + "/streamembed",
+					})
+				}
+				require.NoError(t, json.NewEncoder(w).Encode(targets))
+				return
+			}
+			conn, _, _, err := ws.UpgradeHTTP(r, w)
+			if err != nil {
+				t.Errorf("upgrade: %v", err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			raw, _, err := wsutil.ReadClientData(conn)
+			if err != nil {
+				t.Errorf("read: %v", err)
+				return
+			}
+			var req struct {
+				ID     int    `json:"id"`
+				Method string `json:"method"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &req))
+			var result map[string]any
+			switch {
+			case req.Method == "Page.getFrameTree":
+				result = map[string]any{"frameTree": map[string]any{
+					"frame": map[string]string{"id": "owner", "url": testRecapURL},
+					"childFrames": []any{
+						map[string]any{"frame": map[string]string{"id": "xplat", "url": "https://contoso-my.sharepoint.com/personal/u/_layouts/15/xplatplugins.aspx?driveItemId=recording-a"}},
+						map[string]any{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}},
+					},
+				}}
+			case r.URL.Path == "/streamembed":
+				payload, _ := json.Marshal(map[string]any{
+					"pageUrl":     testRecapURL,
+					"itemId":      "recording-a",
+					"sourceBytes": 1024,
+					"durationSec": 1.0,
+					"pcmChunks":   []string{pcm},
+				})
+				result = map[string]any{"result": map[string]string{"value": string(payload)}}
+			default:
+				// Simulate xplatplugins.aspx before streamembed.aspx mounts returning empty string (lastErr == nil).
+				result = map[string]any{"result": map[string]string{"value": ""}}
+			}
+			resp, err := json.Marshal(map[string]any{"id": req.ID, "result": result})
+			require.NoError(t, err)
+			require.NoError(t, wsutil.WriteServerText(conn, resp))
+		}))
+		defer srv.Close()
+		serverURL = srv.URL
+
+		_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+		require.NoError(t, err)
+		port, err := strconv.Atoi(portText)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var out bytes.Buffer
+		require.NoError(t, captureRecapAudioFromTargets(ctx, port, "owner", testRecapURL, &out))
+		assert.GreaterOrEqual(t, listCalls.Load(), int32(2), "expected retry after empty xplatplugins.aspx eval")
+		got := out.Bytes()
+		require.True(t, len(got) >= 2 && got[0] == 0xff && (got[1]&0xe0) == 0xe0, "expected valid MP3 frame sync header")
+	})
+
+	// U2-R4: __goTeamsRecapAudioTransfer is cleaned up on early exits before the CDP pull loop.
+	t.Run("U2-R4-cleanup-pending-transfer-on-early-exits", func(t *testing.T) {
+		cases := []struct {
+			name        string
+			payloadJSON string
+			wantErrSub  string
+		}{
+			{
+				name:        "identity-mismatch",
+				payloadJSON: `{"pageUrl":"` + testRecapURL + `","itemId":"other-recording","sourceBytes":1024,"durationSec":1.0,"transferPending":true,"chunkCount":2}`,
+				wantErrSub:  "identity mismatch",
+			},
+			{
+				name:        "identity-unverified",
+				payloadJSON: `{"pageUrl":"https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx","itemId":"","sourceBytes":1024,"durationSec":1.0,"transferPending":true,"chunkCount":2}`,
+				wantErrSub:  "identity unverified",
+			},
+			{
+				name:        "payload-error",
+				payloadJSON: `{"pageUrl":"` + testRecapURL + `","itemId":"recording-a","sourceBytes":1024,"durationSec":1.0,"transferPending":true,"chunkCount":2,"error":"synthetic failure"}`,
+				wantErrSub:  "synthetic failure",
+			},
+			{
+				name:        "size-cap-exceeded",
+				payloadJSON: `{"pageUrl":"` + testRecapURL + `","itemId":"recording-a","sourceBytes":` + strconv.Itoa(maxRecapAudioSourceBytes+1) + `,"durationSec":1.0,"transferPending":true,"chunkCount":2}`,
+				wantErrSub:  "exceeds maximum supported size/duration",
+			},
+			{
+				name:        "chunk-count-zero",
+				payloadJSON: `{"pageUrl":"` + testRecapURL + `","itemId":"recording-a","sourceBytes":1024,"durationSec":1.0,"transferPending":true,"chunkCount":0}`,
+				wantErrSub:  "recap audio unavailable",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				var cleanupSeen atomic.Bool
+				var serverURL string
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/json/list" {
+						wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+						require.NoError(t, json.NewEncoder(w).Encode([]cdpTargetInfo{
+							{ID: "owner", Type: "page", URL: testRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+							{ID: "frame", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/frame"},
+						}))
+						return
+					}
+					conn, _, _, err := ws.UpgradeHTTP(r, w)
+					if err != nil {
+						t.Errorf("upgrade: %v", err)
+						return
+					}
+					defer func() { _ = conn.Close() }()
+					raw, _, err := wsutil.ReadClientData(conn)
+					if err != nil {
+						t.Errorf("read: %v", err)
+						return
+					}
+					var req struct {
+						ID     int    `json:"id"`
+						Method string `json:"method"`
+						Params struct {
+							Expression string `json:"expression"`
+						} `json:"params"`
+					}
+					require.NoError(t, json.Unmarshal(raw, &req))
+					var result map[string]any
+					switch {
+					case req.Method == "Page.getFrameTree":
+						result = map[string]any{"frameTree": map[string]any{
+							"frame": map[string]string{"id": "owner", "url": testRecapURL},
+						}}
+					case r.URL.Path == "/frame":
+						if len(req.Params.Expression) < 200 && strings.Contains(req.Params.Expression, "delete window.__goTeamsRecapAudioTransfer") {
+							cleanupSeen.Store(true)
+							result = map[string]any{"result": map[string]string{"value": ""}}
+						} else {
+							result = map[string]any{"result": map[string]string{"value": tc.payloadJSON}}
+						}
+					default:
+						result = map[string]any{"result": map[string]string{"value": ""}}
+					}
+					resp, err := json.Marshal(map[string]any{"id": req.ID, "result": result})
+					require.NoError(t, err)
+					require.NoError(t, wsutil.WriteServerText(conn, resp))
+				}))
+				defer srv.Close()
+				serverURL = srv.URL
+
+				_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+				require.NoError(t, err)
+				port, err := strconv.Atoi(portText)
+				require.NoError(t, err)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				var out bytes.Buffer
+				err = captureRecapAudioFromTargets(ctx, port, "owner", testRecapURL, &out)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrSub)
+				assert.True(t, cleanupSeen.Load(), "expected window.__goTeamsRecapAudioTransfer cleanup on %s", tc.name)
+			})
+		}
+	})
+
+	// U5-R3: fi.id / fi.docId alone must not set m.recapItemID, whereas VroomItemId does.
+	t.Run("U5-R3-recap-item-id-ignores-generic-id-and-docId", func(t *testing.T) {
+		runExtractTranscriptJS := func(t *testing.T, fileInfoJS string) string {
+			t.Helper()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			probeJS := `
+const fs = require('fs');
+globalThis.window = globalThis;
+globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/xplatplugins.aspx' };
+globalThis.g_fileInfo = ` + fileInfoJS + `;
+const listEl = {
+  __reactFiber$test: {
+    memoizedProps: {
+      items: [
+        { speakerDisplayName: 'Alice', timestamp: 'PT0M5S', text: 'Hello world', type: 'Text' }
+      ]
+    }
+  }
+};
+globalThis.document = {
+  querySelector: sel => sel === '.ms-List' ? listEl : null,
+  querySelectorAll: () => []
+};
+process.stdout.write(eval(fs.readFileSync(0, 'utf8')));
+`
+			cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+			cmd.Stdin = strings.NewReader(extractRecapTranscriptJS)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "extractRecapTranscriptJS failed: %s", out)
+			return string(out)
+		}
+
+		extractFromTarget := func(t *testing.T, transcriptJSON string) *chromeMeeting {
+			t.Helper()
+			var serverURL string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					require.NoError(t, json.NewEncoder(w).Encode([]cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: "https://teams.cloud.microsoft/l/meetingrecap?threadId=19%3Ameeting_abc%40thread.v2", WebSocketDebuggerURL: wsBase + "/owner"},
+					}))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					t.Errorf("read: %v", err)
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+					Params struct {
+						Expression string `json:"expression"`
+					} `json:"params"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var result map[string]any
+				if strings.Contains(req.Params.Expression, "g_fileInfo") {
+					result = map[string]any{"result": map[string]string{"value": transcriptJSON}}
+				} else {
+					result = map[string]any{"result": map[string]string{"value": ""}}
+				}
+				resp, err := json.Marshal(map[string]any{"id": req.ID, "result": result})
+				require.NoError(t, err)
+				require.NoError(t, wsutil.WriteServerText(conn, resp))
+			}))
+			defer srv.Close()
+			serverURL = srv.URL
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
+			m := newChromeMeeting(MeetingOptions{
+				MeetingURL:       "https://teams.cloud.microsoft/l/meetingrecap?threadId=19%3Ameeting_abc%40thread.v2",
+				DisableAISummary: true,
+			})
+			m.capturePageID = "owner"
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			targets := []cdpTargetInfo{
+				{ID: "owner", Type: "page", URL: "https://teams.cloud.microsoft/l/meetingrecap?threadId=19%3Ameeting_abc%40thread.v2", WebSocketDebuggerURL: "ws" + strings.TrimPrefix(serverURL, "http") + "/owner"},
+			}
+			ok := m.extractRecapFromTargets(ctx, port, targets[0].URL, targets, ownedFrameSet{})
+			require.True(t, ok)
+			return m
+		}
+
+		genericJSON := runExtractTranscriptJS(t, `{ title: 'Sync', name: 'Sync.mp4', id: 'generic-id-123', docId: 'doc-456' }`)
+		var genericParsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(genericJSON), &genericParsed))
+		assert.Equal(t, "generic-id-123", genericParsed["itemId"], "itemId must stay preserved for existing verifyRecapTargetMatchesMeeting callers")
+		assert.Equal(t, "", genericParsed["driveItemId"], "driveItemId must be empty when only fi.id/fi.docId are present")
+		mGeneric := extractFromTarget(t, genericJSON)
+		assert.Empty(t, mGeneric.recapItemID, "fi.id/fi.docId alone must not set m.recapItemID")
+
+		vroomJSON := runExtractTranscriptJS(t, `{ title: 'Sync', name: 'Sync.mp4', VroomItemId: '01VALIDDRIVEITEMID', id: 'generic-id-123' }`)
+		var vroomParsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(vroomJSON), &vroomParsed))
+		assert.Equal(t, "01VALIDDRIVEITEMID", vroomParsed["driveItemId"])
+		mVroom := extractFromTarget(t, vroomJSON)
+		assert.Equal(t, "01VALIDDRIVEITEMID", mVroom.recapItemID, "VroomItemId must populate m.recapItemID")
+	})
 }

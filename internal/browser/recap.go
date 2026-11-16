@@ -1102,8 +1102,34 @@ const extractRecapAudioJS = `(async () => {
 					if (fatalErr || !err || !err.retryable || attempt === 2 || (parentSignal && parentSignal.aborted)) {
 						throw err;
 					}
-					await new Promise(resolve => {
-						const tid = setTimeout(() => { activeTimers.delete(tid); resolve(); }, 250 * (attempt + 1));
+					await new Promise((resolve, reject) => {
+						let settled = false;
+						let tid = null;
+						const onBackoffAbort = () => {
+							if (settled) return;
+							settled = true;
+							if (tid !== null) {
+								clearTimeout(tid);
+								activeTimers.delete(tid);
+							}
+							reject(new Error('transcode fetch aborted'));
+						};
+						if (parentSignal && parentSignal.aborted) {
+							onBackoffAbort();
+							return;
+						}
+						if (parentSignal && typeof parentSignal.addEventListener === 'function') {
+							parentSignal.addEventListener('abort', onBackoffAbort, { once: true });
+						}
+						tid = setTimeout(() => {
+							if (settled) return;
+							settled = true;
+							activeTimers.delete(tid);
+							if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
+								parentSignal.removeEventListener('abort', onBackoffAbort);
+							}
+							resolve();
+						}, 250 * (attempt + 1));
 						activeTimers.add(tid);
 					});
 				}
@@ -1613,9 +1639,12 @@ const extractRecapAudioJS = `(async () => {
 						const d = Number(raw);
 						if (Number.isFinite(d) && d > 0) return d;
 					}
-					if (transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+					if (Number.isFinite(transcodePpd) && transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
 					return 0;
 				})();
+				if (finalTargetDur <= 0 && !(mseMaxBufferedEnd > 0)) {
+					throw new Error('recap audio MSE stream duration unverified');
+				}
 				if (finalTargetDur > 0 && (mseHasBufferedGap || mseContiguousEnd < finalTargetDur - 0.5)) {
 					throw new Error('recap audio MSE stream incomplete before deadline');
 				}
@@ -1721,7 +1750,7 @@ const extractRecapAudioJS = `(async () => {
 		} catch (streamErr) {
 			const msg = String((streamErr && streamErr.message) || streamErr || '');
 			if (msg.includes(limitError) || msg.includes('identity mismatch') || msg.includes('identity unverified') ||
-				msg.includes('MSE stream incomplete') || msg.includes('deadline')) {
+				msg.includes('MSE stream') || msg.includes('deadline')) {
 				throw streamErr;
 			}
 			if (blockedErr) throw blockedErr;
@@ -1763,7 +1792,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		case strings.Contains(msg, "exceeds maximum supported size/duration"):
 			return 3
 		case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"),
-			strings.Contains(msg, "MSE stream incomplete"), strings.Contains(msg, "Path A capture deadline exceeded"):
+			strings.Contains(msg, "MSE stream"), strings.Contains(msg, "Path A capture deadline exceeded"):
 			return 2
 		case strings.Contains(msg, "isDownloadBlocked=true"):
 			return 1
@@ -1810,10 +1839,17 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		orderedTargets := make([]cdpTargetInfo, len(targets))
 		copy(orderedTargets, targets)
 		hasStreamEmbedTarget := false
+		hasXplatTarget := false
 		for _, t := range orderedTargets {
-			if isTargetInCaptureScope(t, ownerID, frames) && strings.Contains(strings.ToLower(t.URL), "streamembed.aspx") {
+			if !isTargetInCaptureScope(t, ownerID, frames) {
+				continue
+			}
+			lowerURL := strings.ToLower(t.URL)
+			if strings.Contains(lowerURL, "streamembed.aspx") {
 				hasStreamEmbedTarget = true
-				break
+			}
+			if strings.Contains(lowerURL, "xplatplugins.aspx") {
+				hasXplatTarget = true
 			}
 		}
 		recapTargetRank := func(t cdpTargetInfo) int {
@@ -1869,6 +1905,26 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				setLastErr(fmt.Errorf("browser: invalid recap audio payload: %w", err))
 				continue
 			}
+			var pullSess *cdpEvalSession
+			transferCleaned := false
+			cleanupPendingTransfer := func() {
+				if !payload.TransferPending || transferCleaned {
+					return
+				}
+				transferCleaned = true
+				cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cleanCancel()
+				const clearTransferJS = `(() => { delete window.__goTeamsRecapAudioTransfer; return ""; })()`
+				if pullSess != nil {
+					// Best-effort cleanup of transfer buffer before closing session.
+					_, _ = pullSess.eval(cleanCtx, clearTransferJS, 2*time.Second)
+					pullSess.close()
+					pullSess = nil
+					return
+				}
+				// Best-effort one-shot cleanup when transfer session has not opened yet.
+				_, _ = evalInCDPTarget(cleanCtx, target.WebSocketDebuggerURL, clearTransferJS)
+			}
 			slog.Debug("browser: recap audio unmarshaled", "elapsed", time.Since(tStart).Round(time.Millisecond), "chunks", len(payload.PCMChunks), "transfer_pending", payload.TransferPending, "chunk_count", payload.ChunkCount, "duration_sec", payload.DurationSec)
 			pageIdentity := recapAudioIdentity(payload.PageURL)
 			mediaIdentity := recapAudioIdentity(payload.MediaURL)
@@ -1876,6 +1932,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				hasMeetingIdentityConflict(expected, mediaIdentity) ||
 				(expected.DriveItemID != "" && payload.ItemID != "" && !strings.EqualFold(expected.DriveItemID, payload.ItemID)) ||
 				(expected.RecordingName != "" && payload.FileName != "" && !strings.EqualFold(expected.RecordingName, payload.FileName)) {
+				cleanupPendingTransfer()
 				setLastErr(fmt.Errorf("browser: recap audio recording identity mismatch"))
 				continue
 			}
@@ -1884,36 +1941,36 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				!hasRecapAudioIdentityMatch(expected, mediaIdentity) &&
 				!(expected.DriveItemID != "" && strings.EqualFold(expected.DriveItemID, payload.ItemID)) &&
 				!(expected.RecordingName != "" && strings.EqualFold(expected.RecordingName, payload.FileName)) {
+				cleanupPendingTransfer()
 				setLastErr(fmt.Errorf("browser: recap audio recording identity unverified"))
 				continue
 			}
 			if payload.Error != "" {
+				cleanupPendingTransfer()
 				setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
 				continue
 			}
 			if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
 				math.IsNaN(payload.DurationSec) || payload.DurationSec < 0 || payload.DurationSec > float64(maxRecapAudioDurationSec) {
+				cleanupPendingTransfer()
 				return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
 			}
 			if payload.TransferPending {
 				if payload.ChunkCount <= 0 {
+					cleanupPendingTransfer()
 					continue
 				}
-				pullSess, sessErr := newCDPEvalSession(ctx, target.WebSocketDebuggerURL, int64(maxRecapAudioPCMBytes)*2+65536)
+				var sessErr error
+				pullSess, sessErr = newCDPEvalSession(ctx, target.WebSocketDebuggerURL, int64(maxRecapAudioPCMBytes)*2+65536)
 				if sessErr != nil {
+					cleanupPendingTransfer()
 					return fmt.Errorf("browser: open recap audio transfer session: %w", sessErr)
-				}
-				cleanupTransfer := func() {
-					cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Second)
-					defer cleanCancel()
-					_, _ = pullSess.eval(cleanCtx, `(() => { delete window.__goTeamsRecapAudioTransfer; return ""; })()`, 2*time.Second)
-					pullSess.close()
 				}
 				enc := audio.NewEncoder(w, audio.SampleRate)
 				var size int64
 				for pulled := 0; pulled < payload.ChunkCount; {
 					if err := ctx.Err(); err != nil {
-						cleanupTransfer()
+						cleanupPendingTransfer()
 						return fmt.Errorf("browser: recap audio cancelled: %w", err)
 					}
 					batchRaw, pullErr := pullSess.eval(ctx, `(() => {
@@ -1922,16 +1979,16 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 						return JSON.stringify(t.chunks.splice(0, 64));
 					})()`, 30*time.Second)
 					if pullErr != nil {
-						cleanupTransfer()
+						cleanupPendingTransfer()
 						return fmt.Errorf("browser: pull recap audio chunk batch: %w", pullErr)
 					}
 					var batch []string
 					if err := json.Unmarshal([]byte(batchRaw), &batch); err != nil {
-						cleanupTransfer()
+						cleanupPendingTransfer()
 						return fmt.Errorf("browser: decode recap audio chunk batch: %w", err)
 					}
 					if len(batch) == 0 {
-						cleanupTransfer()
+						cleanupPendingTransfer()
 						return fmt.Errorf("browser: incomplete recap audio chunk transfer (%d of %d chunks)", pulled, payload.ChunkCount)
 					}
 					for _, chunk := range batch {
@@ -1943,22 +2000,22 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 						}
 						size += n
 						if size > int64(maxRecapAudioPCMBytes) {
-							cleanupTransfer()
+							cleanupPendingTransfer()
 							return fmt.Errorf("browser: recap audio exceeds maximum supported size/duration")
 						}
 						samples, decErr := decodeAudioPayload(chunk)
 						if decErr != nil {
-							cleanupTransfer()
+							cleanupPendingTransfer()
 							return fmt.Errorf("browser: recap audio: %w", decErr)
 						}
 						if writeErr := enc.WritePCM(samples); writeErr != nil {
-							cleanupTransfer()
+							cleanupPendingTransfer()
 							return fmt.Errorf("browser: encode recap audio: %w", writeErr)
 						}
 					}
 					pulled += len(batch)
 				}
-				cleanupTransfer()
+				cleanupPendingTransfer()
 				if size == 0 {
 					continue
 				}
@@ -2000,7 +2057,10 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
 			return nil
 		}
-		if lastErr == nil || !strings.Contains(lastErr.Error(), "isDownloadBlocked=true") || hasStreamEmbedTarget || attempt == maxAttempts-1 {
+		shouldRetry := !hasStreamEmbedTarget && attempt < maxAttempts-1 &&
+			((lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true")) ||
+				(lastErr == nil && hasXplatTarget))
+		if !shouldRetry {
 			break
 		}
 		timer := time.NewTimer(1 * time.Second)
@@ -2812,6 +2872,7 @@ const extractRecapTranscriptJS = `(() => {
 	const fileTitle = fi.title ? String(fi.title).trim() : '';
 	const fileName = fi.name ? String(fi.name).trim() : '';
 	const itemId = String(fi.VroomItemID || fi.VroomItemId || fi.itemId || fi.driveItemId || fi.id || fi.docId || '').trim();
+	const driveItemId = String(fi.VroomItemID || fi.VroomItemId || fi.itemId || fi.driveItemId || '').trim();
 	const pageUrl = String(location.href || '');
 	const fileStart = String(fi.CreatedDateTime || fi.TimeCreated || fi.creationTime || fi.lastModifiedTime || fi.name || '').trim();
 	const tz = (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '';
@@ -2828,13 +2889,13 @@ const extractRecapTranscriptJS = `(() => {
 					text: String(it.text || '').trim(),
 					type: String(it.type || 'Text')
 				}));
-				return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
+				return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, driveItemId: driveItemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
 			}
 		}
 	}
 	const cells = Array.from(document.querySelectorAll('.ms-List-cell, [data-transcript-entry-id]'));
 	if (cells.length === 0) {
-		return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries: [] });
+		return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, driveItemId: driveItemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries: [] });
 	}
 	const entries = [];
 	const seen = new Set();
@@ -2856,7 +2917,7 @@ const extractRecapTranscriptJS = `(() => {
 			type: 'Text'
 		});
 	}
-	return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
+	return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, driveItemId: driveItemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries });
 })()`
 
 const extractRecapPageMetadataJS = `(() => {
@@ -2871,13 +2932,14 @@ const extractRecapPageMetadataJS = `(() => {
 })()`
 
 type rawRecapPayload struct {
-	Title     string `json:"title"`
-	FileName  string `json:"fileName"`
-	ItemID    string `json:"itemId"`
-	PageURL   string `json:"pageUrl"`
-	StartTime string `json:"startTime"`
-	Timezone  string `json:"timezone"`
-	Entries   []struct {
+	Title       string `json:"title"`
+	FileName    string `json:"fileName"`
+	ItemID      string `json:"itemId"`
+	DriveItemID string `json:"driveItemId"`
+	PageURL     string `json:"pageUrl"`
+	StartTime   string `json:"startTime"`
+	Timezone    string `json:"timezone"`
+	Entries     []struct {
 		Speaker   string `json:"speaker"`
 		Timestamp string `json:"timestamp"`
 		Text      string `json:"text"`

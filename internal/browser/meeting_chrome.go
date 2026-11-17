@@ -414,19 +414,96 @@ func (t *headedAuthTracker) onNonAuthPage(st headedPageState) string {
 func hasSpecificMeetingOrRecapTarget(meetingURL string) bool {
 	lower := strings.ToLower(strings.TrimSpace(meetingURL))
 	if strings.Contains(lower, "meetingrecap") ||
+		strings.Contains(lower, "stream.aspx") ||
+		strings.Contains(lower, "streamembed.aspx") ||
 		strings.Contains(lower, "meetup-join") ||
 		strings.Contains(lower, "/meet/") {
 		return true
 	}
 	id := ExtractMeetingIdentity(meetingURL)
-	return id.ThreadID != "" || id.MeetingToken != "" || id.DriveItemID != "" || id.CallID != "" || id.ICalUID != "" || id.MeetID != ""
+	return id.ThreadID != "" || id.MeetingToken != "" || id.DriveItemID != "" || id.CallID != "" || id.ICalUID != "" || id.RecordingName != "" || id.MeetID != ""
+}
+
+func hasRecordingSpecificIdentity(id MeetingIdentity) bool {
+	return id.ThreadID != "" ||
+		id.MeetingToken != "" ||
+		id.DriveItemID != "" ||
+		id.CallID != "" ||
+		id.ICalUID != "" ||
+		id.RecordingName != "" ||
+		id.MeetID != ""
+}
+
+func singleCaseInsensitiveQueryValue(vals url.Values, key string, caseFold bool) (val string, present bool, ambiguous bool) {
+	for k, vs := range vals {
+		if !strings.EqualFold(k, key) {
+			continue
+		}
+		for _, raw := range vs {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				continue
+			}
+			if caseFold {
+				trimmed = strings.ToLower(trimmed)
+			}
+			if !present {
+				val = trimmed
+				present = true
+			} else if val != trimmed {
+				return "", true, true
+			}
+		}
+	}
+	return val, present, false
+}
+
+func canonicalStreamTargetMatch(meetingURL, pageURL string) bool {
+	mu, err1 := url.Parse(strings.TrimSpace(meetingURL))
+	pu, err2 := url.Parse(strings.TrimSpace(pageURL))
+	if err1 != nil || err2 != nil {
+		return strings.TrimRight(strings.ToLower(pageURL), "/") == strings.TrimRight(strings.ToLower(meetingURL), "/")
+	}
+	if !strings.EqualFold(mu.Scheme, pu.Scheme) ||
+		!strings.EqualFold(mu.Host, pu.Host) ||
+		strings.TrimRight(strings.ToLower(mu.Path), "/") != strings.TrimRight(strings.ToLower(pu.Path), "/") {
+		return false
+	}
+	mq := mu.Query()
+	pq := pu.Query()
+	for _, spec := range []struct {
+		key      string
+		caseFold bool
+	}{
+		{key: "id", caseFold: false},
+		{key: "uniqueid", caseFold: true},
+		{key: "driveid", caseFold: true},
+	} {
+		want, hasWant, wantAmb := singleCaseInsensitiveQueryValue(mq, spec.key, spec.caseFold)
+		if wantAmb {
+			return false
+		}
+		if !hasWant {
+			continue
+		}
+		got, hasGot, gotAmb := singleCaseInsensitiveQueryValue(pq, spec.key, spec.caseFold)
+		if gotAmb || !hasGot || got != want {
+			return false
+		}
+	}
+	return true
 }
 
 func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 	if !hasSpecificMeetingOrRecapTarget(meetingURL) {
 		return true
 	}
-	if hasPositiveMeetingIdentityMatch(meetingURL, pageURL) {
+	exp := ExtractMeetingIdentity(meetingURL)
+	act := ExtractMeetingIdentity(pageURL)
+	if hasMeetingIdentityConflict(exp, act) {
+		return false
+	}
+	if hasRecapAudioIdentityMatch(exp, act) {
 		return true
 	}
 	lowerMeeting := strings.ToLower(meetingURL)
@@ -434,6 +511,11 @@ func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 	switch {
 	case strings.Contains(lowerMeeting, "meetingrecap"):
 		return strings.Contains(combined, "meetingrecap")
+	case strings.Contains(lowerMeeting, "stream.aspx"), strings.Contains(lowerMeeting, "streamembed.aspx"):
+		if hasRecordingSpecificIdentity(exp) {
+			return false
+		}
+		return canonicalStreamTargetMatch(meetingURL, pageURL)
 	case strings.Contains(lowerMeeting, "meetup-join"):
 		return strings.Contains(combined, "meetup-join")
 	case strings.Contains(lowerMeeting, "/meet/"):
@@ -744,6 +826,7 @@ func isRecapIframeTarget(t cdpTargetInfo) bool {
 	}
 	return strings.Contains(t.URL, "xplatplugins.aspx") ||
 		strings.Contains(t.URL, "streamembed.aspx") ||
+		strings.Contains(t.URL, "stream.aspx") ||
 		hasHTTPSHostSuffix(t.URL, "sharepoint.com")
 }
 

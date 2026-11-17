@@ -314,16 +314,23 @@ Flags for the root command, `captions`, and `join`:
 * `--append-ai-summary`: existing Markdown transcript file to append the Meeting Recap AI Summary into without overwriting live captions
 * `--not-before`: RFC 3339 timestamp before which a queued `--append-ai-summary` entry is skipped and left uncommented
 
-Meeting Recap URLs write only the `.md` transcript by default. Enabling audio
-with `--audio`, `--recap-audio`, or `capture_audio: true` (alias `audio: true`)
-in the config file also writes a companion `.mp3` file next to the transcript,
-extracted from the recording that belongs to the requested Recap. For view-only
-SharePoint Meeting Recaps where direct file downloads are blocked
-(`isDownloadBlocked=true`), `go-teams` captures the in-page `streamembed.aspx`
-audio-only stream at high speed (`14x-100x` real-time) while stripping the
-video track and encodes it to MP3 in pure Go without external tools. Recap
-audio is rejected rather than captured when its recording identity cannot be
-verified or when it exceeds the supported size or duration limits.
+Meeting Recap URLs (including direct SharePoint and OneDrive `stream.aspx`
+recording URLs such as
+`https://<tenant>.sharepoint.com/personal/<user>/_layouts/15/stream.aspx?id=/personal/<user>/Documents/Recordings/<file>.mp4`)
+write only the `.md` transcript and `# AI Summary` by default. On direct
+`stream.aspx` pages, `go-teams` activates the SharePoint `Transcript` pane and
+triggers the SharePoint Copilot `"Recap the meeting"` summary flow automatically.
+Enabling audio with `--audio`, `--recap-audio`, or `capture_audio: true` (alias
+`audio: true`) in the config file also writes a companion `.mp3` file next to
+the transcript, extracted from the recording that belongs to the requested
+Recap. For view-only SharePoint Meeting Recaps and `stream.aspx` recordings
+where direct file downloads are blocked (`isDownloadBlocked=true`), `go-teams`
+captures the in-page `streamembed.aspx` or `stream.aspx` audio-only stream at
+high speed (`14x-100x` real-time) while stripping the video track (using
+`PerformanceResourceTiming` and `g_fileInfo.EncKey` when pre-buffered by a Web
+Worker) and encodes it to MP3 in pure Go without external tools. Recap audio is
+rejected rather than captured when its recording identity cannot be verified or
+when it exceeds the supported size or duration limits.
 
 `--browser-path`, `--profile-dir`, and `--account` are also accepted by `auth`
 and `schedule`, and `schedule` additionally binds `--audio` / `--recap-audio`,

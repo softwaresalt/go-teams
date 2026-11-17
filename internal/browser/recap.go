@@ -79,6 +79,13 @@ const extractRecapAudioJS = `(async () => {
 		}
 		if (positive) state.matched = true;
 	}
+	function safeDecodeURIComponent(s) {
+		try {
+			return decodeURIComponent(String(s || ''));
+		} catch (_) {
+			return String(s || '');
+		}
+	}
 	function checkIdentityAgainst(raw, baseUrl, state) {
 		if (!raw) return;
 		let u;
@@ -90,21 +97,38 @@ const extractRecapAudioJS = `(async () => {
 			for (const [key, field] of [['threadId','ThreadID'], ['driveItemId','DriveItemID'], ['driveId','DriveID'], ['callId','CallID'], ['iCalUid','ICalUID']]) {
 				for (const value of params.getAll(key)) matchField(field, value, field !== 'DriveID', state);
 			}
-			for (const value of params.getAll('fileUrl')) {
-				try {
-					const filePath = new URL(value, baseUrl).pathname;
-					if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) matchField('RecordingName', decodeURIComponent(filePath.split('/').pop()), true, state);
-				} catch (_) { throw new Error('recap audio recording identity mismatch'); }
+			for (const paramKey of ['fileUrl', 'id']) {
+				for (const value of params.getAll(paramKey)) {
+					if (paramKey === 'id' && !/\.(mp4|mkv|webm|mov|m4a)(?:$|[?#])/i.test(String(value || ''))) continue;
+					let filePath = '';
+					let alreadyDecoded = false;
+					if (paramKey === 'id' && !/^https?:\/\//i.test(value)) {
+						filePath = String(value || '');
+						alreadyDecoded = true;
+					} else {
+						try {
+							filePath = new URL(value, baseUrl).pathname;
+						} catch (_) {
+							if (paramKey === 'fileUrl') throw new Error('recap audio recording identity mismatch');
+							continue;
+						}
+					}
+					if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
+						const rawName = filePath.split('/').pop();
+						const recName = alreadyDecoded ? rawName : safeDecodeURIComponent(rawName);
+						matchField('RecordingName', recName, true, state);
+					}
+				}
 			}
 		}
-		const decoded = decodeURIComponent(raw);
+		const decoded = safeDecodeURIComponent(raw);
 		const token = decoded.match(/meeting_[a-z0-9_-]+/i);
 		if (token) matchField('MeetingToken', token[0], true, state);
 		const meet = decoded.match(/\/meet\/([a-z0-9_-]+)/i);
 		if (meet) matchField('MeetID', meet[1], true, state);
-		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', decodeURIComponent(u.pathname.split('/').pop()), true, state);
+		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', safeDecodeURIComponent(u.pathname.split('/').pop()), true, state);
 	}
-	const playBtnSelector = 'button[aria-label="Play video"], button[title="Play video"], button[data-automationid="playButton"], button[aria-label="Play"], .vjs-big-play-button, [role="button"][aria-label="Play video"]';
+	const playBtnSelector = 'button[aria-label="Play video"], button[title="Play video"], button[data-automationid="playButton"], button[aria-label="Play"], [role="menuitem"][aria-label="Play"], .vjs-big-play-button, [role="button"][aria-label="Play video"]';
 	function validateFrameContext(win, doc) {
 		const state = { matched: false };
 		const fUrl = String((win.location && win.location.href) || '');
@@ -143,6 +167,7 @@ const extractRecapAudioJS = `(async () => {
 		const playBtn = d && d.querySelector ? d.querySelector(playBtnSelector) : null;
 		return Boolean(
 			urlLower.includes('streamembed.aspx') ||
+			urlLower.includes('stream.aspx') ||
 			playBtn ||
 			(media && (typeof media.play === 'function' || typeof w.MediaSource !== 'undefined')) ||
 			fi.transcodeUrl
@@ -151,7 +176,7 @@ const extractRecapAudioJS = `(async () => {
 	function frameScore(ctx) {
 		let score = 0;
 		const urlLower = String(ctx.pageUrl || '').toLowerCase();
-		if (urlLower.includes('streamembed.aspx')) score += 100;
+		if (urlLower.includes('streamembed.aspx') || urlLower.includes('stream.aspx')) score += 100;
 		if (hasPlayableStreamSurface(ctx)) score += 50;
 		if (ctx.doc && ctx.doc.querySelector && ctx.doc.querySelector('audio, video')) score += 10;
 		if (ctx.info && ctx.info.isDownloadBlocked) score += 5;
@@ -662,6 +687,13 @@ const extractRecapAudioJS = `(async () => {
 		}
 		let transcodeWsd = 0;
 		let transcodePpd = 0;
+		function transcodeDurationSec(ppdVal, wsdVal) {
+			if (!Number.isFinite(ppdVal) || ppdVal <= 0) return 0;
+			if (Number.isFinite(wsdVal) && wsdVal >= 1000 && wsdVal < 1e6) {
+				return ppdVal / 16000;
+			}
+			return ppdVal >= 1e6 ? (ppdVal / 1e7) : ppdVal;
+		}
 		const capturedAuthHeadersByOrigin = Object.create(null);
 		const allowlistedHeaderNames = [
 			'accept',
@@ -911,17 +943,17 @@ const extractRecapAudioJS = `(async () => {
 			}
 			const wsd = Number(u.searchParams.get('wsd'));
 			const ppd = Number(u.searchParams.get('ppd'));
-			if (Number.isFinite(wsd) && wsd > 0) transcodeWsd = wsd;
-			if (Number.isFinite(ppd) && ppd > 0) {
+			if (track !== 'video' && Number.isFinite(wsd) && wsd > 0) transcodeWsd = wsd;
+			if (track !== 'video' && Number.isFinite(ppd) && ppd > 0) {
 				transcodePpd = ppd;
-				const ppdSec = ppd >= 1e6 ? (ppd / 1e7) : ppd;
+				const ppdSec = transcodeDurationSec(ppd, (Number.isFinite(wsd) && wsd > 0) ? wsd : transcodeWsd);
 				if (Number.isFinite(ppdSec) && (ppdSec > maxRecapAudioDurationSec || Math.ceil(ppdSec * 44100) * 2 > maxRecapAudioPCMBytes)) {
 					fatalErr = new Error(limitError);
 					if (abortCtrl) abortCtrl.abort();
 					signalWake();
 				}
 			}
-			if (!transcodeAudioTemplateUrl || track === 'audio') {
+			if (track !== 'video' && (!transcodeAudioTemplateUrl || track === 'audio')) {
 				const tmpl = new URL(u.toString());
 				tmpl.searchParams.set('track', 'audio');
 				tmpl.searchParams.set('quality', 'audcopy');
@@ -1187,7 +1219,7 @@ const extractRecapAudioJS = `(async () => {
 			if (enforceIdentity && !baseIdentityMatched && !tState.matched) {
 				throw new Error('recap audio recording identity unverified');
 			}
-			const ppdSec = transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+			const ppdSec = transcodeDurationSec(transcodePpd, transcodeWsd);
 			if (!Number.isFinite(ppdSec) || ppdSec <= 0 || ppdSec > maxRecapAudioDurationSec || Math.ceil(ppdSec * 44100) * 2 > maxRecapAudioPCMBytes) {
 				throw new Error(limitError);
 			}
@@ -1558,9 +1590,65 @@ const extractRecapAudioJS = `(async () => {
 			}
 		}
 
+		async function seedEncKeyFromFileInfo() {
+			const fi = (playerWin && playerWin.g_fileInfo) || info;
+			if (audioCryptoKeyInfo || !fi || !fi.EncKey) return;
+			const subtle = origPlayerSubtle || (playerWin && playerWin.crypto && playerWin.crypto.subtle) || (typeof crypto !== 'undefined' && crypto.subtle) || null;
+			if (!subtle || typeof subtle.importKey !== 'function') return;
+			if (!origPlayerSubtle) origPlayerSubtle = subtle;
+			if (!origPlayerDecrypt && typeof subtle.decrypt === 'function') origPlayerDecrypt = subtle.decrypt;
+			try {
+				let parsed = fi.EncKey;
+				if (typeof parsed === 'string') {
+					if (!parsed.trim()) return;
+					parsed = JSON.parse(parsed);
+				}
+				if (!parsed || typeof parsed !== 'object' || typeof parsed.Key !== 'string' || typeof parsed.IV !== 'string') return;
+				const decodeB64 = (s) => {
+					if (typeof atob === 'function') {
+						const bin = atob(s);
+						const out = new Uint8Array(bin.length);
+						for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+						return out;
+					}
+					return new Uint8Array(Buffer.from(s, 'base64'));
+				};
+				const keyBytes = decodeB64(parsed.Key);
+				const ivBytes = decodeB64(parsed.IV);
+				if ((keyBytes.byteLength !== 16 && keyBytes.byteLength !== 24 && keyBytes.byteLength !== 32) || ivBytes.byteLength !== 16) return;
+				const importedKey = await origPlayerSubtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
+				if (!audioCryptoKeyInfo) {
+					audioCryptoKeyInfo = { algorithm: 'AES-CBC', key: importedKey, iv: ivBytes, prefixIV: false };
+					signalWake();
+				}
+			} catch (_) {}
+		}
+
+		function scanPerformanceTranscodeEntries(w) {
+			if (!w || !w.performance || typeof w.performance.getEntriesByType !== 'function') return;
+			let entries = [];
+			try { entries = w.performance.getEntriesByType('resource') || []; } catch (_) { entries = []; }
+			for (const entry of entries) {
+				const rawName = String((entry && entry.name) || '');
+				if (!rawName) continue;
+				const lower = rawName.toLowerCase();
+				if (lower.includes('onedrive.transcode') || lower.includes('part=initsegment') || lower.includes('part=mediasegment')) {
+					try { checkIdentityAgainst(rawName, pageUrl, { matched: false }); } catch (_) { continue; }
+					if (itemId) {
+						const itemMatch = rawName.match(/\/items\/([^/?#]+)\//i);
+						if (itemMatch && itemMatch[1].toLowerCase() !== itemId.toLowerCase()) continue;
+					}
+					inspectTranscodeRequest(rawName, null, w);
+				}
+			}
+		}
+
 		try {
 			installWindowHooks(playerWin);
 			if (playerWin !== window) installWindowHooks(window);
+			await seedEncKeyFromFileInfo();
+			scanPerformanceTranscodeEntries(playerWin);
+			if (playerWin !== window) scanPerformanceTranscodeEntries(window);
 
 			let playTriggered = false;
 			function triggerPlaybackIfReady() {
@@ -1593,6 +1681,11 @@ const extractRecapAudioJS = `(async () => {
 			while (Date.now() < deadlineAt) {
 				if (!playTriggered) triggerPlaybackIfReady();
 				if (fatalErr) throw fatalErr;
+				if (!audioCryptoKeyInfo) await seedEncKeyFromFileInfo();
+				if (!transcodeAudioTemplateUrl || !(transcodeWsd > 0) || !(transcodePpd > 0)) {
+					scanPerformanceTranscodeEntries(playerWin);
+					if (playerWin !== window) scanPerformanceTranscodeEntries(window);
+				}
 				maybeStartPathA();
 				if (pathAPromise) {
 					const settled = await Promise.race([
@@ -1622,7 +1715,7 @@ const extractRecapAudioJS = `(async () => {
 							const d = Number(raw);
 							if (Number.isFinite(d) && d > 0) return d;
 						}
-						if (transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+						if (transcodePpd > 0) return transcodeDurationSec(transcodePpd, transcodeWsd);
 						return 0;
 					})();
 					if (mseInitSegment && mseSegments.size > 0) {
@@ -1686,7 +1779,7 @@ const extractRecapAudioJS = `(async () => {
 						const d = Number(raw);
 						if (Number.isFinite(d) && d > 0) return d;
 					}
-					if (Number.isFinite(transcodePpd) && transcodePpd > 0) return transcodePpd >= 1e6 ? (transcodePpd / 1e7) : transcodePpd;
+					if (Number.isFinite(transcodePpd) && transcodePpd > 0) return transcodeDurationSec(transcodePpd, transcodeWsd);
 					return 0;
 				})();
 				if (finalTargetDur <= 0 && (!(curMedia && curMedia.ended) || !(mseMaxBufferedEnd > 0))) {
@@ -1892,7 +1985,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				continue
 			}
 			lowerURL := strings.ToLower(t.URL)
-			if strings.Contains(lowerURL, "streamembed.aspx") {
+			if strings.Contains(lowerURL, "streamembed.aspx") || strings.Contains(lowerURL, "stream.aspx") {
 				hasStreamEmbedTarget = true
 			}
 			if strings.Contains(lowerURL, "xplatplugins.aspx") {
@@ -1902,7 +1995,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		recapTargetRank := func(t cdpTargetInfo) int {
 			lowerURL := strings.ToLower(t.URL)
 			if t.Type == "iframe" {
-				if strings.Contains(lowerURL, "streamembed.aspx") {
+				if strings.Contains(lowerURL, "streamembed.aspx") || strings.Contains(lowerURL, "stream.aspx") {
 					return 0
 				}
 				if strings.Contains(lowerURL, "xplatplugins.aspx") {
@@ -2202,12 +2295,20 @@ func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
 	if v := strings.TrimSpace(vals.Get("iCalUid")); v != "" && id.ICalUID == "" {
 		id.ICalUID = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(vals.Get("fileUrl")); v != "" && id.RecordingName == "" {
-		if fu, err := url.Parse(v); err == nil && fu.Path != "" && !strings.Contains(fu.Path, "/:") {
-			base := filepath.Base(filepath.FromSlash(fu.Path))
-			ext := strings.ToLower(filepath.Ext(base))
-			if base != "." && base != "/" && (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" || ext == ".m4a") {
-				id.RecordingName = strings.ToLower(base)
+	for _, key := range []string{"fileUrl", "id"} {
+		if v := strings.TrimSpace(vals.Get(key)); v != "" && id.RecordingName == "" {
+			var p string
+			if key == "id" && !strings.Contains(v, "://") {
+				p = v
+			} else if fu, err := url.Parse(v); err == nil {
+				p = fu.Path
+			}
+			if p != "" && !strings.Contains(p, "/:") {
+				base := path.Base(p)
+				ext := strings.ToLower(path.Ext(base))
+				if base != "." && base != "/" && (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" || ext == ".m4a") {
+					id.RecordingName = strings.ToLower(base)
+				}
 			}
 		}
 	}
@@ -2345,6 +2446,52 @@ const copyAISummaryJS = `(async () => {
 	}
 	const copyBtn = document.querySelector('button[aria-label="Copy all"]');
 	if (!copyBtn) {
+		const isTeamsRecapSurface = Boolean(notesTab || aiNotesTab || document.querySelector('[data-tid="intelligent-recap-header"]'));
+		const locRef = String((typeof location !== 'undefined' && (location.pathname || location.href)) || '').toLowerCase();
+		const hostRef = String((typeof location !== 'undefined' && (location.hostname || location.href)) || '').toLowerCase();
+		const isSharePointStreamSurface = Boolean(
+			locRef.includes('stream.aspx') ||
+			hostRef.includes('sharepoint.com') ||
+			(window.g_fileInfo && (window.g_fileInfo.isDownloadBlocked !== undefined || window.g_fileInfo.name || window.g_fileInfo.EncKey))
+		);
+		if (!isTeamsRecapSurface && isSharePointStreamSurface) {
+			const closeCopilotBtn = document.querySelector('button[aria-label="Close Copilot"]');
+			if (!closeCopilotBtn) {
+				const copilotBtn = document.querySelector('[role="menuitem"][aria-label="Copilot"], button[aria-label="Copilot"]');
+				if (copilotBtn && typeof copilotBtn.click === 'function' && !copilotBtn.dataset.goTeamsCopilotClicked) {
+					copilotBtn.dataset.goTeamsCopilotClicked = 'true';
+					copilotBtn.click();
+					await new Promise(r => setTimeout(r, 300));
+				}
+			}
+			const rootEl = document.documentElement;
+			const recapTriggered = Boolean(rootEl && rootEl.dataset && rootEl.dataset.goTeamsStreamRecapTriggered === 'true');
+			if (!recapTriggered) {
+				const candidates = Array.from(document.querySelectorAll('button, [role="button"], [class*="PromptStarter"], [class*="zeroPrompt"]') || []);
+				const recapBtn = candidates.find(el => String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting');
+				if (recapBtn && typeof recapBtn.click === 'function' && !(recapBtn.dataset && recapBtn.dataset.goTeamsRecapClicked === 'true')) {
+					if (recapBtn.dataset) recapBtn.dataset.goTeamsRecapClicked = 'true';
+					if (rootEl && rootEl.dataset) rootEl.dataset.goTeamsStreamRecapTriggered = 'true';
+					for (const existingMsg of Array.from(document.querySelectorAll('.fai-CopilotMessage') || [])) {
+						if (existingMsg && existingMsg.dataset) existingMsg.dataset.goTeamsPreexisting = 'true';
+					}
+					recapBtn.click();
+				}
+				return '';
+			}
+			const spCopyBtns = Array.from(document.querySelectorAll('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]') || []);
+			const freshCopyBtns = spCopyBtns.filter(btn => {
+				const msg = btn && btn.closest ? btn.closest('.fai-CopilotMessage') : null;
+				return !(msg && msg.dataset && msg.dataset.goTeamsPreexisting === 'true');
+			});
+			const spCopyBtn = freshCopyBtns.length ? freshCopyBtns[freshCopyBtns.length - 1] : null;
+			if (spCopyBtn) {
+				const msgEl = spCopyBtn.closest ? spCopyBtn.closest('.fai-CopilotMessage') : null;
+				const contentEl = msgEl && msgEl.querySelector ? msgEl.querySelector('.fai-CopilotMessage__content') : null;
+				const txt = String((contentEl ? (contentEl.innerText || contentEl.textContent) : (msgEl ? (msgEl.innerText || msgEl.textContent) : '')) || '').trim();
+				if (txt) return txt;
+			}
+		}
 		return '';
 	}
 	let copiedText = '';
@@ -2570,7 +2717,7 @@ func createCDPPageTarget(ctx context.Context, browserWSURL, initialURL string) (
 }
 
 func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID string) string {
-	for attempt := 0; attempt < 20; attempt++ {
+	for attempt := 0; attempt < 60; attempt++ {
 		if ctx.Err() != nil {
 			return ""
 		}
@@ -2596,7 +2743,7 @@ func captureAISummaryFromTargets(ctx context.Context, port int, ownerPageID stri
 				}
 			}
 		}
-		if attempt == 19 {
+		if attempt == 59 {
 			break
 		}
 		timer := time.NewTimer(500 * time.Millisecond)
@@ -2942,6 +3089,11 @@ const extractRecapTranscriptJS = `(() => {
 	}
 	const cells = Array.from(document.querySelectorAll('.ms-List-cell, [data-transcript-entry-id]'));
 	if (cells.length === 0) {
+		const txBtn = document.querySelector('[role="menuitem"][aria-label="Transcript"], button[aria-label="Transcript"], [role="tab"][aria-label="Transcript"]');
+		if (txBtn && typeof txBtn.click === 'function' && !txBtn.dataset.goTeamsTranscriptClicked) {
+			txBtn.dataset.goTeamsTranscriptClicked = 'true';
+			txBtn.click();
+		}
 		return JSON.stringify({ title: fileTitle, fileName: fileName, itemId: itemId, driveItemId: driveItemId, pageUrl: pageUrl, startTime: fileStart, timezone: tz, entries: [] });
 	}
 	const entries = [];

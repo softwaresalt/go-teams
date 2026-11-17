@@ -2250,9 +2250,9 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
   const playBtn = {
     click: () => {
       (async () => {
-        // Video-only transcode request supplies wsd/ppd, and WebCrypto decrypts a pre-fetched/cached init buffer.
+        // Same-origin audio transcode request supplies wsd/ppd, and WebCrypto decrypts a pre-fetched/cached init buffer.
         // If unvalidated info.transcodeUrl was preserved, Path A will fetch evil.example/http://!
-        await globalThis.fetch(sameOriginBase + '?part=mediasegment&track=video&wsd=50000000&ppd=50000000&driveItemId=recording-a');
+        await globalThis.fetch(sameOriginBase + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=50000000&driveItemId=recording-a');
         await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, encInit.slice().buffer);
       })().catch(() => {});
     }
@@ -4070,5 +4070,469 @@ process.stdout.write(eval(fs.readFileSync(0, 'utf8')));
 		assert.Equal(t, "01VALIDDRIVEITEMID", vroomParsed["driveItemId"])
 		mVroom := extractFromTarget(t, vroomJSON)
 		assert.Equal(t, "01VALIDDRIVEITEMID", mVroom.recapItemID, "VroomItemId must populate m.recapItemID")
+	})
+}
+
+func TestSharePointStreamAspxAudioTranscriptAISummaryAndIdentity(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required to execute JS probe tests")
+	}
+
+	const mp4HelpersJS = `
+function u32(v) {
+  return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+}
+function u64(v) {
+  const hi = Math.floor(v / 0x100000000);
+  const lo = v >>> 0;
+  return [...u32(hi), ...u32(lo)];
+}
+function str4(s) {
+  return [s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)];
+}
+function box(type, ...parts) {
+  const len = 8 + parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(len);
+  out.set(u32(len), 0);
+  out.set(str4(type), 4);
+  let off = 8;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+function buildAudioInitSegment() {
+  const ftyp = box('ftyp', new Uint8Array([...str4('iso5'), ...u32(1), ...str4('mp41')]));
+  const hdlr = box('hdlr', new Uint8Array([0,0,0,0, 0,0,0,0, ...str4('soun'), ...new Array(12).fill(0), 0]));
+  const mp4a = box('mp4a', new Uint8Array([...new Array(6).fill(0), 0,1, ...new Array(8).fill(0), 0,1, 0,16, 0,0, 0,0, 0xac,0x44,0,0]));
+  const stsd = box('stsd', new Uint8Array([0,0,0,0, ...u32(1)]), mp4a);
+  const stbl = box('stbl', stsd);
+  const minf = box('minf', stbl);
+  const mdia = box('mdia', hdlr, minf);
+  const trak = box('trak', mdia);
+  const moov = box('moov', trak);
+  const out = new Uint8Array(ftyp.length + moov.length);
+  out.set(ftyp, 0);
+  out.set(moov, ftyp.length);
+  return out;
+}
+function buildMediaSegment(tfdtTime, tagByte) {
+  const styp = box('styp', new Uint8Array([...str4('msdh'), ...u32(0), ...str4('msdh')]));
+  const mfhd = box('mfhd', new Uint8Array([0,0,0,0, ...u32(1)]));
+  const tfhd = box('tfhd', new Uint8Array([0,2,0,0, ...u32(1)]));
+  const tfdt = box('tfdt', new Uint8Array([1,0,0,0, ...u64(tfdtTime)]));
+  const traf = box('traf', tfhd, tfdt);
+  const moof = box('moof', mfhd, traf);
+  const mdat = box('mdat', new Uint8Array([0xde, 0xad, 0xbe, 0xef, tagByte, tagByte, tagByte, tagByte]));
+  const out = new Uint8Array(styp.length + moof.length + mdat.length);
+  out.set(styp, 0);
+  out.set(moof, styp.length);
+  out.set(mdat, styp.length + moof.length);
+  return out;
+}
+`
+
+	t.Run("performance-resource-timing-and-enckey-seeding-with-video-wsd-isolation", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		probeJS := mp4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { RecordingName: 'recap.mp4' };
+(async () => {
+  const subtle = webcrypto.subtle;
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 256 }, true, ['encrypt', 'decrypt']);
+  const rawKeyBytes = new Uint8Array(await subtle.exportKey('raw', key));
+  const iv = new Uint8Array(16).fill(7);
+  const keyB64 = Buffer.from(rawKeyBytes).toString('base64');
+  const ivB64 = Buffer.from(iv).toString('base64');
+
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildAudioInitSegment()));
+  const encSeg0 = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(0, 0x11)));
+  const encSeg1 = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(96256, 0x22)));
+
+  const base = 'https://contoso.sharepoint.com/_api/v2.1/drives/d1/items/s1/oneDrive.transcode';
+  const fetchedAudioTimes = [];
+  const fetchedWsds = [];
+  let fetchedVideoCount = 0;
+
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    const track = u.searchParams.get('track');
+    const wsd = u.searchParams.get('wsd');
+    const part = u.searchParams.get('part');
+    if (track === 'video') {
+      fetchedVideoCount++;
+      throw new Error('Path A must not fetch track=video');
+    }
+    fetchedWsds.push(wsd);
+    if (wsd !== '96256') {
+      throw new Error('expected audio wsd=96256, got ' + wsd);
+    }
+    let bytes = encInit;
+    if (part === 'mediasegment') {
+      const segTime = u.searchParams.get('segmentTime');
+      fetchedAudioTimes.push(segTime);
+      bytes = segTime === '96256' ? encSeg1 : encSeg0;
+    }
+    let sent = false;
+    return {
+      ok: true,
+      status: 200,
+      url: String(url),
+      headers: { get: () => null },
+      body: { getReader: () => ({ read: async () => sent ? { done: true } : (sent = true, { done: false, value: bytes }), cancel: async () => {} }) },
+      arrayBuffer: async () => bytes.slice().buffer
+    };
+  };
+
+  globalThis.crypto = { subtle };
+  globalThis.location = {
+    href: 'https://contoso.sharepoint.com/personal/user_contoso_com/_layouts/15/stream.aspx?id=%2Fpersonal%2Fuser_contoso_com%2FDocuments%2FRecordings%2FRecap.mp4',
+    origin: 'https://contoso.sharepoint.com'
+  };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = {
+    isDownloadBlocked: true,
+    itemId: 's1',
+    name: 'Recap.mp4',
+    transcodeUrl: base + '?track=audio&quality=audcopy',
+    EncKey: JSON.stringify({ Key: keyB64, IV: ivB64 })
+  };
+  let perfPolls = 0;
+  globalThis.performance = {
+    getEntriesByType: (type) => {
+      if (type !== 'resource') return [];
+      perfPolls++;
+      const entries = [
+        { name: 'https://contoso.sharepoint.com/_api/v2.1/drives/d1/items/stale-other/oneDrive.transcode?part=initsegment&track=audio&quality=audcopy&wsd=50000&ppd=100000' },
+        { name: base + '?part=initsegment&track=video&quality=vcopy&wsd=96000&ppd=120320000' }
+      ];
+      if (perfPolls >= 2) {
+        entries.push(
+          { name: base + '?part=initsegment&track=audio&quality=audcopy&wsd=96256&ppd=192512' },
+          { name: base + '?part=mediasegment&track=video&quality=vcopy&segmentTime=0&wsd=96000&ppd=120320000' },
+          { name: base + '?part=mediasegment&track=video&quality=vcopy&segmentTime=96000&wsd=96000&ppd=120320000' }
+        );
+      }
+      return entries;
+    }
+  };
+  globalThis.AudioContext = class {
+    async decodeAudioData() {
+      return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) };
+    }
+    async close() {}
+  };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(raw);
+  if (!parsed.pcmChunks || parsed.pcmChunks.length === 0) {
+    throw new Error('expected non-empty pcmChunks');
+  }
+  if (fetchedVideoCount !== 0) {
+    throw new Error('unexpected video fetch count: ' + fetchedVideoCount);
+  }
+  if (JSON.stringify(fetchedAudioTimes.sort()) !== JSON.stringify(['0', '96256'])) {
+    throw new Error('unexpected audio segmentTimes: ' + JSON.stringify(fetchedAudioTimes));
+  }
+  if (fetchedWsds.some(w => w !== '96256')) {
+    throw new Error('unexpected wsd in audio fetches: ' + JSON.stringify(fetchedWsds));
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("SharePoint stream.aspx PerformanceResourceTiming/EncKey probe failed: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("transcript-tab-activation-and-copilot-ai-summary", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		transcriptProbeJS := `
+const fs = require('fs');
+const txJS = fs.readFileSync(0, 'utf8');
+globalThis.window = globalThis;
+globalThis.location = { href: 'https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FSync.mp4' };
+globalThis.g_fileInfo = { title: 'Stream Sync', name: 'Sync.mp4' };
+
+let listMounted = false;
+let txClickCount = 0;
+const txBtn = {
+  dataset: {},
+  click: () => {
+    txClickCount++;
+    listMounted = true;
+  }
+};
+const listEl = {
+  __reactFiber$test: {
+    memoizedProps: {
+      items: [
+        { speakerDisplayName: 'Alice', timestamp: 'PT0M5S', text: 'Activated transcript.', type: 'Text' }
+      ]
+    }
+  }
+};
+globalThis.document = {
+  querySelector: (sel) => {
+    if (sel === '.ms-List') return listMounted ? listEl : null;
+    if (sel.includes('aria-label="Transcript"')) return txBtn;
+    return null;
+  },
+  querySelectorAll: () => []
+};
+
+const first = JSON.parse(eval(txJS));
+if (!Array.isArray(first.entries) || first.entries.length !== 0) {
+  throw new Error('expected empty entries on first poll before Transcript tab mounts');
+}
+if (txClickCount !== 1 || txBtn.dataset.goTeamsTranscriptClicked !== 'true') {
+  throw new Error('expected Transcript button clicked once with dataset marker');
+}
+const second = JSON.parse(eval(txJS));
+if (!Array.isArray(second.entries) || second.entries.length !== 1 || second.entries[0].text !== 'Activated transcript.') {
+  throw new Error('expected mounted transcript entries on second poll, got: ' + JSON.stringify(second));
+}
+if (txClickCount !== 1) {
+  throw new Error('expected Transcript button not to be clicked twice');
+}
+`
+		cmd := exec.CommandContext(ctx, "node", "-e", transcriptProbeJS)
+		cmd.Stdin = strings.NewReader(extractRecapTranscriptJS)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("SharePoint stream.aspx transcript tab activation probe failed: %v\n%s", err, out)
+		}
+
+		copilotProbeJS := `
+const fs = require('fs');
+const copyJS = fs.readFileSync(0, 'utf8');
+(async () => {
+  globalThis.window = globalThis;
+  globalThis.location = { href: 'https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FSync.mp4' };
+  let copilotOpen = false;
+  let copilotClicks = 0;
+  let recapClicks = 0;
+  let summaryReady = false;
+
+  const copilotBtn = {
+    dataset: {},
+    click: () => {
+      copilotClicks++;
+      copilotOpen = true;
+    }
+  };
+  const closeCopilotBtn = { dataset: {} };
+  const recapBtn = {
+    dataset: {},
+    innerText: 'Recap the meeting',
+    click: () => {
+      recapClicks++;
+      summaryReady = true;
+    }
+  };
+  const preExistingMsg = {
+    dataset: {},
+    querySelector: (sel) => sel === '.fai-CopilotMessage__content' ? { innerText: 'Stale earlier Copilot reply.' } : null
+  };
+  const preExistingCopyBtn = {
+    closest: (sel) => sel === '.fai-CopilotMessage' ? preExistingMsg : null
+  };
+  const sentPromptBubble = {
+    dataset: {},
+    innerText: 'Recap the meeting',
+    click: () => { throw new Error('must not re-click sent user prompt bubble'); }
+  };
+  const msgEl = {
+    dataset: {},
+    querySelector: (sel) => sel === '.fai-CopilotMessage__content' ? { innerText: 'Generated Copilot meeting summary.' } : null
+  };
+  const spCopyBtn = {
+    closest: (sel) => sel === '.fai-CopilotMessage' ? msgEl : null
+  };
+
+  let promptMounted = false;
+  copilotOpen = true;
+  globalThis.document = {
+    documentElement: { dataset: {} },
+    querySelector: (sel) => {
+      if (sel === 'button[aria-label="Close Copilot"]') return copilotOpen ? closeCopilotBtn : null;
+      if (sel.includes('aria-label="Copilot"')) return copilotBtn;
+      if (sel.includes('.fai-CopilotMessage__actions')) return summaryReady ? spCopyBtn : preExistingCopyBtn;
+      return null;
+    },
+    querySelectorAll: (sel) => {
+      if (sel === '.fai-CopilotMessage') return summaryReady ? [preExistingMsg, msgEl] : [preExistingMsg];
+      if (sel.includes('PromptStarter')) return (copilotOpen && promptMounted) ? (summaryReady ? [sentPromptBubble] : [recapBtn]) : [];
+      if (sel.includes('.fai-CopilotMessage__actions')) return summaryReady ? [preExistingCopyBtn, spCopyBtn] : [preExistingCopyBtn];
+      return [];
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {}
+  };
+  globalThis.navigator = {};
+
+  const preClickNoPromptPoll = await eval(copyJS);
+  if (preClickNoPromptPoll !== '') {
+    throw new Error('expected empty summary before recap prompt mounts/clicks even with preexisting message, got: ' + JSON.stringify(preClickNoPromptPoll));
+  }
+
+  copilotOpen = false;
+  promptMounted = true;
+  copilotClicks = 0;
+
+  const poll1 = await eval(copyJS);
+  if (poll1 !== '') {
+    throw new Error('expected empty summary on initial Copilot trigger poll, got: ' + JSON.stringify(poll1));
+  }
+  if (copilotClicks !== 1 || copilotBtn.dataset.goTeamsCopilotClicked !== 'true') {
+    throw new Error('expected Copilot button clicked once, got ' + copilotClicks);
+  }
+  if (recapClicks !== 1 || recapBtn.dataset.goTeamsRecapClicked !== 'true') {
+    throw new Error('expected Recap the meeting button clicked once, got ' + recapClicks);
+  }
+
+  // While summaryReady is false, a poll must not return the stale pre-existing Copilot message.
+  summaryReady = false;
+  const pendingPoll = await eval(copyJS);
+  if (pendingPoll !== '') {
+    throw new Error('expected empty summary while new recap is still generating, got: ' + JSON.stringify(pendingPoll));
+  }
+
+  summaryReady = true;
+  const poll2 = await eval(copyJS);
+  if (poll2 !== 'Generated Copilot meeting summary.') {
+    throw new Error('expected extracted Copilot summary on poll 2, got: ' + JSON.stringify(poll2));
+  }
+  if (copilotClicks !== 1 || recapClicks !== 1) {
+    throw new Error('expected Copilot/Recap buttons not to be clicked repeatedly');
+  }
+
+  // Ensure Teams Recap surfaces do not click SharePoint Copilot controls while Copy all is still loading.
+  let teamsGuardViolated = false;
+  const teamsNotesTab = { getAttribute: () => 'true', click: () => {} };
+  const guardCopilotBtn = { dataset: {}, click: () => { teamsGuardViolated = true; } };
+  const guardRecapBtn = { dataset: {}, innerText: 'Recap the meeting', click: () => { teamsGuardViolated = true; } };
+  globalThis.document = {
+    querySelector: (sel) => {
+      if (sel === 'button[role="tab"][data-tid="Notes"]') return teamsNotesTab;
+      if (sel === '[data-tid="intelligent-recap-header"]') return {};
+      if (sel.includes('aria-label="Copilot"')) return guardCopilotBtn;
+      return null;
+    },
+    querySelectorAll: (sel) => {
+      if (sel.includes('.fai-CopilotMessage__actions')) return [];
+      return [guardRecapBtn];
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {}
+  };
+  const teamsPoll = await eval(copyJS);
+  if (teamsPoll !== '' || teamsGuardViolated) {
+    throw new Error('Teams Recap surface must not click SharePoint Copilot controls');
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmd2 := exec.CommandContext(ctx, "node", "-e", copilotProbeJS)
+		cmd2.Stdin = strings.NewReader(copyAISummaryJS)
+		if out, err := cmd2.CombinedOutput(); err != nil {
+			t.Fatalf("SharePoint stream.aspx Copilot AI summary probe failed: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("stream-aspx-id-query-recording-name-and-target-url-matching", func(t *testing.T) {
+		streamURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FRecap-20261116.mp4&referrer=StreamWebApp.Web"
+		id := ExtractMeetingIdentity(streamURL)
+		assert.Equal(t, "recap-20261116.mp4", id.RecordingName)
+
+		nonMediaID := ExtractMeetingIdentity("https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=222")
+		assert.Empty(t, nonMediaID.RecordingName, "numeric id query parameter must not be treated as a recording filename")
+
+		sharingID := ExtractMeetingIdentity("https://contoso.sharepoint.com/:v:/p/u/EXabc?id=%2F%3Av%3A%2Fp%2Fu%2FEXabc.mp4")
+		assert.Empty(t, sharingID.RecordingName, "sharing /: path in id query parameter must be ignored")
+
+		assert.True(t, hasSpecificMeetingOrRecapTarget(streamURL))
+		assert.True(t, isOnTargetMeetingOrRecapURL(streamURL, streamURL+"&ga=1", "/personal/u/_layouts/15/stream.aspx", ""))
+		assert.False(t, isOnTargetMeetingOrRecapURL(streamURL, "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=222", "/personal/u/_layouts/15/stream.aspx", ""), "stream.aspx page lacking recording identity must not match a recording-scoped streamURL")
+		otherStreamURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FOther-20261116.mp4"
+		assert.False(t, isOnTargetMeetingOrRecapURL(streamURL, otherStreamURL, "/personal/u/_layouts/15/stream.aspx", ""), "conflicting RecordingName must be rejected")
+
+		// Verify opaque-id stream URL matching requires canonical URL/id match and preserves driveId-only exact match.
+		opaqueURL1 := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=111"
+		opaqueURL2 := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=222"
+		assert.False(t, isOnTargetMeetingOrRecapURL(opaqueURL1, opaqueURL2, "/personal/u/_layouts/15/stream.aspx", ""), "distinct opaque ?id= stream URLs must not match")
+		assert.True(t, isOnTargetMeetingOrRecapURL(opaqueURL1, opaqueURL1+"&ga=1", "/personal/u/_layouts/15/stream.aspx", ""), "same opaque ?id= stream URL with extra params must match")
+		driveOnlyURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?driveId=b%21123&id=111"
+		assert.True(t, isOnTargetMeetingOrRecapURL(driveOnlyURL, driveOnlyURL, "/personal/u/_layouts/15/stream.aspx", ""), "exact requested URL with driveId-only identity must match")
+		assert.False(t, isOnTargetMeetingOrRecapURL("https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?uniqueId=abc-1", "https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?uniqueId=abc-2", "/personal/u/_layouts/15/streamembed.aspx", ""), "lowercase uniqueId mismatch must be rejected")
+		assert.True(t, isOnTargetMeetingOrRecapURL("https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?uniqueId=abc-1", "https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?UniqueId=abc-1", "/personal/u/_layouts/15/streamembed.aspx", ""), "case-variant uniqueId match must be accepted")
+		assert.False(t, isOnTargetMeetingOrRecapURL("https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?ID=111", "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=222", "/personal/u/_layouts/15/stream.aspx", ""), "uppercase ID mismatch must be rejected")
+
+		// Verify % and # characters in query-encoded server-relative ?id= paths are preserved without double decoding,
+		// and relative fileUrl values like /Recordings/Sync.mp4?web=1 still extract RecordingName.
+		pctURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2F100%25%20Sync.mp4"
+		assert.Equal(t, "100% sync.mp4", ExtractMeetingIdentity(pctURL).RecordingName)
+		hashURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FQ4%20%231.mp4"
+		assert.Equal(t, "q4 #1.mp4", ExtractMeetingIdentity(hashURL).RecordingName)
+		relFileURL := "https://teams.microsoft.com/l/meetingrecap?fileUrl=%2FRecordings%2FSync.mp4%3Fweb%3D1"
+		assert.Equal(t, "sync.mp4", ExtractMeetingIdentity(relFileURL).RecordingName)
+
+		// F-2 & %/# preservation in JS checkIdentityAgainst + no-activity fast-fail when only EncKey is present.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		mismatchJS := `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const audioJS = fs.readFileSync(0, 'utf8');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { RecordingName: '100% sync.mp4' };
+(async () => {
+  globalThis.location = { href: 'https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FOther-20261116.mp4', origin: 'https://contoso.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { isDownloadBlocked: true };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  let failure;
+  try { await eval(audioJS); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('recap audio recording identity mismatch')) {
+    throw new Error('expected ?id= identity mismatch error, got: ' + String(failure));
+  }
+
+  // Matching 100% Sync.mp4 with EncKey only and no transcode/MSE activity must exit via 10s initialActivityTimeoutMs (fast fake clock), not wait 120s.
+  const subtle = webcrypto.subtle;
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, true, ['decrypt']);
+  const rawKeyBytes = new Uint8Array(await subtle.exportKey('raw', key));
+  const iv = new Uint8Array(16).fill(3);
+  let fakeNow = 1000;
+  Date.now = () => fakeNow;
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => origSetTimeout(() => { fakeNow += 4000; fn(...args); }, Math.min(ms || 0, 5));
+  globalThis.crypto = { subtle };
+  globalThis.location = { href: 'https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2F100%25%20Sync.mp4', origin: 'https://contoso.sharepoint.com' };
+  globalThis.g_fileInfo = {
+    isDownloadBlocked: true,
+    EncKey: JSON.stringify({ Key: Buffer.from(rawKeyBytes).toString('base64'), IV: Buffer.from(iv).toString('base64') })
+  };
+  let encOnlyErr;
+  try { await eval(audioJS); } catch (e) { encOnlyErr = e; }
+  if (!encOnlyErr || !String(encOnlyErr.message || encOnlyErr).includes('isDownloadBlocked=true')) {
+    throw new Error('expected fast-fail isDownloadBlocked error when only EncKey is present, got: ' + String(encOnlyErr));
+  }
+  if (fakeNow >= 120000) {
+    throw new Error('expected 10s initialActivityTimeoutMs fast-fail rather than 120s deadline wait, fakeNow=' + fakeNow);
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmdMismatch := exec.CommandContext(ctx, "node", "-e", mismatchJS)
+		cmdMismatch.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := cmdMismatch.CombinedOutput(); err != nil {
+			t.Fatalf("SharePoint ?id= identity mismatch / EncKey fast-fail probe failed: %v\n%s", err, out)
+		}
 	})
 }

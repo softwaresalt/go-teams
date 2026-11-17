@@ -151,28 +151,36 @@ password entry, MFA, or lobby admission themselves.
 
 ### Finite Meeting Recap export
 
-For a Meeting Recap URL the browser opens the recap page and exports a finite
+For a Teams Meeting Recap or direct SharePoint/OneDrive `stream.aspx`
+recording URL, the browser opens the recap page and exports a finite
 transcript instead of listening live:
 
 1. Transcript entries come from the `.ms-List` virtual list through React fiber
    or DOM extraction, restricted to the tab and frame that belong to the
-   requested recap.
-2. The AI Summary is read by intercepting the clipboard write of the Copy
-   control, retried up to 20 times with 500 ms between attempts. Transcript
-   export still succeeds when no summary appears.
+   requested recap. On direct SharePoint `stream.aspx` pages where the sidebar
+   defaults to Copilot, `extractRecapTranscriptJS` activates the `Transcript`
+   tab once when `.ms-List` is not yet mounted, and recording identity checks
+   also extract `RecordingName` from `stream.aspx?id=...` media paths
+   (`.mp4`/`.mkv`/`.webm`/`.mov`/`.m4a`).
+2. The AI Summary is read either by intercepting the clipboard write of the
+   Teams Recap `Copy all` control or, on SharePoint `stream.aspx`, by opening
+   the Copilot pane, triggering `"Recap the meeting"`, and reading
+   `.fai-CopilotMessage__content`, retried up to 60 times with 500 ms (`30s`)
+   between attempts. Transcript export still succeeds when no summary appears.
 3. With audio enabled, the recording is decoded through Web Audio over CDP (using
    chunked CDP pull transfers for multi-megabyte PCM buffers) and encoded to MP3
-   by `internal/audio.Encoder`, after verifying recording identity (`VroomItemID`
-   or `VroomItemId`) against the requested recap and enforcing size and duration
-   limits. When direct download URLs are blocked by view-only permissions
-   (`g_fileInfo.isDownloadBlocked=true` in `streamembed.aspx`, across
-   same-origin child `<iframe>` or transitive `ParentID` OOPIF topologies),
-   `extractRecapAudioJS` triggers muted `'Play video'` playback, strips
-   `video/mp4`, and collects only the `audio/mp4` (`mp4a.40.2`) fMP4 stream at
-   `14x-100x` real-time speed via WebCrypto AES-CBC (`window.crypto.subtle.decrypt`)
-   parallel `oneDrive.transcode` fetch/decrypt (`part=initsegment` +
-   `part=mediasegment`, `track=audio&quality=audcopy`, `segmentTime = k * wsd`
-   up to `ppd`) and MSE `MediaSource.prototype.addSourceBuffer` /
+   by `internal/audio.Encoder`, after verifying recording identity (`VroomItemID`,
+   `VroomItemId`, or `RecordingName`) against the requested recap and enforcing
+   size and duration limits. When direct download URLs are blocked by view-only
+   permissions (`g_fileInfo.isDownloadBlocked=true` in `streamembed.aspx` or
+   `stream.aspx`, across same-origin child `<iframe>` or transitive `ParentID`
+   OOPIF topologies), `extractRecapAudioJS` triggers muted playback, isolates
+   `track=audio` (`wsd`) from `track=video`, and collects only the `audio/mp4`
+   (`mp4a.40.2`) fMP4 stream at `14x-100x` real-time speed via WebCrypto AES-CBC
+   (`window.crypto.subtle.decrypt` or `g_fileInfo.EncKey` key import) parallel
+   `oneDrive.transcode` fetch/decrypt (discovered via network hooks or
+   `PerformanceResourceTiming` resource entries for pre-buffered Web Worker
+   streams) and MSE `MediaSource.prototype.addSourceBuffer` /
    `SourceBuffer.prototype.appendBuffer` hooks (`16x` `playbackRate`,
    `currentTime` stepping, and `tfdt`-ordered deduplication), then decodes
    through `AudioContext.decodeAudioData` to 44.1 kHz mono PCM. Inert

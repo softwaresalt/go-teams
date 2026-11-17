@@ -84,6 +84,8 @@ type MeetingSchedule struct {
 	Category       string `yaml:"category,omitempty"`
 	CaptureAudio   *bool  `yaml:"capture_audio,omitempty"`
 	Audio          *bool  `yaml:"audio,omitempty"`
+	Overwrite      *bool  `yaml:"overwrite,omitempty"`
+	FileOverwrite  *bool  `yaml:"file_overwrite,omitempty"`
 	OutputDir      string `yaml:"output_dir,omitempty"`
 }
 
@@ -98,6 +100,7 @@ type Config struct {
 	Category             string            `yaml:"category,omitempty"`
 	Headless             bool              `yaml:"headless"`
 	CaptureAudio         bool              `yaml:"capture_audio,omitempty"`
+	Overwrite            bool              `yaml:"overwrite,omitempty"`
 	BrowserPath          string            `yaml:"browser_path,omitempty"`
 	DefaultAccount       string            `yaml:"default_account,omitempty"`
 	CaptureMode          string            `yaml:"capture_mode,omitempty"`
@@ -289,20 +292,24 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	var aliases struct {
-		OutputFolder string `yaml:"output_folder"`
-		DefaultPath  string `yaml:"default_path"`
-		Output       string `yaml:"output"`
-		NameTemplate string `yaml:"name_template"`
-		URL          string `yaml:"url"`
-		EntraAccount string `yaml:"entra_account"`
-		Account      string `yaml:"account"`
-		Mode         string `yaml:"mode"`
-		Headless     *bool  `yaml:"headless"`
-		Headed       *bool  `yaml:"headed"`
-		CaptureAudio *bool  `yaml:"capture_audio"`
-		Audio        *bool  `yaml:"audio"`
-		Meetings     []struct {
-			CaptureMode string `yaml:"capture_mode"`
+		OutputFolder  string `yaml:"output_folder"`
+		DefaultPath   string `yaml:"default_path"`
+		Output        string `yaml:"output"`
+		NameTemplate  string `yaml:"name_template"`
+		URL           string `yaml:"url"`
+		EntraAccount  string `yaml:"entra_account"`
+		Account       string `yaml:"account"`
+		Mode          string `yaml:"mode"`
+		Headless      *bool  `yaml:"headless"`
+		Headed        *bool  `yaml:"headed"`
+		CaptureAudio  *bool  `yaml:"capture_audio"`
+		Audio         *bool  `yaml:"audio"`
+		Overwrite     *bool  `yaml:"overwrite"`
+		FileOverwrite *bool  `yaml:"file_overwrite"`
+		Meetings      []struct {
+			CaptureMode   string `yaml:"capture_mode"`
+			Overwrite     *bool  `yaml:"overwrite"`
+			FileOverwrite *bool  `yaml:"file_overwrite"`
 		} `yaml:"meetings"`
 	}
 	if err := yaml.Unmarshal(data, &aliases); err == nil {
@@ -351,6 +358,11 @@ func Load(path string) (Config, error) {
 		if aliases.Audio != nil {
 			cfg.CaptureAudio = *aliases.Audio
 		}
+		if aliases.Overwrite != nil {
+			cfg.Overwrite = *aliases.Overwrite
+		} else if aliases.FileOverwrite != nil {
+			cfg.Overwrite = *aliases.FileOverwrite
+		}
 		if strings.EqualFold(cfg.CaptureMode, CaptureModeEphemeralLive) {
 			if strings.TrimSpace(cfg.AISummaryDelay) == "" {
 				cfg.AISummaryDelay = "0s"
@@ -369,6 +381,16 @@ func Load(path string) (Config, error) {
 				cfg.Meetings[i].CaptureAudio = &val
 			}
 			cfg.Meetings[i].Audio = nil
+			if i < len(aliases.Meetings) {
+				if aliases.Meetings[i].Overwrite != nil {
+					val := *aliases.Meetings[i].Overwrite
+					cfg.Meetings[i].Overwrite = &val
+				} else if aliases.Meetings[i].FileOverwrite != nil {
+					val := *aliases.Meetings[i].FileOverwrite
+					cfg.Meetings[i].Overwrite = &val
+				}
+			}
+			cfg.Meetings[i].FileOverwrite = nil
 			if cfg.Meetings[i].OutputDir != "" {
 				cfg.Meetings[i].OutputDir = expandUserPath(cfg.Meetings[i].OutputDir)
 			}

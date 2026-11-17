@@ -63,6 +63,15 @@ type SessionConfig struct {
 	// DisableAISummary suppresses appending # AI Summary to the Markdown
 	// transcript at the end of a capture session.
 	DisableAISummary bool
+	// Overwrite permits replacing existing transcript and audio files without
+	// prompting.
+	Overwrite bool
+	// ConfirmOverwrite prompts the operator before overwriting existing target
+	// files when Overwrite is false.
+	ConfirmOverwrite func(paths []string) (bool, error)
+	// ConfirmOverwriteWithContext is an optional context-aware variant of
+	// ConfirmOverwrite that receives Session.Run's active context directly.
+	ConfirmOverwriteWithContext func(ctx context.Context, paths []string) (bool, error)
 }
 
 // Session orchestrates a single meeting capture end to end: join, then
@@ -175,6 +184,47 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 
 	captionsOnly := s.cfg.CaptionsOnly
 
+	var confirmOverwrite func([]string) (bool, error)
+	if s.cfg.ConfirmOverwriteWithContext != nil {
+		confirmOverwrite = func(paths []string) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			approved, confirmErr := s.cfg.ConfirmOverwriteWithContext(ctx, paths)
+			if confirmErr != nil {
+				return false, confirmErr
+			}
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			return approved, nil
+		}
+	} else if s.cfg.ConfirmOverwrite != nil {
+		confirmOverwrite = func(paths []string) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			type confirmResult struct {
+				approved bool
+				err      error
+			}
+			ch := make(chan confirmResult, 1)
+			go func() {
+				approved, confirmErr := s.cfg.ConfirmOverwrite(paths)
+				ch <- confirmResult{approved: approved, err: confirmErr}
+			}()
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case res := <-ch:
+				if err := ctx.Err(); err != nil {
+					return false, err
+				}
+				return res.approved, res.err
+			}
+		}
+	}
+
 	outCfg := OutputConfig{
 		Dir:              s.cfg.OutputDir,
 		FilePath:         s.cfg.OutputFile,
@@ -185,6 +235,8 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		BotName:          s.cfg.BotName,
 		Now:              s.cfg.Now,
 		CaptionsOnly:     captionsOnly,
+		Overwrite:        s.cfg.Overwrite,
+		ConfirmOverwrite: confirmOverwrite,
 	}
 	if mp, ok := m.(browser.MetadataProvider); ok {
 		meta := mp.MeetingMetadata()
@@ -196,6 +248,10 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		if !meta.StartTime.IsZero() {
 			outCfg.MeetingStart = meta.StartTime
 		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	out, err := s.setupOutput(outCfg)
@@ -221,7 +277,7 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		mu.Lock()
 		hadAudioErr := audioErr != nil
 		mu.Unlock()
-		if hadAudioErr && out.AudioPath != "" {
+		if hadAudioErr && out.AudioPath != "" && !out.AudioExisted {
 			if info, statErr := os.Stat(out.AudioPath); statErr == nil && info.Size() == 0 {
 				_ = os.Remove(out.AudioPath) // Best-effort removal of empty 0-byte audio artifact after failed audio capture.
 			}

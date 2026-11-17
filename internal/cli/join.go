@@ -47,7 +47,8 @@ const (
   6. config output_file
   7. config output_folder
   8. config output_dir
-A directory target clears any configured output_file.`
+A directory target clears any configured output_file.
+Existing .md and .mp3 files prompt "(Y)es | (N)o" unless --overwrite or overwrite: true is set.`
 
 	filenameTemplateHelp = `Filename template placeholders (--filename-template / --name-template or filename_template):
   <category>  <concat-meeting-name>  <meeting-name>  <meeting-id>
@@ -92,6 +93,7 @@ type captureFlags struct {
 	headless         bool
 	headed           bool
 	audio            bool
+	overwrite        bool
 	mode             string
 	duration         time.Duration
 	idleTimeout      time.Duration
@@ -122,6 +124,7 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	// --recap-audio is an alias that shares state with --audio so the argument
 	// that appears last wins, including for per-entry queue overrides.
 	cmd.Flags().BoolVar(&f.audio, "recap-audio", false, "also capture Meeting Recap audio to an MP3 file")
+	cmd.Flags().BoolVar(&f.overwrite, "overwrite", false, "overwrite existing transcript and audio files without prompting")
 	cmd.Flags().StringVar(&f.mode, "mode", "", "meeting capture protocol: auto, ephemeral-live, live-with-summary, or past-recap")
 	cmd.Flags().DurationVar(&f.duration, "duration", 0, "nominal live capture duration (e.g. 30m, 1h) before post-duration idle monitoring")
 	cmd.Flags().DurationVar(&f.idleTimeout, "idle-timeout", 0, "inactivity grace period after duration or call-end before stopping capture (default 3m)")
@@ -196,6 +199,11 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if audioFlagChanged {
 		cfg.CaptureAudio = f.audio
 		cfg.ExplicitCaptureAudio = true
+	}
+	if cmd != nil && cmd.Flags().Changed("overwrite") {
+		cfg.Overwrite = f.overwrite
+	} else if f.overwrite {
+		cfg.Overwrite = true
 	}
 	if cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "" {
 		cfg.CaptureMode = strings.ToLower(strings.TrimSpace(f.mode))
@@ -294,6 +302,13 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 			out = append(out, "--"+name+"=false")
 		}
 	}
+	if cmd != nil && cmd.Flags().Changed("overwrite") {
+		if f.overwrite {
+			out = append(out, "--overwrite")
+		} else {
+			out = append(out, "--overwrite=false")
+		}
+	}
 	if cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "" {
 		out = append(out, "--mode", strings.ToLower(strings.TrimSpace(f.mode)))
 	}
@@ -331,6 +346,7 @@ func newJoinCommand(d *deps, configPath *string) *cobra.Command {
 			"  go-teams join --queue transcript-queue.txt --output-folder transcripts --headless",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			bindPromptStreams(cmd, d)
 			if flags.queueFile != "" {
 				if isInsideQueueExecution(cmd.Context()) {
 					return fmt.Errorf("cli: nested --queue flag is not allowed")
@@ -383,6 +399,7 @@ func newCaptionsCommand(d *deps, configPath *string) *cobra.Command {
 			"  go-teams captions --queue transcript-queue.txt --output-folder transcripts",
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			bindPromptStreams(cmd, d)
 			if flags.queueFile != "" {
 				if isInsideQueueExecution(cmd.Context()) {
 					return fmt.Errorf("cli: nested --queue flag is not allowed")

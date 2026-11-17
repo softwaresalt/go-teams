@@ -1,12 +1,16 @@
 package capture
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/softwaresalt/go-teams/internal/transcript"
 )
 
 var safeName = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -309,21 +313,479 @@ func TestSetupOutputExplicitFilePathCreatesAndOverwritesMarkdownFile(t *testing.
 	if err := out1.Close(); err != nil {
 		t.Fatalf("close first output: %v", err)
 	}
+	if err := os.WriteFile(targetFile, []byte("keep first file"), 0o600); err != nil {
+		t.Fatalf("seed existing targetFile: %v", err)
+	}
 
-	// Second run to the same explicit FilePath (automation re-run) must succeed.
-	out2, err := setupOutput(OutputConfig{
+	// Second run without Overwrite or ConfirmOverwrite must refuse with os.ErrExist
+	// and preserve the existing file untouched.
+	_, err = setupOutput(OutputConfig{
 		FilePath:     targetFile,
 		MeetingURL:   "https://teams.microsoft.com/meet/999888777?p=secret",
 		BotName:      "Bot",
 		Now:          fixedTime(),
 		CaptionsOnly: true,
 	})
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("second setupOutput without Overwrite err = %v, want wrapping os.ErrExist", err)
+	}
+	preserved, readErr := os.ReadFile(targetFile)
+	if readErr != nil {
+		t.Fatalf("read preserved targetFile: %v", readErr)
+	}
+	if string(preserved) != "keep first file" {
+		t.Fatalf("existing file modified on refusal: %q", string(preserved))
+	}
+
+	// Second run with Overwrite: true must succeed and replace the file.
+	out2, err := setupOutput(OutputConfig{
+		FilePath:     targetFile,
+		MeetingURL:   "https://teams.microsoft.com/meet/999888777?p=secret",
+		BotName:      "Bot",
+		Now:          fixedTime(),
+		CaptionsOnly: true,
+		Overwrite:    true,
+	})
 	if err != nil {
-		t.Fatalf("second setupOutput with FilePath: %v", err)
+		t.Fatalf("second setupOutput with Overwrite=true: %v", err)
 	}
 	if err := out2.Close(); err != nil {
 		t.Fatalf("close second output: %v", err)
 	}
+	replaced, readErr := os.ReadFile(targetFile)
+	if readErr != nil {
+		t.Fatalf("read replaced targetFile: %v", readErr)
+	}
+	if !strings.Contains(string(replaced), "# Meeting Attendees") {
+		t.Fatalf("expected overwritten transcript header, got %q", string(replaced))
+	}
+}
+
+func TestSetupOutputOverwriteAndConfirmPrompt(t *testing.T) {
+	url := "https://teams.microsoft.com/meet/999888777?p=secret"
+
+	t.Run("Overwrite true replaces existing files in both Dir and FilePath modes without prompting", func(t *testing.T) {
+		for _, useFilePath := range []bool{false, true} {
+			dir := t.TempDir()
+			cfg := OutputConfig{
+				MeetingURL: url,
+				BotName:    "Bot",
+				Now:        fixedTime(),
+				Overwrite:  true,
+				ConfirmOverwrite: func([]string) (bool, error) {
+					t.Fatal("ConfirmOverwrite must not be called when Overwrite is true")
+					return false, nil
+				},
+			}
+			if useFilePath {
+				cfg.FilePath = filepath.Join(dir, "explicit.md")
+			} else {
+				cfg.Dir = dir
+			}
+			first, err := setupOutput(cfg)
+			if err != nil {
+				t.Fatalf("first setupOutput: %v", err)
+			}
+			mdPath, mp3Path := first.TranscriptPath, first.AudioPath
+			if err := first.Close(); err != nil {
+				t.Fatalf("close first: %v", err)
+			}
+			if err := os.WriteFile(mdPath, []byte("old md"), 0o600); err != nil {
+				t.Fatalf("seed md: %v", err)
+			}
+			if err := os.WriteFile(mp3Path, []byte("old mp3"), 0o600); err != nil {
+				t.Fatalf("seed mp3: %v", err)
+			}
+
+			second, err := setupOutput(cfg)
+			if err != nil {
+				t.Fatalf("second setupOutput with Overwrite=true: %v", err)
+			}
+			if err := second.Close(); err != nil {
+				t.Fatalf("close second: %v", err)
+			}
+			mdBytes, _ := os.ReadFile(mdPath)
+			if !strings.Contains(string(mdBytes), "# Meeting Attendees") {
+				t.Fatalf("expected overwritten markdown header, got %q", string(mdBytes))
+			}
+			mp3Bytes, _ := os.ReadFile(mp3Path)
+			if len(mp3Bytes) != 0 {
+				t.Fatalf("expected truncated mp3 file, got %d bytes", len(mp3Bytes))
+			}
+		}
+	})
+
+	t.Run("ConfirmOverwrite receives deterministic existingPaths and approval overwrites", func(t *testing.T) {
+		dir := t.TempDir()
+		targetMD := filepath.Join(dir, "call.md")
+		targetMP3 := filepath.Join(dir, "call.mp3")
+		if err := os.WriteFile(targetMD, []byte("existing md"), 0o600); err != nil {
+			t.Fatalf("seed md: %v", err)
+		}
+		if err := os.WriteFile(targetMP3, []byte("existing mp3"), 0o600); err != nil {
+			t.Fatalf("seed mp3: %v", err)
+		}
+
+		var gotPaths []string
+		out, err := setupOutput(OutputConfig{
+			FilePath:   targetMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  false,
+			ConfirmOverwrite: func(paths []string) (bool, error) {
+				gotPaths = append([]string(nil), paths...)
+				return true, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("setupOutput with approval: %v", err)
+		}
+		_ = out.Close()
+		if len(gotPaths) != 2 || gotPaths[0] != targetMD || gotPaths[1] != targetMP3 {
+			t.Fatalf("gotPaths = %v, want [%s, %s]", gotPaths, targetMD, targetMP3)
+		}
+	})
+
+	t.Run("ConfirmOverwrite decline returns ErrOverwriteDeclined and preserves files byte-for-byte", func(t *testing.T) {
+		dir := t.TempDir()
+		targetMD := filepath.Join(dir, "call.md")
+		targetMP3 := filepath.Join(dir, "call.mp3")
+		if err := os.WriteFile(targetMD, []byte("keep md"), 0o600); err != nil {
+			t.Fatalf("seed md: %v", err)
+		}
+		if err := os.WriteFile(targetMP3, []byte("keep mp3"), 0o600); err != nil {
+			t.Fatalf("seed mp3: %v", err)
+		}
+
+		_, err := setupOutput(OutputConfig{
+			FilePath:   targetMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  false,
+			ConfirmOverwrite: func([]string) (bool, error) {
+				return false, nil
+			},
+		})
+		if !errors.Is(err, ErrOverwriteDeclined) {
+			t.Fatalf("err = %v, want wrapping ErrOverwriteDeclined", err)
+		}
+		mdBytes, _ := os.ReadFile(targetMD)
+		mp3Bytes, _ := os.ReadFile(targetMP3)
+		if string(mdBytes) != "keep md" || string(mp3Bytes) != "keep mp3" {
+			t.Fatalf("declined overwrite modified files: md=%q mp3=%q", string(mdBytes), string(mp3Bytes))
+		}
+	})
+
+	t.Run("ConfirmOverwrite error preserves existing files", func(t *testing.T) {
+		dir := t.TempDir()
+		targetMD := filepath.Join(dir, "call.md")
+		if err := os.WriteFile(targetMD, []byte("keep md"), 0o600); err != nil {
+			t.Fatalf("seed md: %v", err)
+		}
+		boom := errors.New("prompt io error")
+		_, err := setupOutput(OutputConfig{
+			FilePath:     targetMD,
+			MeetingURL:   url,
+			BotName:      "Bot",
+			Now:          fixedTime(),
+			CaptionsOnly: true,
+			ConfirmOverwrite: func([]string) (bool, error) {
+				return false, boom
+			},
+		})
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want wrapping %v", err, boom)
+		}
+		mdBytes, _ := os.ReadFile(targetMD)
+		if string(mdBytes) != "keep md" {
+			t.Fatalf("existing file modified on prompt error: %q", string(mdBytes))
+		}
+	})
+
+	t.Run("pre-open directory check leaves pre-existing mdPath untouched and post-open rollback preserves mdExisted", func(t *testing.T) {
+		dir := t.TempDir()
+		targetMD := filepath.Join(dir, "call.md")
+		targetMP3Dir := filepath.Join(dir, "call.mp3")
+		if err := os.WriteFile(targetMD, []byte("pre-existing md"), 0o600); err != nil {
+			t.Fatalf("seed md: %v", err)
+		}
+		if err := os.MkdirAll(targetMP3Dir, 0o700); err != nil {
+			t.Fatalf("mkdir mp3: %v", err)
+		}
+
+		promptCalled := false
+		_, err := setupOutput(OutputConfig{
+			FilePath:   targetMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  false,
+			ConfirmOverwrite: func([]string) (bool, error) {
+				promptCalled = true
+				return true, nil
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "directory") {
+			t.Fatalf("expected directory error, got %v", err)
+		}
+		if promptCalled {
+			t.Fatal("ConfirmOverwrite must not be called when mp3Path is a directory")
+		}
+		mdBytes, _ := os.ReadFile(targetMD)
+		if string(mdBytes) != "pre-existing md" {
+			t.Fatalf("pre-existing md modified when mp3Path is a directory: %q", string(mdBytes))
+		}
+
+		// When mdPath pre-existed and Overwrite is true, a post-open mp3 failure
+		// must NOT os.Remove(mdPath).
+		_, err = setupOutput(OutputConfig{
+			FilePath:   targetMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  true,
+		})
+		if err == nil {
+			t.Fatal("expected error when mp3Path is a directory")
+		}
+		if _, statErr := os.Stat(targetMD); statErr != nil {
+			t.Fatalf("pre-existing mdPath must not be deleted on post-open rollback: %v", statErr)
+		}
+
+		// When mdPath did NOT pre-exist, a post-open mp3 failure removes newly created mdPath.
+		freshDir := t.TempDir()
+		freshMD := filepath.Join(freshDir, "fresh.md")
+		freshMP3Dir := filepath.Join(freshDir, "fresh.mp3")
+		if err := os.MkdirAll(freshMP3Dir, 0o700); err != nil {
+			t.Fatalf("mkdir fresh mp3: %v", err)
+		}
+		if _, err := setupOutput(OutputConfig{
+			FilePath:   freshMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  true,
+		}); err == nil {
+			t.Fatal("expected error when fresh mp3Path is a directory")
+		}
+		if _, statErr := os.Stat(freshMD); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("newly created mdPath should be removed on post-open rollback, statErr=%v", statErr)
+		}
+
+		// When mdPath and mp3Path both pre-exist as regular files and mp3Path is
+		// read-only (open fails after checkTarget), pre-existing mdPath must not
+		// be truncated or deleted.
+		roDir := t.TempDir()
+		roMD := filepath.Join(roDir, "ro.md")
+		roMP3 := filepath.Join(roDir, "ro.mp3")
+		if err := os.WriteFile(roMD, []byte("keep md intact"), 0o600); err != nil {
+			t.Fatalf("seed roMD: %v", err)
+		}
+		if err := os.WriteFile(roMP3, []byte("keep mp3 intact"), 0o400); err != nil {
+			t.Fatalf("seed roMP3: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(roMP3, 0o600) })
+		if _, err := setupOutput(OutputConfig{
+			FilePath:   roMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  true,
+		}); err != nil {
+			mdBytes, _ := os.ReadFile(roMD)
+			if string(mdBytes) != "keep md intact" {
+				t.Fatalf("pre-existing mdPath was truncated on mp3 open failure: %q", string(mdBytes))
+			}
+		}
+
+		// Forced header-flush failure after truncation must restore BOTH
+		// pre-existing .md and .mp3 files byte-for-byte with zero backup leftovers.
+		flushDir := t.TempDir()
+		flushMD := filepath.Join(flushDir, "flush.md")
+		flushMP3 := filepath.Join(flushDir, "flush.mp3")
+		if err := os.WriteFile(flushMD, []byte("original md content"), 0o600); err != nil {
+			t.Fatalf("seed flushMD: %v", err)
+		}
+		if err := os.WriteFile(flushMP3, []byte("original mp3 content"), 0o600); err != nil {
+			t.Fatalf("seed flushMP3: %v", err)
+		}
+		flushBoom := errors.New("simulated header flush failure")
+		_, flushErr := setupOutputWithFlushHook(OutputConfig{
+			FilePath:   flushMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  true,
+		}, func(*transcript.Writer) error {
+			return flushBoom
+		})
+		if !errors.Is(flushErr, flushBoom) {
+			t.Fatalf("setupOutputWithFlushHook err = %v, want %v", flushErr, flushBoom)
+		}
+		gotMD, _ := os.ReadFile(flushMD)
+		gotMP3, _ := os.ReadFile(flushMP3)
+		if string(gotMD) != "original md content" {
+			t.Fatalf("pre-existing md not restored on flush failure: got %q", string(gotMD))
+		}
+		if string(gotMP3) != "original mp3 content" {
+			t.Fatalf("pre-existing mp3 not restored on flush failure: got %q", string(gotMP3))
+		}
+		entries, _ := os.ReadDir(flushDir)
+		if len(entries) != 2 {
+			t.Fatalf("expected only original 2 files after rollback, got %v", entries)
+		}
+
+		// Failed restoreFromTemp must return an error and preserve backupPath on disk.
+		bDir := t.TempDir()
+		backupPath := filepath.Join(bDir, ".go-teams-backup-test")
+		if err := os.WriteFile(backupPath, []byte("precious backup"), 0o600); err != nil {
+			t.Fatalf("seed backup: %v", err)
+		}
+		closedTarget := filepath.Join(bDir, "target.md")
+		tf, err := os.OpenFile(closedTarget, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatalf("open target: %v", err)
+		}
+		_ = tf.Close()
+		if rErr := restoreFromTemp(tf, backupPath); rErr == nil {
+			t.Fatal("expected restoreFromTemp to fail on closed target handle")
+		}
+		if bData, bErr := os.ReadFile(backupPath); bErr != nil || string(bData) != "precious backup" {
+			t.Fatalf("backupPath must be preserved when restore fails: err=%v data=%q", bErr, string(bData))
+		}
+	})
+
+	t.Run("Session.Run 0-byte audio cleanup preserves pre-existing mp3 and removes newly created 0-byte mp3", func(t *testing.T) {
+		// 1. Pre-existing 0-byte mp3 (AudioExisted == true) must be preserved on audioErr.
+		dir := t.TempDir()
+		mdPath := filepath.Join(dir, "existing.md")
+		mp3Path := filepath.Join(dir, "existing.mp3")
+		if err := os.WriteFile(mdPath, []byte("old"), 0o600); err != nil {
+			t.Fatalf("seed md: %v", err)
+		}
+		if err := os.WriteFile(mp3Path, nil, 0o600); err != nil {
+			t.Fatalf("seed empty mp3: %v", err)
+		}
+		s := NewSession(SessionConfig{
+			OutputFile: mdPath,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  true,
+		})
+		s.now = fixedTime
+		audioBoom := errors.New("audio failed")
+		fm := &fakeMeeting{
+			audioErr:       audioBoom,
+			audioReturnNow: true,
+		}
+		if err := s.Run(context.Background(), fm); !errors.Is(err, audioBoom) {
+			t.Fatalf("Run err = %v, want %v", err, audioBoom)
+		}
+		if _, statErr := os.Stat(mp3Path); statErr != nil {
+			t.Fatalf("pre-existing 0-byte audio file must be preserved when AudioExisted=true: %v", statErr)
+		}
+
+		// 2. Newly created 0-byte mp3 (AudioExisted == false) must be removed on audioErr.
+		dir2 := t.TempDir()
+		mdPath2 := filepath.Join(dir2, "new.md")
+		mp3Path2 := filepath.Join(dir2, "new.mp3")
+		s2 := NewSession(SessionConfig{
+			OutputFile: mdPath2,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+		})
+		s2.now = fixedTime
+		fm2 := &fakeMeeting{
+			audioErr:       audioBoom,
+			audioReturnNow: true,
+		}
+		if err := s2.Run(context.Background(), fm2); !errors.Is(err, audioBoom) {
+			t.Fatalf("Run err = %v, want %v", err, audioBoom)
+		}
+		if _, statErr := os.Stat(mp3Path2); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("newly created 0-byte audio file should be removed on audioErr, statErr=%v", statErr)
+		}
+	})
+
+	t.Run("setupOutput rejects symlink targets and leaves symlink target untouched", func(t *testing.T) {
+		dir := t.TempDir()
+		outside := filepath.Join(dir, "outside.md")
+		if err := os.WriteFile(outside, []byte("secret outside content"), 0o600); err != nil {
+			t.Fatalf("seed outside: %v", err)
+		}
+		linkPath := filepath.Join(dir, "link.md")
+		if err := os.Symlink(outside, linkPath); err != nil {
+			t.Skipf("symlinks not supported on this host: %v", err)
+		}
+
+		_, err := setupOutput(OutputConfig{
+			FilePath:     linkPath,
+			MeetingURL:   url,
+			BotName:      "Bot",
+			Now:          fixedTime(),
+			CaptionsOnly: true,
+			Overwrite:    true,
+		})
+		if err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("expected symlink error, got %v", err)
+		}
+		got, readErr := os.ReadFile(outside)
+		if readErr != nil {
+			t.Fatalf("read outside: %v", readErr)
+		}
+		if string(got) != "secret outside content" {
+			t.Fatalf("symlink target was modified: %q", string(got))
+		}
+	})
+
+	t.Run("Session.Run unblocks ConfirmOverwrite on ctx cancel and preserves existing file", func(t *testing.T) {
+		dir := t.TempDir()
+		mdPath := filepath.Join(dir, "cancel.md")
+		if err := os.WriteFile(mdPath, []byte("keep on cancel"), 0o600); err != nil {
+			t.Fatalf("seed md: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		promptStarted := make(chan struct{})
+		releasePrompt := make(chan struct{})
+		t.Cleanup(func() { close(releasePrompt) })
+
+		s := NewSession(SessionConfig{
+			OutputFile:   mdPath,
+			MeetingURL:   url,
+			BotName:      "Bot",
+			Now:          fixedTime(),
+			CaptionsOnly: true,
+			ConfirmOverwrite: func([]string) (bool, error) {
+				close(promptStarted)
+				<-releasePrompt
+				return true, nil
+			},
+		})
+		s.now = fixedTime
+		fm := &fakeMeeting{}
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- s.Run(ctx, fm)
+		}()
+		<-promptStarted
+		cancel()
+
+		if runErr := <-errCh; !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("cancelled ConfirmOverwrite in Session.Run err = %v, want wrapping context.Canceled", runErr)
+		}
+		got, readErr := os.ReadFile(mdPath)
+		if readErr != nil {
+			t.Fatalf("read md: %v", readErr)
+		}
+		if string(got) != "keep on cancel" {
+			t.Fatalf("existing file modified after ctx cancel: %q", string(got))
+		}
+	})
 }
 
 func TestSetupOutputRejectsHardLinkedTranscriptAndAudioAlias(t *testing.T) {

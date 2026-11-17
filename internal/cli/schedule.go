@@ -31,6 +31,7 @@ type scheduleFlags struct {
 	headless       bool
 	headed         bool
 	audio          bool
+	overwrite      bool
 	mode           string
 	duration       time.Duration
 	idleTimeout    time.Duration
@@ -45,6 +46,7 @@ func bindScheduleFlags(cmd *cobra.Command, f *scheduleFlags) {
 	cmd.Flags().BoolVar(&f.headed, "headed", false, "open a visible browser window for interactive authentication")
 	cmd.Flags().BoolVar(&f.audio, "audio", false, "also capture meeting or recap audio to an MP3 file")
 	cmd.Flags().BoolVar(&f.audio, "recap-audio", false, "also capture Meeting Recap audio to an MP3 file")
+	cmd.Flags().BoolVar(&f.overwrite, "overwrite", false, "overwrite existing transcript and audio files without prompting")
 	cmd.Flags().StringVar(&f.mode, "mode", "", "default meeting capture protocol: auto, ephemeral-live, live-with-summary, or past-recap")
 	cmd.Flags().DurationVar(&f.duration, "duration", 0, "default nominal live capture duration (default 1h)")
 	cmd.Flags().DurationVar(&f.idleTimeout, "idle-timeout", 0, "default post-duration inactivity grace period (default 3m)")
@@ -65,6 +67,11 @@ func applyScheduleFlags(cmd *cobra.Command, cfg *config.Config, f scheduleFlags)
 	if audioChanged {
 		cfg.CaptureAudio = f.audio
 		cfg.ExplicitCaptureAudio = true
+	}
+	if cmd != nil && cmd.Flags().Changed("overwrite") {
+		cfg.Overwrite = f.overwrite
+	} else if f.overwrite {
+		cfg.Overwrite = true
 	}
 	if (cmd != nil && cmd.Flags().Changed("mode")) || strings.TrimSpace(f.mode) != "" {
 		cfg.CaptureMode = strings.ToLower(strings.TrimSpace(f.mode))
@@ -106,6 +113,9 @@ func buildScheduleEntryConfig(base config.Config, e scheduler.Entry) config.Conf
 	if e.CaptureAudio != nil {
 		entryCfg.CaptureAudio = *e.CaptureAudio
 		entryCfg.ExplicitCaptureAudio = true
+	}
+	if e.Overwrite != nil {
+		entryCfg.Overwrite = *e.Overwrite
 	}
 	if strings.TrimSpace(e.Mode) != "" {
 		entryCfg.CaptureMode = strings.ToLower(strings.TrimSpace(e.Mode))
@@ -161,6 +171,11 @@ func buildSchedulerEntryFromConfig(m config.MeetingSchedule) (scheduler.Entry, e
 		val := *m.Audio
 		captureAudio = &val
 	}
+	overwrite := m.Overwrite
+	if overwrite == nil && m.FileOverwrite != nil {
+		val := *m.FileOverwrite
+		overwrite = &val
+	}
 	return scheduler.Entry{
 		Name:           m.Name,
 		URL:            m.URL,
@@ -173,6 +188,7 @@ func buildSchedulerEntryFromConfig(m config.MeetingSchedule) (scheduler.Entry, e
 		LobbyTimeout:   lobby,
 		Category:       m.Category,
 		CaptureAudio:   captureAudio,
+		Overwrite:      overwrite,
 		OutputDir:      m.OutputDir,
 		ValidateURL:    teams.ValidateMeetingURL,
 	}, nil
@@ -285,14 +301,14 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"Precedence for each scheduled meeting (3 tiers, lowest to highest):\n" +
 			"  1. Top-level settings in config.yaml form the baseline.\n" +
 			"  2. Global schedule flags (--mode, --duration, --idle-timeout, --ai-summary-delay,\n" +
-			"     --no-ai-summary, --lobby-timeout, --audio / --recap-audio, --headless, --headed,\n" +
-			"     --browser-path, --profile-dir, --account) are applied to that base configuration\n" +
-			"     first (applyScheduleFlags). If the base mode is then ephemeral-live, the base\n" +
-			"     ai_summary_delay is forced to 0s and capture_audio defaults to true unless audio\n" +
-			"     was set explicitly.\n" +
+			"     --no-ai-summary, --lobby-timeout, --audio / --recap-audio, --overwrite,\n" +
+			"     --headless, --headed, --browser-path, --profile-dir, --account) are applied\n" +
+			"     to that base configuration first (applyScheduleFlags). If the base mode is\n" +
+			"     then ephemeral-live, the base ai_summary_delay is forced to 0s and\n" +
+			"     capture_audio defaults to true unless audio was set explicitly.\n" +
 			"  3. When a meeting fires, its per-meeting settings (mode / capture_mode, duration,\n" +
 			"     idle_timeout, ai_summary_delay, lobby_timeout, category, capture_audio / audio,\n" +
-			"     output_dir) are applied on top of the flag-adjusted base\n" +
+			"     overwrite / file_overwrite, output_dir) are applied on top of the flag-adjusted base\n" +
 			"     (buildScheduleEntryConfig), followed by the same ephemeral-live normalization on\n" +
 			"     the entry: when its effective mode is ephemeral-live, ai_summary_delay becomes 0s\n" +
 			"     and capture_audio defaults to true unless audio was explicitly false (an entry\n" +
@@ -303,12 +319,19 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"from an ephemeral-live base (for example to live-with-summary) does not restore an earlier\n" +
 			"ai_summary_delay or capture_audio value. To override the normalized base, set\n" +
 			"explicit per-meeting ai_summary_delay and capture_audio values on that entry.\n\n" +
-			"Stop the daemon with Ctrl+C; in-flight captures get up to 15 seconds to release their browsers.",
+			"Stop the daemon with Ctrl+C; in-flight captures get up to 15 seconds to release their browsers.\n" +
+			"When overwrite is false (the default) and a target file already exists, any interactive\n" +
+			"(Y)es | (N)o overwrite prompt is bounded to 15 seconds so unattended schedules release the\n" +
+			"busy gate (closed stdin declines immediately).",
 		Example: "  go-teams schedule --config config.yaml --headless\n" +
 			"  go-teams schedule --mode live-with-summary --duration 30m --ai-summary-delay 30m --profile-dir \"%LOCALAPPDATA%\\go-teams\\profile\"\n" +
 			"  go-teams schedule --mode ephemeral-live --audio=false --headless",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if d != nil && d.promptTimeout == 0 {
+				d.promptTimeout = 15 * time.Second
+			}
+			bindPromptStreams(cmd, d)
 			cfg, err := loadConfigFrom(d, *configPath)
 			if err != nil {
 				return err

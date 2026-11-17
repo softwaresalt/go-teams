@@ -311,6 +311,7 @@ Flags for the root command, `captions`, and `join`:
 * `--ai-summary-delay`: delay after a live call ends before reopening the meeting in Recap mode to fetch and append `# AI Summary` (default `30m` for `live-with-summary`)
 * `--no-ai-summary`: disable AI Summary capture for both Meeting Recaps and delayed post-call enrichment (`--ai-summary-delay=0s`)
 * `--lobby-timeout`: maximum time to wait in pre-join or the meeting lobby before aborting
+* `--overwrite`: overwrite existing `.md` transcript and `.mp3` audio files without prompting (default `false` prompts `(Y)es | (N)o`)
 * `--append-ai-summary`: existing Markdown transcript file to append the Meeting Recap AI Summary into without overwriting live captions
 * `--not-before`: RFC 3339 timestamp before which a queued `--append-ai-summary` entry is skipped and left uncommented
 
@@ -334,16 +335,22 @@ when it exceeds the supported size or duration limits.
 
 `--browser-path`, `--profile-dir`, and `--account` are also accepted by `auth`
 and `schedule`, and `schedule` additionally binds `--audio` / `--recap-audio`,
-`--headless`, `--headed`, `--mode`, `--duration`, `--idle-timeout`,
-`--ai-summary-delay`, `--no-ai-summary`, and `--lobby-timeout`. `browser_path`
-and `default_account` in the config file apply to every command.
+`--overwrite`, `--headless`, `--headed`, `--mode`, `--duration`,
+`--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`, and
+`--lobby-timeout`. `browser_path` and `default_account` in the config file
+apply to every command.
 
-Parent output directories are created automatically. Explicit file destinations
-are replaced on each successful capture admission; use unique paths if you
-need to retain previous results. Directory output generates names from the
-filename template and rejects collisions. An existing directory passed to
-`--output` is always treated as a directory. Positional URL and destination
-arguments override their corresponding flags.
+Parent output directories are created automatically. Both directory mode and
+explicit file mode protect existing `.md` and `.mp3` files by default
+(`overwrite: false`): when one or more target files already exist on disk,
+`go-teams` prompts on standard error (`File already exists: <paths>` followed
+by `Overwrite? (Y)es | (N)o: `) and aborts with `capture: file overwrite
+declined` without touching any existing file when declined (including empty
+input or EOF in non-interactive runs). Pass `--overwrite` or set
+`overwrite: true` (alias `file_overwrite: true`) to replace existing files
+without prompting. An existing directory passed to `--output` is always treated
+as a directory. Positional URL and destination arguments override their
+corresponding flags.
 
 ## Output target precedence
 
@@ -429,7 +436,7 @@ go-teams.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=syn
   (`inheritedQueueFlags`): `--config`, `--output-folder`, `--output-dir`,
   `--output`, `--output-file`, `--filename-template` / `--name-template`,
   `--profile-dir`, `--bot-name`, `--category`, `--browser-path`, `--account`,
-  `--headless`, `--headed`, `--audio` / `--recap-audio`, `--mode`,
+  `--headless`, `--headed`, `--audio` / `--recap-audio`, `--overwrite`, `--mode`,
   `--duration`, `--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`, and
   `--lobby-timeout`. The outer `--url`, `--queue`, `--append-ai-summary`, and
   `--not-before` are never forwarded. Flags written on a line come after the
@@ -451,8 +458,10 @@ go-teams.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=syn
   (including passcodes), userinfo, and fragments are removed by
   `teams.RedactArgs`.
 
-Pointing every line at one explicit `--output-file` replaces that file on each
-capture, so use `--output-folder` or per-line destinations for batches.
+Pointing every line at one explicit `--output-file` targets the same file on
+each capture (prompting `(Y)es | (N)o` unless `--overwrite` or
+`overwrite: true` is set), so use `--output-folder` or per-line destinations for
+batches.
 
 ## Scheduled and protocol-driven capture
 
@@ -541,8 +550,12 @@ releases as soon as the live call ends, before any delayed
 `--ai-summary-delay` AI Summary fetch, so the next meeting is not blocked. When
 `queue_file` is configured, the daemon sweeps it at startup and runs pending
 entries, skipping `--not-before` entries whose timestamp is still in the
-future. On shutdown the daemon allows a 15-second graceful window. A scheduled
-entry without a `duration` uses a nominal 1-hour duration.
+future. On shutdown the daemon allows a 15-second graceful window. When
+`overwrite` is `false` (the default) and a target file already exists, any
+interactive `(Y)es | (N)o` overwrite confirmation prompt is bounded to 15
+seconds so an unattended schedule releases the `busy` gate (a closed stdin
+stream declines immediately). A scheduled entry without a `duration` uses a
+nominal 1-hour duration.
 
 #### Schedule configuration and flag precedence
 
@@ -552,21 +565,21 @@ lowest to highest precedence:
 1. Top-level settings in `config.yaml` establish the baseline.
 2. Global flags passed to `go-teams schedule` (`--mode`, `--duration`,
    `--idle-timeout`, `--ai-summary-delay`, `--no-ai-summary`,
-   `--lobby-timeout`, `--audio` / `--recap-audio`, `--browser-path`,
-   `--profile-dir`, `--account`, `--headless`, `--headed`) are applied to that
-   base configuration first (`applyScheduleFlags`). When the base mode is
-   `ephemeral-live`, this step also normalizes the base: `ai_summary_delay`
-   becomes `0s`, and `capture_audio` defaults to `true` unless audio was
-   configured explicitly.
+   `--lobby-timeout`, `--audio` / `--recap-audio`, `--overwrite`,
+   `--browser-path`, `--profile-dir`, `--account`, `--headless`, `--headed`) are
+   applied to that base configuration first (`applyScheduleFlags`). When the
+   base mode is `ephemeral-live`, this step also normalizes the base:
+   `ai_summary_delay` becomes `0s`, and `capture_audio` defaults to `true`
+   unless audio was configured explicitly.
 3. When a scheduled meeting fires, its per-meeting settings under `meetings:`
    (`mode` / `capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`,
-   `lobby_timeout`, `category`, `capture_audio` / `audio`, and `output_dir`) are
-   applied on top of the flag-adjusted base (`buildScheduleEntryConfig`). The
-   entry is then normalized again: when its effective mode is `ephemeral-live`,
-   `ai_summary_delay` becomes `0s`, and `capture_audio` defaults to `true`
-   unless audio was explicitly set to `false` through `--audio=false` or
-   top-level `capture_audio: false`. Setting `capture_audio: true` on the
-   meeting entry overrides that explicit `false`.
+   `lobby_timeout`, `category`, `capture_audio` / `audio`, `overwrite` /
+   `file_overwrite`, and `output_dir`) are applied on top of the flag-adjusted
+   base (`buildScheduleEntryConfig`). The entry is then normalized again: when
+   its effective mode is `ephemeral-live`, `ai_summary_delay` becomes `0s`, and
+   `capture_audio` defaults to `true` unless audio was explicitly set to `false`
+   through `--audio=false` or top-level `capture_audio: false`. Setting
+   `capture_audio: true` on the meeting entry overrides that explicit `false`.
 
 As a result, per-meeting settings in `config.yaml` override global `schedule`
 flags (such as `--audio=false` or `--no-ai-summary`) for that meeting. The
@@ -834,13 +847,14 @@ meetings:
 | `bot_name` | | Display name for guest joins |
 | `headless` | `headed` | Browser visibility; `headed: true` forces a visible window |
 | `capture_audio` | `audio` | Also write an `.mp3` next to the transcript |
+| `overwrite` | `file_overwrite` | Replace existing `.md` and `.mp3` files without prompting (default `false` prompts `(Y)es \| (N)o`; `overwrite` wins over `file_overwrite`) |
 | `capture_mode` | `mode` | Capture protocol: `auto`, `ephemeral-live`, `live-with-summary`, or `past-recap` |
 | `duration` | | Nominal live capture window (for example `30m`, `1h`) before post-duration idle monitoring |
 | `idle_timeout` | | Post-duration or post-teardown silence window before stopping capture (default `3m`) |
 | `ai_summary_delay` | | Post-call delay before reopening Recap to append `# AI Summary` (default `30m` for `live-with-summary`) |
 | `lobby_timeout` | | Maximum pre-join / lobby wait window before aborting |
 | `queue_file` | | Path to `transcription_queue.txt` used to persist deferred `--append-ai-summary` entries |
-| `meetings` | | Scheduled meetings (`name`, `url`, `cron` or `at`, plus optional `mode`/`capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`, `lobby_timeout`, `category`, `capture_audio`/`audio`, `output_dir`) |
+| `meetings` | | Scheduled meetings (`name`, `url`, `cron` or `at`, plus optional `mode`/`capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`, `lobby_timeout`, `category`, `capture_audio`/`audio`, `overwrite`/`file_overwrite`, `output_dir`) |
 
 `output_folder` and `default_path` only ever set the output directory. The
 separate `output` key accepts either a file or a directory. When `config.Load`
@@ -860,8 +874,9 @@ and `auth`), command-line flags override every top-level config value (see
 the exception: global `schedule` flags override top-level `config.yaml`
 defaults first, and each `meetings:` entry's per-meeting settings (`mode` /
 `capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`,
-`lobby_timeout`, `category`, `capture_audio` / `audio`, and `output_dir`) then
-override those flags for that meeting. See
+`lobby_timeout`, `category`, `capture_audio` / `audio`, `overwrite` /
+`file_overwrite`, and `output_dir`) then override those flags for that
+meeting. See
 [Built-in daemon scheduling (go-teams schedule)](#built-in-daemon-scheduling-go-teams-schedule).
 
 ## Project layout

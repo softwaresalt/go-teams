@@ -34,6 +34,11 @@ const (
 )
 
 var (
+	// ErrOverwriteDeclined is returned when one or more target output files
+	// already exist, Overwrite is false, and the operator declines the
+	// overwrite confirmation prompt.
+	ErrOverwriteDeclined = errors.New("capture: file overwrite declined")
+
 	meetingIDToken  = regexp.MustCompile(`meeting_[A-Za-z0-9]+`)
 	meetPathToken   = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
 	unsafeIDChars   = regexp.MustCompile(`[^a-z0-9]+`)
@@ -96,6 +101,14 @@ type OutputConfig struct {
 	// CaptionsOnly skips creating the MP3 audio output file when only live
 	// captions are being captured to Markdown.
 	CaptionsOnly bool
+	// Overwrite permits replacing existing transcript and audio files without
+	// prompting. When false and a target file already exists, setupOutput
+	// invokes ConfirmOverwrite (or fails with os.ErrExist when nil).
+	Overwrite bool
+	// ConfirmOverwrite prompts the operator before overwriting existing target
+	// files when Overwrite is false. It receives the existing paths in
+	// deterministic order (mdPath, then mp3Path).
+	ConfirmOverwrite func(paths []string) (bool, error)
 }
 
 // Output is the open transcript+audio file pair for a capture session.
@@ -107,15 +120,23 @@ type Output struct {
 	// TranscriptPath and AudioPath are the absolute output file paths.
 	TranscriptPath string
 	AudioPath      string
+	// AudioExisted reports whether AudioPath already existed before setupOutput
+	// opened it, so failed-capture cleanup never deletes a pre-existing file.
+	AudioExisted bool
 
 	mdFile  *os.File
 	mp3File *os.File
 }
 
 // setupOutput creates the output directory and files, writes the transcript
-// header, and returns the open Output. Generated names use O_EXCL to reject
-// collisions; an explicit FilePath replaces the destination on each run.
+// header, and returns the open Output. Both Dir and FilePath modes enforce the
+// same overwrite policy: existing files require Overwrite or ConfirmOverwrite
+// approval before any file is opened or truncated.
 func setupOutput(cfg OutputConfig) (*Output, error) {
+	return setupOutputWithFlushHook(cfg, nil)
+}
+
+func setupOutputWithFlushHook(cfg OutputConfig, flushHeader func(*transcript.Writer) error) (*Output, error) {
 	now := cfg.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -132,7 +153,6 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	var (
 		mdPath  string
 		mp3Path string
-		openFlg = os.O_CREATE | os.O_WRONLY | os.O_EXCL
 	)
 	if explicitFile != "" {
 		absFile, err := filepath.Abs(explicitFile)
@@ -150,9 +170,6 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		} else {
 			mp3Path = absFile + ".mp3"
 		}
-		// When an explicit output file path is requested (automation mode),
-		// truncate/overwrite if it already exists.
-		openFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	} else {
 		dir, err := filepath.Abs(cfg.Dir)
 		if err != nil {
@@ -176,9 +193,186 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		}
 	}
 
-	mdFile, err := os.OpenFile(mdPath, openFlg, filePerm)
+	checkTarget := func(p string) (os.FileInfo, bool, error) {
+		info, statErr := os.Lstat(p)
+		if statErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return nil, false, fmt.Errorf("capture: output path must not be a symlink: %s", p)
+			}
+			if info.IsDir() {
+				return nil, false, fmt.Errorf("capture: output path is a directory: %s", p)
+			}
+			if !info.Mode().IsRegular() {
+				return nil, false, fmt.Errorf("capture: output path is not a regular file: %s", p)
+			}
+			// Eagerly populate platform file identity (e.g. Windows volume/index IDs
+			// loaded lazily inside os.SameFile) before ConfirmOverwrite runs.
+			_ = os.SameFile(info, info)
+			return info, true, nil
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, false, fmt.Errorf("capture: stat %s: %w", p, statErr)
+		}
+		return nil, false, nil
+	}
+
+	mdPreInfo, mdExisted, err := checkTarget(mdPath)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		mp3PreInfo os.FileInfo
+		mp3Existed bool
+	)
+	if !cfg.CaptionsOnly {
+		mp3PreInfo, mp3Existed, err = checkTarget(mp3Path)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var existingPaths []string
+	if mdExisted {
+		existingPaths = append(existingPaths, mdPath)
+	}
+	if !cfg.CaptionsOnly && mp3Existed {
+		existingPaths = append(existingPaths, mp3Path)
+	}
+
+	if len(existingPaths) > 0 && !cfg.Overwrite {
+		if cfg.ConfirmOverwrite == nil {
+			return nil, fmt.Errorf("capture: target file already exists: %s: %w", existingPaths[0], os.ErrExist)
+		}
+		approved, confirmErr := cfg.ConfirmOverwrite(existingPaths)
+		if confirmErr != nil {
+			return nil, fmt.Errorf("capture: confirm overwrite: %w", confirmErr)
+		}
+		if !approved {
+			return nil, fmt.Errorf("%w: %s", ErrOverwriteDeclined, strings.Join(existingPaths, ", "))
+		}
+	}
+
+	openOutputFileNoTrunc := func(p string, preInfo os.FileInfo, existed bool) (*os.File, error) {
+		if !existed {
+			return os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
+		}
+		lstatInfo, lErr := os.Lstat(p)
+		if lErr != nil {
+			return nil, lErr
+		}
+		if lstatInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("output path must not be a symlink: %s", p)
+		}
+		if lstatInfo.IsDir() || !lstatInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("output path is not a regular file: %s", p)
+		}
+		if !os.SameFile(preInfo, lstatInfo) {
+			return nil, fmt.Errorf("output path changed before overwrite: %s", p)
+		}
+		f, openErr := os.OpenFile(p, os.O_RDWR, filePerm)
+		if openErr != nil {
+			return nil, openErr
+		}
+		fdInfo, fStatErr := f.Stat()
+		if fStatErr != nil || !os.SameFile(preInfo, fdInfo) || !os.SameFile(lstatInfo, fdInfo) {
+			_ = f.Close() // best-effort close after file-identity verification failed; identity error is returned
+			if fStatErr != nil {
+				return nil, fStatErr
+			}
+			return nil, fmt.Errorf("output file identity changed before truncation: %s", p)
+		}
+		return f, nil
+	}
+
+	backupToTemp := func(f *os.File, p string) (string, error) {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(p), ".go-teams-backup-*")
+		if err != nil {
+			return "", err
+		}
+		tmpPath := tmp.Name()
+		if _, copyErr := io.Copy(tmp, f); copyErr != nil {
+			_ = tmp.Close()        // best-effort close on backup copy failure; copyErr is returned
+			_ = os.Remove(tmpPath) // best-effort cleanup of incomplete temp backup
+			return "", copyErr
+		}
+		if closeErr := tmp.Close(); closeErr != nil {
+			_ = os.Remove(tmpPath) // best-effort cleanup of unclosed temp backup
+			return "", closeErr
+		}
+		if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+			_ = os.Remove(tmpPath) // best-effort cleanup when rewind fails
+			return "", seekErr
+		}
+		return tmpPath, nil
+	}
+
+	mdFile, err := openOutputFileNoTrunc(mdPath, mdPreInfo, mdExisted)
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
+	}
+	var mp3File *os.File
+	if !cfg.CaptionsOnly {
+		mp3File, err = openOutputFileNoTrunc(mp3Path, mp3PreInfo, mp3Existed)
+		if err != nil {
+			// Close mdFile before truncating it so an audio open failure leaves
+			// any pre-existing mdPath byte-for-byte untouched.
+			_ = mdFile.Close() // best-effort close on audio open failure; err is returned
+			if !mdExisted {
+				_ = os.Remove(mdPath) // best-effort removal of newly created empty transcript
+			}
+			return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)
+		}
+	}
+
+	var (
+		mdBackup    string
+		mdTruncated bool
+	)
+	cleanupBackup := func() {
+		if mdBackup != "" {
+			_ = os.Remove(mdBackup) // best-effort removal of unneeded temp backup
+			mdBackup = ""
+		}
+	}
+	rollbackPair := func(cause error) error {
+		var restoreErrs []error
+		if mdTruncated {
+			if rErr := restoreFromTemp(mdFile, mdBackup); rErr != nil {
+				restoreErrs = append(restoreErrs, fmt.Errorf("restore transcript (backup preserved at %s): %w", mdBackup, rErr))
+				mdBackup = "" // preserve backup on disk for manual recovery
+			} else {
+				mdBackup = ""
+			}
+		}
+		_ = mdFile.Close() // best-effort close on rollback; primary cause is returned
+		if !mdExisted {
+			_ = os.Remove(mdPath) // best-effort removal of newly created transcript
+		}
+		if mp3File != nil {
+			_ = mp3File.Close() // best-effort close on rollback; primary cause is returned
+			if !mp3Existed {
+				_ = os.Remove(mp3Path) // best-effort removal of newly created audio file
+			}
+		}
+		cleanupBackup()
+		if len(restoreErrs) > 0 {
+			return errors.Join(append([]error{cause}, restoreErrs...)...)
+		}
+		return cause
+	}
+
+	if mdExisted {
+		mdBackup, err = backupToTemp(mdFile, mdPath)
+		if err != nil {
+			return nil, rollbackPair(fmt.Errorf("capture: backup transcript %s: %w", mdPath, err))
+		}
+		mdTruncated = true
+		if truncErr := mdFile.Truncate(0); truncErr != nil {
+			return nil, rollbackPair(fmt.Errorf("capture: truncate transcript %s: %w", mdPath, truncErr))
+		}
 	}
 	w := transcript.NewWriter(mdFile)
 	if err := w.WriteHeader(transcript.Metadata{
@@ -191,20 +385,26 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		Attendees:    cfg.Attendees,
 		BotName:      cfg.BotName,
 	}); err != nil {
-		// Best-effort rollback of the partial transcript; the header-write
-		// error is the failure worth surfacing to the caller.
-		_ = mdFile.Close()
-		_ = os.Remove(mdPath)
-		return nil, fmt.Errorf("capture: write transcript header: %w", err)
+		// Best-effort rollback of newly created files or restoration of
+		// pre-existing transcript from backup.
+		return nil, rollbackPair(fmt.Errorf("capture: write transcript header: %w", err))
 	}
 	// Flush the header immediately so a physical write failure (e.g. a full
 	// filesystem) surfaces here and triggers rollback, rather than being
 	// deferred inside the bufio buffer until the first caption is written.
-	if err := w.Flush(); err != nil {
-		_ = mdFile.Close()
-		_ = os.Remove(mdPath)
-		return nil, fmt.Errorf("capture: flush transcript header: %w", err)
+	flushErr := w.Flush()
+	if flushErr == nil && flushHeader != nil {
+		flushErr = flushHeader(w)
 	}
+	if flushErr != nil {
+		return nil, rollbackPair(fmt.Errorf("capture: flush transcript header: %w", flushErr))
+	}
+	if mp3File != nil && mp3Existed {
+		if truncErr := mp3File.Truncate(0); truncErr != nil {
+			return nil, rollbackPair(fmt.Errorf("capture: truncate audio %s: %w", mp3Path, truncErr))
+		}
+	}
+	cleanupBackup()
 	if cfg.CaptionsOnly {
 		return &Output{
 			Transcript:     w,
@@ -213,22 +413,49 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			mdFile:         mdFile,
 		}, nil
 	}
-	mp3File, err := os.OpenFile(mp3Path, openFlg, filePerm)
-	if err != nil {
-		// Best-effort rollback so a failed pair leaves no partial artifacts;
-		// the audio-create error is the failure worth surfacing.
-		_ = mdFile.Close()
-		_ = os.Remove(mdPath)
-		return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)
-	}
 	return &Output{
 		Transcript:     w,
 		Audio:          mp3File,
 		TranscriptPath: mdPath,
 		AudioPath:      mp3Path,
+		AudioExisted:   mp3Existed,
 		mdFile:         mdFile,
 		mp3File:        mp3File,
 	}, nil
+}
+
+// restoreFromTemp restores f byte-for-byte from backupPath and removes
+// backupPath only after Sync succeeds. On any error, backupPath is preserved on
+// disk so the caller can surface its path for recovery.
+func restoreFromTemp(f *os.File, backupPath string) error {
+	if f == nil || backupPath == "" {
+		return nil
+	}
+	src, openErr := os.Open(backupPath)
+	if openErr != nil {
+		return openErr
+	}
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; seekErr is returned
+		return seekErr
+	}
+	if truncErr := f.Truncate(0); truncErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; truncErr is returned
+		return truncErr
+	}
+	if _, copyErr := io.Copy(f, src); copyErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; copyErr is returned
+		return copyErr
+	}
+	if syncErr := f.Sync(); syncErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; syncErr is returned
+		return syncErr
+	}
+	if closeErr := src.Close(); closeErr != nil {
+		return closeErr
+	}
+	_ = os.Remove(backupPath) // best-effort removal after verified restore+sync; original file is already intact
+	return nil
 }
 
 // Close flushes the buffered transcript and closes both files. Errors from each

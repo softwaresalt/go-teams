@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -36,10 +39,111 @@ type deps struct {
 	// writeTemplate writes the commented configuration template to path,
 	// replacing an existing file only when force is true.
 	writeTemplate func(path string, force bool) error
+	// promptCtx, promptIn, promptOut, promptTimeout, and promptMu preserve the
+	// outer command's interactive I/O streams safely across --queue and
+	// schedule execution.
+	promptCtx     context.Context
+	promptIn      io.Reader
+	promptOut     io.Writer
+	promptTimeout time.Duration
+	promptMu      sync.Mutex
+}
+
+func bindPromptStreams(cmd *cobra.Command, d *deps) {
+	if cmd == nil || d == nil || isInsideQueueExecution(cmd.Context()) {
+		return
+	}
+	d.promptCtx = cmd.Context()
+	d.promptIn = cmd.InOrStdin()
+	d.promptOut = cmd.ErrOrStderr()
+}
+
+func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, paths []string) (bool, error) {
+	return promptOverwriteApprovalWithRelease(ctx, in, out, paths, nil)
+}
+
+func promptOverwriteApprovalWithRelease(ctx context.Context, in io.Reader, out io.Writer, paths []string, release func()) (bool, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			if release != nil {
+				release()
+			}
+			return false, err
+		}
+	}
+	if in == nil {
+		in = os.Stdin
+	}
+	if out == nil {
+		out = os.Stderr
+	}
+	if _, err := fmt.Fprintf(out, "File already exists: %s\nOverwrite? (Y)es | (N)o: ", strings.Join(paths, ", ")); err != nil {
+		if release != nil {
+			release()
+		}
+		return false, err
+	}
+	type readResult struct {
+		line string
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := readPromptLine(in)
+		if release != nil {
+			release()
+		}
+		ch <- readResult{line: line, err: err}
+	}()
+	var res readResult
+	if ctx != nil && ctx.Done() != nil {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case res = <-ch:
+		}
+	} else {
+		res = <-ch
+	}
+	if res.err != nil && !errors.Is(res.err, io.EOF) {
+		return false, res.err
+	}
+	switch strings.ToLower(strings.TrimSpace(res.line)) {
+	case "y", "yes", "(y)es":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+// readPromptLine reads up to one newline-terminated line byte-by-byte so
+// buffered lookahead never consumes answers intended for subsequent --queue
+// prompts. Bytes beyond maxPromptLineBytes are drained through the end of the
+// line so trailing characters never leak into the next prompt.
+func readPromptLine(in io.Reader) (string, error) {
+	const maxPromptLineBytes = 4096
+	var (
+		buf [1]byte
+		out strings.Builder
+	)
+	for {
+		n, err := in.Read(buf[:])
+		if n > 0 {
+			if buf[0] == '\n' {
+				return out.String(), nil
+			}
+			if out.Len() < maxPromptLineBytes {
+				out.WriteByte(buf[0])
+			}
+		}
+		if err != nil {
+			return out.String(), err
+		}
+	}
 }
 
 func defaultDeps() *deps {
-	return &deps{
+	d := &deps{
 		loadConfig:    config.Load,
 		runUpdate:     defaultRunUpdate,
 		writeTemplate: config.WriteTemplate,
@@ -47,25 +151,56 @@ func defaultDeps() *deps {
 			return browser.NewChromeRunner(browserOptions(c))
 		},
 		newMeeting: defaultNewMeeting,
-		newSession: func(c config.Config, meetingURL string) meetingSession {
-			dur, _ := parseOptionalDuration(c.Duration)
-			idle, _ := parseOptionalDuration(c.IdleTimeout)
-			return capture.NewSession(capture.SessionConfig{
-				OutputDir:        c.OutputDir,
-				OutputFile:       c.OutputFile,
-				FilenameTemplate: c.FilenameTemplate,
-				MeetingURL:       meetingURL,
-				MeetingTitle:     c.MeetingTitle,
-				Category:         c.Category,
-				BotName:          c.BotName,
-				CaptionsOnly:     !c.CaptureAudio,
-				Mode:             c.CaptureMode,
-				Duration:         dur,
-				IdleTimeout:      idle,
-				DisableAISummary: isAISummaryDisabled(c),
-			})
-		},
 	}
+	d.newSession = func(c config.Config, meetingURL string) meetingSession {
+		dur, _ := parseOptionalDuration(c.Duration)
+		idle, _ := parseOptionalDuration(c.IdleTimeout)
+		var (
+			confirmOverwrite    func([]string) (bool, error)
+			confirmOverwriteCtx func(context.Context, []string) (bool, error)
+		)
+		if !c.Overwrite {
+			confirmOverwriteCtx = func(sessCtx context.Context, paths []string) (bool, error) {
+				if !d.promptMu.TryLock() {
+					return false, errors.New("cli: prompt stream busy after cancelled prompt")
+				}
+				effectiveCtx := sessCtx
+				if effectiveCtx == nil {
+					effectiveCtx = d.promptCtx
+				}
+				if effectiveCtx == nil {
+					effectiveCtx = context.Background()
+				}
+				if d.promptTimeout > 0 {
+					var cancel context.CancelFunc
+					effectiveCtx, cancel = context.WithTimeout(effectiveCtx, d.promptTimeout)
+					defer cancel()
+				}
+				return promptOverwriteApprovalWithRelease(effectiveCtx, d.promptIn, d.promptOut, paths, d.promptMu.Unlock)
+			}
+			confirmOverwrite = func(paths []string) (bool, error) {
+				return confirmOverwriteCtx(d.promptCtx, paths)
+			}
+		}
+		return capture.NewSession(capture.SessionConfig{
+			OutputDir:                   c.OutputDir,
+			OutputFile:                  c.OutputFile,
+			FilenameTemplate:            c.FilenameTemplate,
+			MeetingURL:                  meetingURL,
+			MeetingTitle:                c.MeetingTitle,
+			Category:                    c.Category,
+			BotName:                     c.BotName,
+			CaptionsOnly:                !c.CaptureAudio,
+			Overwrite:                   c.Overwrite,
+			ConfirmOverwrite:            confirmOverwrite,
+			ConfirmOverwriteWithContext: confirmOverwriteCtx,
+			Mode:                        c.CaptureMode,
+			Duration:                    dur,
+			IdleTimeout:                 idle,
+			DisableAISummary:            isAISummaryDisabled(c),
+		})
+	}
+	return d
 }
 
 // defaultRunUpdate runs the production updater against GitHub Releases.
@@ -174,6 +309,7 @@ func newRootCommand(d *deps) *cobra.Command {
 		Version:      version.Version,
 		Args:         cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			bindPromptStreams(cmd, d)
 			if flags.queueFile != "" {
 				if isInsideQueueExecution(cmd.Context()) {
 					return errors.New("cli: nested --queue flag is not allowed")

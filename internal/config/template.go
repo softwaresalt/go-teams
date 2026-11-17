@@ -88,6 +88,12 @@ const templateYAML = `# go-teams configuration file
 # and fills the <category> placeholder.
 # category: "TEAM"
 
+# Replace existing transcript (.md) and audio (.mp3) files without prompting
+# when true; when false (the default), go-teams prompts "(Y)es | (N)o" before
+# overwriting an existing file.
+#   Alias: file_overwrite
+# overwrite: false
+
 # ---------------------------------------------------------------------------
 # What to capture
 # ---------------------------------------------------------------------------
@@ -158,7 +164,8 @@ const templateYAML = `# go-teams configuration file
 #   at    one-time local time "2026-11-15 14:00" or an RFC 3339 timestamp
 # Optional per-meeting settings: mode (alias: capture_mode), duration,
 # idle_timeout, ai_summary_delay, lobby_timeout, category, capture_audio
-# (alias: audio), and output_dir. They override the global settings above.
+# (alias: audio), overwrite (alias: file_overwrite), and output_dir. They
+# override the global settings above.
 # meetings:
 #   - name: "Daily Standup"
 #     url: "https://teams.microsoft.com/meet/synthetic-standup"
@@ -170,6 +177,7 @@ const templateYAML = `# go-teams configuration file
 #     lobby_timeout: "5m"
 #     category: "TEAM"
 #     capture_audio: false
+#     overwrite: false
 #   - name: "Architecture Review"
 #     url: "https://teams.microsoft.com/meet/synthetic-review"
 #     at: "2026-11-15 14:00"

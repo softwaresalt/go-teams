@@ -3,7 +3,7 @@ type: compound-learning
 category: workflow-issues
 date: 2026-11-16
 tags: [ci, github-actions, windows, pwsh, powershell, go-test, coverage]
-evidence: PR #78 (032-S) Anchor Review Round 1 + CI run 44005115860 on windows-latest
+evidence: "PR #78 (032-S) Anchor Review Round 1 + CI run 44005115860 on windows-latest"
 ---
 
 # PowerShell splits unquoted dotted Go flags on windows-latest runners

@@ -424,6 +424,44 @@ func hasSpecificMeetingOrRecapTarget(meetingURL string) bool {
 	return id.ThreadID != "" || id.MeetingToken != "" || id.DriveItemID != "" || id.CallID != "" || id.ICalUID != "" || id.RecordingName != "" || id.MeetID != ""
 }
 
+func hasRecordingSpecificIdentity(id MeetingIdentity) bool {
+	return id.ThreadID != "" ||
+		id.MeetingToken != "" ||
+		id.DriveItemID != "" ||
+		id.CallID != "" ||
+		id.ICalUID != "" ||
+		id.RecordingName != "" ||
+		id.MeetID != ""
+}
+
+func canonicalStreamTargetMatch(meetingURL, pageURL string) bool {
+	mu, err1 := url.Parse(strings.TrimSpace(meetingURL))
+	pu, err2 := url.Parse(strings.TrimSpace(pageURL))
+	if err1 != nil || err2 != nil {
+		return strings.TrimRight(strings.ToLower(pageURL), "/") == strings.TrimRight(strings.ToLower(meetingURL), "/")
+	}
+	if !strings.EqualFold(mu.Scheme, pu.Scheme) ||
+		!strings.EqualFold(mu.Host, pu.Host) ||
+		strings.TrimRight(strings.ToLower(mu.Path), "/") != strings.TrimRight(strings.ToLower(pu.Path), "/") {
+		return false
+	}
+	mq := mu.Query()
+	pq := pu.Query()
+	for _, key := range []string{"id", "UniqueId", "driveId"} {
+		if want := strings.TrimSpace(mq.Get(key)); want != "" {
+			got := strings.TrimSpace(pq.Get(key))
+			if key == "id" {
+				if got != want {
+					return false
+				}
+			} else if !strings.EqualFold(got, want) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 	if !hasSpecificMeetingOrRecapTarget(meetingURL) {
 		return true
@@ -441,16 +479,11 @@ func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 	switch {
 	case strings.Contains(lowerMeeting, "meetingrecap"):
 		return strings.Contains(combined, "meetingrecap")
-	case strings.Contains(lowerMeeting, "stream.aspx"):
-		if exp != (MeetingIdentity{}) {
+	case strings.Contains(lowerMeeting, "stream.aspx"), strings.Contains(lowerMeeting, "streamembed.aspx"):
+		if hasRecordingSpecificIdentity(exp) {
 			return false
 		}
-		return strings.Contains(combined, "stream.aspx")
-	case strings.Contains(lowerMeeting, "streamembed.aspx"):
-		if exp != (MeetingIdentity{}) {
-			return false
-		}
-		return strings.Contains(combined, "streamembed.aspx")
+		return canonicalStreamTargetMatch(meetingURL, pageURL)
 	case strings.Contains(lowerMeeting, "meetup-join"):
 		return strings.Contains(combined, "meetup-join")
 	case strings.Contains(lowerMeeting, "/meet/"):

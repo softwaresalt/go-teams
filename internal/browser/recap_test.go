@@ -4358,6 +4358,8 @@ const copyJS = fs.readFileSync(0, 'utf8');
     closest: (sel) => sel === '.fai-CopilotMessage' ? msgEl : null
   };
 
+  let promptMounted = false;
+  copilotOpen = true;
   globalThis.document = {
     documentElement: { dataset: {} },
     querySelector: (sel) => {
@@ -4368,7 +4370,7 @@ const copyJS = fs.readFileSync(0, 'utf8');
     },
     querySelectorAll: (sel) => {
       if (sel === '.fai-CopilotMessage') return summaryReady ? [preExistingMsg, msgEl] : [preExistingMsg];
-      if (sel.includes('PromptStarter')) return copilotOpen ? (summaryReady ? [sentPromptBubble] : [recapBtn]) : [];
+      if (sel.includes('PromptStarter')) return (copilotOpen && promptMounted) ? (summaryReady ? [sentPromptBubble] : [recapBtn]) : [];
       if (sel.includes('.fai-CopilotMessage__actions')) return summaryReady ? [preExistingCopyBtn, spCopyBtn] : [preExistingCopyBtn];
       return [];
     },
@@ -4376,6 +4378,15 @@ const copyJS = fs.readFileSync(0, 'utf8');
     removeEventListener: () => {}
   };
   globalThis.navigator = {};
+
+  const preClickNoPromptPoll = await eval(copyJS);
+  if (preClickNoPromptPoll !== '') {
+    throw new Error('expected empty summary before recap prompt mounts/clicks even with preexisting message, got: ' + JSON.stringify(preClickNoPromptPoll));
+  }
+
+  copilotOpen = false;
+  promptMounted = true;
+  copilotClicks = 0;
 
   const poll1 = await eval(copyJS);
   if (poll1 !== '') {
@@ -4453,11 +4464,22 @@ const copyJS = fs.readFileSync(0, 'utf8');
 		otherStreamURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FOther-20261116.mp4"
 		assert.False(t, isOnTargetMeetingOrRecapURL(streamURL, otherStreamURL, "/personal/u/_layouts/15/stream.aspx", ""), "conflicting RecordingName must be rejected")
 
-		// Verify % and # characters in query-encoded server-relative ?id= paths are preserved without double decoding.
+		// Verify opaque-id stream URL matching requires canonical URL/id match and preserves driveId-only exact match.
+		opaqueURL1 := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=111"
+		opaqueURL2 := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=222"
+		assert.False(t, isOnTargetMeetingOrRecapURL(opaqueURL1, opaqueURL2, "/personal/u/_layouts/15/stream.aspx", ""), "distinct opaque ?id= stream URLs must not match")
+		assert.True(t, isOnTargetMeetingOrRecapURL(opaqueURL1, opaqueURL1+"&ga=1", "/personal/u/_layouts/15/stream.aspx", ""), "same opaque ?id= stream URL with extra params must match")
+		driveOnlyURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?driveId=b%21123&id=111"
+		assert.True(t, isOnTargetMeetingOrRecapURL(driveOnlyURL, driveOnlyURL, "/personal/u/_layouts/15/stream.aspx", ""), "exact requested URL with driveId-only identity must match")
+
+		// Verify % and # characters in query-encoded server-relative ?id= paths are preserved without double decoding,
+		// and relative fileUrl values like /Recordings/Sync.mp4?web=1 still extract RecordingName.
 		pctURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2F100%25%20Sync.mp4"
 		assert.Equal(t, "100% sync.mp4", ExtractMeetingIdentity(pctURL).RecordingName)
 		hashURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FQ4%20%231.mp4"
 		assert.Equal(t, "q4 #1.mp4", ExtractMeetingIdentity(hashURL).RecordingName)
+		relFileURL := "https://teams.microsoft.com/l/meetingrecap?fileUrl=%2FRecordings%2FSync.mp4%3Fweb%3D1"
+		assert.Equal(t, "sync.mp4", ExtractMeetingIdentity(relFileURL).RecordingName)
 
 		// F-2 & %/# preservation in JS checkIdentityAgainst + no-activity fast-fail when only EncKey is present.
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

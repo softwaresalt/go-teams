@@ -102,16 +102,16 @@ const extractRecapAudioJS = `(async () => {
 					if (paramKey === 'id' && !/\.(mp4|mkv|webm|mov|m4a)(?:$|[?#])/i.test(String(value || ''))) continue;
 					let filePath = '';
 					let alreadyDecoded = false;
-					if (/^https?:\/\//i.test(value)) {
+					if (paramKey === 'id' && !/^https?:\/\//i.test(value)) {
+						filePath = String(value || '');
+						alreadyDecoded = true;
+					} else {
 						try {
-							filePath = new URL(value).pathname;
+							filePath = new URL(value, baseUrl).pathname;
 						} catch (_) {
 							if (paramKey === 'fileUrl') throw new Error('recap audio recording identity mismatch');
 							continue;
 						}
-					} else {
-						filePath = String(value || '');
-						alreadyDecoded = true;
 					}
 					if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
 						const rawName = filePath.split('/').pop();
@@ -2298,12 +2298,10 @@ func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
 	for _, key := range []string{"fileUrl", "id"} {
 		if v := strings.TrimSpace(vals.Get(key)); v != "" && id.RecordingName == "" {
 			var p string
-			if strings.Contains(v, "://") {
-				if fu, err := url.Parse(v); err == nil {
-					p = fu.Path
-				}
-			} else {
+			if key == "id" && !strings.Contains(v, "://") {
 				p = v
+			} else if fu, err := url.Parse(v); err == nil {
+				p = fu.Path
 			}
 			if p != "" && !strings.Contains(p, "/:") {
 				base := path.Base(p)
@@ -2478,8 +2476,8 @@ const copyAISummaryJS = `(async () => {
 						if (existingMsg && existingMsg.dataset) existingMsg.dataset.goTeamsPreexisting = 'true';
 					}
 					recapBtn.click();
-					return '';
 				}
+				return '';
 			}
 			const spCopyBtns = Array.from(document.querySelectorAll('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]') || []);
 			const freshCopyBtns = spCopyBtns.filter(btn => {

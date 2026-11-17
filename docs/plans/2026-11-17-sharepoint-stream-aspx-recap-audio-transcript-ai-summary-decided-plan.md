@@ -29,5 +29,5 @@ archived_source_plan: docs/archive/plans/2026-11-17/2026-11-17-sharepoint-stream
 1. Zero external media binaries (`ffmpeg`, `yt-dlp`) or CGO (`go.mod` unchanged); chunked CDP PCM pulls preserved.
 2. Same-origin `https:` validation on all `PerformanceResourceTiming` URLs and non-extractable in-memory `CryptoKey` import for `g_fileInfo.EncKey`.
 3. Strict `track !== 'video'` isolation for `transcodeWsd`, `transcodePpd`, and `transcodeAudioTemplateUrl`.
-4. Conflict-checked `RecordingName` / canonical URL isolation preventing cross-recording contamination.
+4. Conflict-checked `RecordingName` basename matching and canonical URL isolation (with full normalized path/origin isolation deferred under `E03CB3C3`).
 5. `TestCopyAISummaryJSStructure` invariant preserved (`aria-label*="Copy"` never introduced).

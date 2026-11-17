@@ -142,7 +142,7 @@ with the verbose original archived under `docs/archive/plans/2026-11-17/`.
 
 ## Releasability evidence
 
-* **Invariants preserved**: Zero external binaries or CGO (`go.mod` unchanged); same-origin `https:` validation on `PerformanceResourceTiming` entries and non-extractable WebCrypto `AES-CBC` key import; `track !== 'video'` `wsd`/`ppd` isolation; conflict-checked `RecordingName` and case-insensitive canonical URL matching; `TestCopyAISummaryJSStructure` intact; zero unredacted URLs, passcodes, or tokens in tracked files.
+* **Invariants preserved**: Zero external binaries or CGO (`go.mod` unchanged); same-origin `https:` validation on `PerformanceResourceTiming` entries and non-extractable WebCrypto `AES-CBC` key import; `track !== 'video'` `wsd`/`ppd` isolation; conflict-checked `RecordingName` basename matching and case-insensitive canonical URL matching (full normalized path/origin isolation deferred under `E03CB3C3`); `TestCopyAISummaryJSStructure` intact; zero unredacted URLs, passcodes, or tokens in tracked files.
 * **Rollout and rollback**: Code, tests, docs, and closure artifacts on `main`. Rollback via `git revert -m 1 dc11b50a6c315c8afabe18f90d2d2978d69ba384`.
 * **Monitoring and validation window (7 days, owner: `softwaresalt`)**:
   * **Healthy signals**: 100% pass rate on `CI` (`Detect code changes`, `Detect CLI-affecting changes`, `Build, vet, lint & test (Windows)`), `go test -race ./...`, and live `-tags=integration` browser and CLI tests on `stream.aspx` with valid `.md`, `# AI Summary`, and `.mp3`.

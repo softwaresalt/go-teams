@@ -59,8 +59,15 @@ func bindPromptStreams(cmd *cobra.Command, d *deps) {
 }
 
 func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, paths []string) (bool, error) {
+	return promptOverwriteApprovalWithRelease(ctx, in, out, paths, nil)
+}
+
+func promptOverwriteApprovalWithRelease(ctx context.Context, in io.Reader, out io.Writer, paths []string, release func()) (bool, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
+			if release != nil {
+				release()
+			}
 			return false, err
 		}
 	}
@@ -71,6 +78,9 @@ func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, p
 		out = os.Stderr
 	}
 	if _, err := fmt.Fprintf(out, "File already exists: %s\nOverwrite? (Y)es | (N)o: ", strings.Join(paths, ", ")); err != nil {
+		if release != nil {
+			release()
+		}
 		return false, err
 	}
 	type readResult struct {
@@ -80,6 +90,9 @@ func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, p
 	ch := make(chan readResult, 1)
 	go func() {
 		line, err := readPromptLine(in)
+		if release != nil {
+			release()
+		}
 		ch <- readResult{line: line, err: err}
 	}()
 	var res readResult
@@ -151,7 +164,6 @@ func defaultDeps() *deps {
 				if !d.promptMu.TryLock() {
 					return false, errors.New("cli: prompt stream busy after cancelled prompt")
 				}
-				defer d.promptMu.Unlock()
 				effectiveCtx := sessCtx
 				if effectiveCtx == nil {
 					effectiveCtx = d.promptCtx
@@ -164,7 +176,7 @@ func defaultDeps() *deps {
 					effectiveCtx, cancel = context.WithTimeout(effectiveCtx, d.promptTimeout)
 					defer cancel()
 				}
-				return promptOverwriteApproval(effectiveCtx, d.promptIn, d.promptOut, paths)
+				return promptOverwriteApprovalWithRelease(effectiveCtx, d.promptIn, d.promptOut, paths, d.promptMu.Unlock)
 			}
 			confirmOverwrite = func(paths []string) (bool, error) {
 				return confirmOverwriteCtx(d.promptCtx, paths)

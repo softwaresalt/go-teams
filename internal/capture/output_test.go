@@ -571,6 +571,32 @@ func TestSetupOutputOverwriteAndConfirmPrompt(t *testing.T) {
 		if _, statErr := os.Stat(freshMD); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("newly created mdPath should be removed on post-open rollback, statErr=%v", statErr)
 		}
+
+		// When mdPath and mp3Path both pre-exist as regular files and mp3Path is
+		// read-only (open fails after checkTarget), pre-existing mdPath must not
+		// be truncated or deleted.
+		roDir := t.TempDir()
+		roMD := filepath.Join(roDir, "ro.md")
+		roMP3 := filepath.Join(roDir, "ro.mp3")
+		if err := os.WriteFile(roMD, []byte("keep md intact"), 0o600); err != nil {
+			t.Fatalf("seed roMD: %v", err)
+		}
+		if err := os.WriteFile(roMP3, []byte("keep mp3 intact"), 0o400); err != nil {
+			t.Fatalf("seed roMP3: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(roMP3, 0o600) })
+		if _, err := setupOutput(OutputConfig{
+			FilePath:   roMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  true,
+		}); err != nil {
+			mdBytes, _ := os.ReadFile(roMD)
+			if string(mdBytes) != "keep md intact" {
+				t.Fatalf("pre-existing mdPath was truncated on mp3 open failure: %q", string(mdBytes))
+			}
+		}
 	})
 
 	t.Run("Session.Run 0-byte audio cleanup preserves pre-existing mp3 and removes newly created 0-byte mp3", func(t *testing.T) {

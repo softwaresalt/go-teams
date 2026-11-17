@@ -201,6 +201,9 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			if !info.Mode().IsRegular() {
 				return nil, false, fmt.Errorf("capture: output path is not a regular file: %s", p)
 			}
+			// Eagerly populate platform file identity (e.g. Windows volume/index IDs
+			// loaded lazily inside os.SameFile) before ConfirmOverwrite runs.
+			_ = os.SameFile(info, info)
 			return info, true, nil
 		}
 		if !errors.Is(statErr, os.ErrNotExist) {
@@ -245,7 +248,7 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		}
 	}
 
-	openOutputFile := func(p string, preInfo os.FileInfo, existed bool) (*os.File, error) {
+	openOutputFileNoTrunc := func(p string, preInfo os.FileInfo, existed bool) (*os.File, error) {
 		if !existed {
 			return os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
 		}
@@ -274,16 +277,49 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			}
 			return nil, fmt.Errorf("output file identity changed before truncation: %s", p)
 		}
-		if truncErr := f.Truncate(0); truncErr != nil {
-			_ = f.Close()
-			return nil, truncErr
-		}
 		return f, nil
 	}
 
-	mdFile, err := openOutputFile(mdPath, mdPreInfo, mdExisted)
+	mdFile, err := openOutputFileNoTrunc(mdPath, mdPreInfo, mdExisted)
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
+	}
+	var mp3File *os.File
+	if !cfg.CaptionsOnly {
+		mp3File, err = openOutputFileNoTrunc(mp3Path, mp3PreInfo, mp3Existed)
+		if err != nil {
+			// Close mdFile before truncating it so an audio open failure leaves
+			// any pre-existing mdPath byte-for-byte untouched.
+			_ = mdFile.Close()
+			if !mdExisted {
+				_ = os.Remove(mdPath)
+			}
+			return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)
+		}
+	}
+	rollbackPair := func() {
+		_ = mdFile.Close()
+		if !mdExisted {
+			_ = os.Remove(mdPath)
+		}
+		if mp3File != nil {
+			_ = mp3File.Close()
+			if !mp3Existed {
+				_ = os.Remove(mp3Path)
+			}
+		}
+	}
+	if mdExisted {
+		if truncErr := mdFile.Truncate(0); truncErr != nil {
+			rollbackPair()
+			return nil, fmt.Errorf("capture: truncate transcript %s: %w", mdPath, truncErr)
+		}
+	}
+	if mp3File != nil && mp3Existed {
+		if truncErr := mp3File.Truncate(0); truncErr != nil {
+			rollbackPair()
+			return nil, fmt.Errorf("capture: truncate audio %s: %w", mp3Path, truncErr)
+		}
 	}
 	w := transcript.NewWriter(mdFile)
 	if err := w.WriteHeader(transcript.Metadata{
@@ -296,22 +332,16 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		Attendees:    cfg.Attendees,
 		BotName:      cfg.BotName,
 	}); err != nil {
-		// Best-effort rollback of a newly created transcript; never remove a
+		// Best-effort rollback of newly created files; never remove a
 		// pre-existing file pathname.
-		_ = mdFile.Close()
-		if !mdExisted {
-			_ = os.Remove(mdPath)
-		}
+		rollbackPair()
 		return nil, fmt.Errorf("capture: write transcript header: %w", err)
 	}
 	// Flush the header immediately so a physical write failure (e.g. a full
 	// filesystem) surfaces here and triggers rollback, rather than being
 	// deferred inside the bufio buffer until the first caption is written.
 	if err := w.Flush(); err != nil {
-		_ = mdFile.Close()
-		if !mdExisted {
-			_ = os.Remove(mdPath)
-		}
+		rollbackPair()
 		return nil, fmt.Errorf("capture: flush transcript header: %w", err)
 	}
 	if cfg.CaptionsOnly {
@@ -321,16 +351,6 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			TranscriptPath: mdPath,
 			mdFile:         mdFile,
 		}, nil
-	}
-	mp3File, err := openOutputFile(mp3Path, mp3PreInfo, mp3Existed)
-	if err != nil {
-		// Best-effort rollback so a failed pair leaves no newly created partial
-		// artifacts; never remove a pre-existing mdPath.
-		_ = mdFile.Close()
-		if !mdExisted {
-			_ = os.Remove(mdPath)
-		}
-		return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)
 	}
 	return &Output{
 		Transcript:     w,

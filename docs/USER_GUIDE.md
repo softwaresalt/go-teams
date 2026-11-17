@@ -550,8 +550,12 @@ releases as soon as the live call ends, before any delayed
 `--ai-summary-delay` AI Summary fetch, so the next meeting is not blocked. When
 `queue_file` is configured, the daemon sweeps it at startup and runs pending
 entries, skipping `--not-before` entries whose timestamp is still in the
-future. On shutdown the daemon allows a 15-second graceful window. A scheduled
-entry without a `duration` uses a nominal 1-hour duration.
+future. On shutdown the daemon allows a 15-second graceful window. When
+`overwrite` is `false` (the default) and a target file already exists, any
+interactive `(Y)es | (N)o` overwrite confirmation prompt is bounded to 15
+seconds so an unattended schedule releases the `busy` gate (a closed stdin
+stream declines immediately). A scheduled entry without a `duration` uses a
+nominal 1-hour duration.
 
 #### Schedule configuration and flag precedence
 

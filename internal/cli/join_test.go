@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -311,5 +312,51 @@ func TestCLIJoinInteractiveOverwritePromptAndDecline(t *testing.T) {
 		assert.Equal(t, "keep original", string(data))
 		qData, _ := os.ReadFile(queuePath)
 		assert.NotContains(t, string(qData), "::"+queueLine, "cancelled queue line must remain uncommented")
+	})
+
+	t.Run("stuck cancelled prompt keeps promptMu held against concurrent queue prompt", func(t *testing.T) {
+		dir := t.TempDir()
+		target1 := filepath.Join(dir, "one.md")
+		target2 := filepath.Join(dir, "two.md")
+		require.NoError(t, os.WriteFile(target1, []byte("keep 1"), 0o600))
+		require.NoError(t, os.WriteFile(target2, []byte("keep 2"), 0o600))
+
+		pr, pw := io.Pipe()
+		t.Cleanup(func() {
+			_ = pw.Close()
+			_ = pr.Close()
+		})
+
+		d := setupDeps(t)
+		var callCount int
+		d.newMeeting = func(ctx context.Context, _ config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			callCount++
+			if callCount == 1 {
+				bCtx, bCancel := context.WithTimeout(ctx, 25*time.Millisecond)
+				return fakeCLIOverwriteMeeting{}, bCtx, bCancel, nil
+			}
+			return fakeCLIOverwriteMeeting{}, ctx, func() {}, nil
+		}
+
+		queuePath := filepath.Join(dir, "queue.txt")
+		queueBody := url + " -o " + quoteQueueArg(target1) + "\n" +
+			url + " -o " + quoteQueueArg(target2) + "\n"
+		require.NoError(t, os.WriteFile(queuePath, []byte(queueBody), 0o600))
+
+		root := newRootCommand(d)
+		var errBuf bytes.Buffer
+		root.SetIn(pr)
+		root.SetOut(io.Discard)
+		root.SetErr(&errBuf)
+		root.SetArgs([]string{"join", "--queue", queuePath})
+
+		err := root.ExecuteContext(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "prompt stream busy after cancelled prompt")
+
+		data1, _ := os.ReadFile(target1)
+		data2, _ := os.ReadFile(target2)
+		assert.Equal(t, "keep 1", string(data1))
+		assert.Equal(t, "keep 2", string(data2))
 	})
 }

@@ -319,7 +319,10 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"from an ephemeral-live base (for example to live-with-summary) does not restore an earlier\n" +
 			"ai_summary_delay or capture_audio value. To override the normalized base, set\n" +
 			"explicit per-meeting ai_summary_delay and capture_audio values on that entry.\n\n" +
-			"Stop the daemon with Ctrl+C; in-flight captures get up to 15 seconds to release their browsers.",
+			"Stop the daemon with Ctrl+C; in-flight captures get up to 15 seconds to release their browsers.\n" +
+			"When overwrite is false (the default) and a target file already exists, any interactive\n" +
+			"(Y)es | (N)o overwrite prompt is bounded to 15 seconds so unattended schedules release the\n" +
+			"busy gate (closed stdin declines immediately).",
 		Example: "  go-teams schedule --config config.yaml --headless\n" +
 			"  go-teams schedule --mode live-with-summary --duration 30m --ai-summary-delay 30m --profile-dir \"%LOCALAPPDATA%\\go-teams\\profile\"\n" +
 			"  go-teams schedule --mode ephemeral-live --audio=false --headless",

@@ -626,6 +626,82 @@ func TestSetupOutputOverwriteAndConfirmPrompt(t *testing.T) {
 			t.Fatalf("newly created 0-byte audio file should be removed on audioErr, statErr=%v", statErr)
 		}
 	})
+
+	t.Run("setupOutput rejects symlink targets and leaves symlink target untouched", func(t *testing.T) {
+		dir := t.TempDir()
+		outside := filepath.Join(dir, "outside.md")
+		if err := os.WriteFile(outside, []byte("secret outside content"), 0o600); err != nil {
+			t.Fatalf("seed outside: %v", err)
+		}
+		linkPath := filepath.Join(dir, "link.md")
+		if err := os.Symlink(outside, linkPath); err != nil {
+			t.Skipf("symlinks not supported on this host: %v", err)
+		}
+
+		_, err := setupOutput(OutputConfig{
+			FilePath:     linkPath,
+			MeetingURL:   url,
+			BotName:      "Bot",
+			Now:          fixedTime(),
+			CaptionsOnly: true,
+			Overwrite:    true,
+		})
+		if err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("expected symlink error, got %v", err)
+		}
+		got, readErr := os.ReadFile(outside)
+		if readErr != nil {
+			t.Fatalf("read outside: %v", readErr)
+		}
+		if string(got) != "secret outside content" {
+			t.Fatalf("symlink target was modified: %q", string(got))
+		}
+	})
+
+	t.Run("Session.Run unblocks ConfirmOverwrite on ctx cancel and preserves existing file", func(t *testing.T) {
+		dir := t.TempDir()
+		mdPath := filepath.Join(dir, "cancel.md")
+		if err := os.WriteFile(mdPath, []byte("keep on cancel"), 0o600); err != nil {
+			t.Fatalf("seed md: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		promptStarted := make(chan struct{})
+		releasePrompt := make(chan struct{})
+		t.Cleanup(func() { close(releasePrompt) })
+
+		s := NewSession(SessionConfig{
+			OutputFile:   mdPath,
+			MeetingURL:   url,
+			BotName:      "Bot",
+			Now:          fixedTime(),
+			CaptionsOnly: true,
+			ConfirmOverwrite: func([]string) (bool, error) {
+				close(promptStarted)
+				<-releasePrompt
+				return true, nil
+			},
+		})
+		s.now = fixedTime
+		fm := &fakeMeeting{}
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- s.Run(ctx, fm)
+		}()
+		<-promptStarted
+		cancel()
+
+		if runErr := <-errCh; runErr != nil {
+			t.Fatalf("cancelled ConfirmOverwrite in Session.Run should exit gracefully, got %v", runErr)
+		}
+		got, readErr := os.ReadFile(mdPath)
+		if readErr != nil {
+			t.Fatalf("read md: %v", readErr)
+		}
+		if string(got) != "keep on cancel" {
+			t.Fatalf("existing file modified after ctx cancel: %q", string(got))
+		}
+	})
 }
 
 func TestSetupOutputRejectsHardLinkedTranscriptAndAudioAlias(t *testing.T) {

@@ -2,7 +2,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -75,7 +74,7 @@ func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, p
 	}
 	ch := make(chan readResult, 1)
 	go func() {
-		line, err := bufio.NewReader(in).ReadString('\n')
+		line, err := readPromptLine(in)
 		ch <- readResult{line: line, err: err}
 	}()
 	var res readResult
@@ -96,6 +95,32 @@ func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, p
 		return true, nil
 	default:
 		return false, nil
+	}
+}
+
+// readPromptLine reads up to one newline-terminated line byte-by-byte so
+// buffered lookahead never consumes answers intended for subsequent --queue
+// prompts.
+func readPromptLine(in io.Reader) (string, error) {
+	const maxPromptLineBytes = 4096
+	var (
+		buf [1]byte
+		out strings.Builder
+	)
+	for {
+		n, err := in.Read(buf[:])
+		if n > 0 {
+			if buf[0] == '\n' {
+				return out.String(), nil
+			}
+			out.WriteByte(buf[0])
+			if out.Len() >= maxPromptLineBytes {
+				return out.String(), nil
+			}
+		}
+		if err != nil {
+			return out.String(), err
+		}
 	}
 }
 

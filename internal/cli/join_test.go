@@ -242,23 +242,29 @@ func TestCLIJoinInteractiveOverwritePromptAndDecline(t *testing.T) {
 
 	t.Run("--queue preserves outer prompt streams across executeQueueLine", func(t *testing.T) {
 		dir := t.TempDir()
-		target := filepath.Join(dir, "queued.md")
-		require.NoError(t, os.WriteFile(target, []byte("queued original"), 0o600))
+		target1 := filepath.Join(dir, "queued1.md")
+		target2 := filepath.Join(dir, "queued2.md")
+		require.NoError(t, os.WriteFile(target1, []byte("queued original 1"), 0o600))
+		require.NoError(t, os.WriteFile(target2, []byte("queued original 2"), 0o600))
 
 		queuePath := filepath.Join(dir, "queue.txt")
-		require.NoError(t, os.WriteFile(queuePath, []byte(url+" -o "+quoteQueueArg(target)+"\n"), 0o600))
+		queueBody := url + " -o " + quoteQueueArg(target1) + "\n" +
+			url + " -o " + quoteQueueArg(target2) + "\n"
+		require.NoError(t, os.WriteFile(queuePath, []byte(queueBody), 0o600))
 
 		d := setupDeps(t)
 		root := newRootCommand(d)
 		var errBuf bytes.Buffer
-		root.SetIn(strings.NewReader("y\n"))
+		root.SetIn(strings.NewReader("y\ny\n"))
 		root.SetOut(io.Discard)
 		root.SetErr(&errBuf)
 		root.SetArgs([]string{"join", "--queue", queuePath})
 
 		require.NoError(t, root.ExecuteContext(context.Background()))
-		assert.Contains(t, errBuf.String(), "Overwrite? (Y)es | (N)o: ")
-		data, _ := os.ReadFile(target)
-		assert.Contains(t, string(data), "Fresh transcript line.")
+		assert.Equal(t, 2, strings.Count(errBuf.String(), "Overwrite? (Y)es | (N)o: "))
+		data1, _ := os.ReadFile(target1)
+		data2, _ := os.ReadFile(target2)
+		assert.Contains(t, string(data1), "Fresh transcript line.")
+		assert.Contains(t, string(data2), "Fresh transcript line.")
 	})
 }

@@ -190,10 +190,16 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	}
 
 	checkTarget := func(p string) (bool, error) {
-		info, statErr := os.Stat(p)
+		info, statErr := os.Lstat(p)
 		if statErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return false, fmt.Errorf("capture: output path must not be a symlink: %s", p)
+			}
 			if info.IsDir() {
 				return false, fmt.Errorf("capture: output path is a directory: %s", p)
+			}
+			if !info.Mode().IsRegular() {
+				return false, fmt.Errorf("capture: output path is not a regular file: %s", p)
 			}
 			return true, nil
 		}

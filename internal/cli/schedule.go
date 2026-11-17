@@ -301,14 +301,14 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"Precedence for each scheduled meeting (3 tiers, lowest to highest):\n" +
 			"  1. Top-level settings in config.yaml form the baseline.\n" +
 			"  2. Global schedule flags (--mode, --duration, --idle-timeout, --ai-summary-delay,\n" +
-			"     --no-ai-summary, --lobby-timeout, --audio / --recap-audio, --headless, --headed,\n" +
-			"     --browser-path, --profile-dir, --account) are applied to that base configuration\n" +
-			"     first (applyScheduleFlags). If the base mode is then ephemeral-live, the base\n" +
-			"     ai_summary_delay is forced to 0s and capture_audio defaults to true unless audio\n" +
-			"     was set explicitly.\n" +
+			"     --no-ai-summary, --lobby-timeout, --audio / --recap-audio, --overwrite,\n" +
+			"     --headless, --headed, --browser-path, --profile-dir, --account) are applied\n" +
+			"     to that base configuration first (applyScheduleFlags). If the base mode is\n" +
+			"     then ephemeral-live, the base ai_summary_delay is forced to 0s and\n" +
+			"     capture_audio defaults to true unless audio was set explicitly.\n" +
 			"  3. When a meeting fires, its per-meeting settings (mode / capture_mode, duration,\n" +
 			"     idle_timeout, ai_summary_delay, lobby_timeout, category, capture_audio / audio,\n" +
-			"     output_dir) are applied on top of the flag-adjusted base\n" +
+			"     overwrite / file_overwrite, output_dir) are applied on top of the flag-adjusted base\n" +
 			"     (buildScheduleEntryConfig), followed by the same ephemeral-live normalization on\n" +
 			"     the entry: when its effective mode is ephemeral-live, ai_summary_delay becomes 0s\n" +
 			"     and capture_audio defaults to true unless audio was explicitly false (an entry\n" +

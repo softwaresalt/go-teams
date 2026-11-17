@@ -181,6 +181,33 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 
 	captionsOnly := s.cfg.CaptionsOnly
 
+	var confirmOverwrite func([]string) (bool, error)
+	if s.cfg.ConfirmOverwrite != nil {
+		confirmOverwrite = func(paths []string) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			type confirmResult struct {
+				approved bool
+				err      error
+			}
+			ch := make(chan confirmResult, 1)
+			go func() {
+				approved, confirmErr := s.cfg.ConfirmOverwrite(paths)
+				ch <- confirmResult{approved: approved, err: confirmErr}
+			}()
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case res := <-ch:
+				if err := ctx.Err(); err != nil {
+					return false, err
+				}
+				return res.approved, res.err
+			}
+		}
+	}
+
 	outCfg := OutputConfig{
 		Dir:              s.cfg.OutputDir,
 		FilePath:         s.cfg.OutputFile,
@@ -192,7 +219,7 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		Now:              s.cfg.Now,
 		CaptionsOnly:     captionsOnly,
 		Overwrite:        s.cfg.Overwrite,
-		ConfirmOverwrite: s.cfg.ConfirmOverwrite,
+		ConfirmOverwrite: confirmOverwrite,
 	}
 	if mp, ok := m.(browser.MetadataProvider); ok {
 		meta := mp.MeetingMetadata()
@@ -212,6 +239,9 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 
 	out, err := s.setupOutput(outCfg)
 	if err != nil {
+		if isShutdown(ctx, err) {
+			return nil
+		}
 		return err
 	}
 	s.mu.Lock()

@@ -294,35 +294,19 @@ func setupOutputWithFlushHook(cfg OutputConfig, flushHeader func(*transcript.Wri
 		}
 		tmpPath := tmp.Name()
 		if _, copyErr := io.Copy(tmp, f); copyErr != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmpPath)
+			_ = tmp.Close()        // best-effort close on backup copy failure; copyErr is returned
+			_ = os.Remove(tmpPath) // best-effort cleanup of incomplete temp backup
 			return "", copyErr
 		}
 		if closeErr := tmp.Close(); closeErr != nil {
-			_ = os.Remove(tmpPath)
+			_ = os.Remove(tmpPath) // best-effort cleanup of unclosed temp backup
 			return "", closeErr
 		}
 		if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
-			_ = os.Remove(tmpPath)
+			_ = os.Remove(tmpPath) // best-effort cleanup when rewind fails
 			return "", seekErr
 		}
 		return tmpPath, nil
-	}
-
-	restoreFromTemp := func(f *os.File, backupPath string) {
-		if f == nil || backupPath == "" {
-			return
-		}
-		if src, openErr := os.Open(backupPath); openErr == nil {
-			if _, seekErr := f.Seek(0, io.SeekStart); seekErr == nil {
-				if truncErr := f.Truncate(0); truncErr == nil {
-					_, _ = io.Copy(f, src)
-					_ = f.Sync()
-				}
-			}
-			_ = src.Close()
-		}
-		_ = os.Remove(backupPath)
 	}
 
 	mdFile, err := openOutputFileNoTrunc(mdPath, mdPreInfo, mdExisted)
@@ -335,73 +319,81 @@ func setupOutputWithFlushHook(cfg OutputConfig, flushHeader func(*transcript.Wri
 		if err != nil {
 			// Close mdFile before truncating it so an audio open failure leaves
 			// any pre-existing mdPath byte-for-byte untouched.
-			_ = mdFile.Close()
+			_ = mdFile.Close() // best-effort close on audio open failure; err is returned
 			if !mdExisted {
-				_ = os.Remove(mdPath)
+				_ = os.Remove(mdPath) // best-effort removal of newly created empty transcript
 			}
 			return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)
 		}
 	}
 
-	var mdBackup, mp3Backup string
+	var (
+		mdBackup, mp3Backup       string
+		mdTruncated, mp3Truncated bool
+	)
 	cleanupBackups := func() {
 		if mdBackup != "" {
-			_ = os.Remove(mdBackup)
+			_ = os.Remove(mdBackup) // best-effort removal of unneeded temp backup
 			mdBackup = ""
 		}
 		if mp3Backup != "" {
-			_ = os.Remove(mp3Backup)
+			_ = os.Remove(mp3Backup) // best-effort removal of unneeded temp backup
 			mp3Backup = ""
 		}
 	}
-	rollbackPair := func() {
-		if mdExisted {
-			restoreFromTemp(mdFile, mdBackup)
-			mdBackup = ""
+	rollbackPair := func(cause error) error {
+		var restoreErrs []error
+		if mdTruncated {
+			if rErr := restoreFromTemp(mdFile, mdBackup); rErr != nil {
+				restoreErrs = append(restoreErrs, fmt.Errorf("restore transcript (backup preserved at %s): %w", mdBackup, rErr))
+				mdBackup = "" // preserve backup on disk for manual recovery
+			} else {
+				mdBackup = ""
+			}
 		}
-		_ = mdFile.Close()
+		_ = mdFile.Close() // best-effort close on rollback; primary cause is returned
 		if !mdExisted {
-			_ = os.Remove(mdPath)
+			_ = os.Remove(mdPath) // best-effort removal of newly created transcript
 		}
 		if mp3File != nil {
-			if mp3Existed {
-				restoreFromTemp(mp3File, mp3Backup)
-				mp3Backup = ""
+			if mp3Truncated {
+				if rErr := restoreFromTemp(mp3File, mp3Backup); rErr != nil {
+					restoreErrs = append(restoreErrs, fmt.Errorf("restore audio (backup preserved at %s): %w", mp3Backup, rErr))
+					mp3Backup = "" // preserve backup on disk for manual recovery
+				} else {
+					mp3Backup = ""
+				}
 			}
-			_ = mp3File.Close()
+			_ = mp3File.Close() // best-effort close on rollback; primary cause is returned
 			if !mp3Existed {
-				_ = os.Remove(mp3Path)
+				_ = os.Remove(mp3Path) // best-effort removal of newly created audio file
 			}
 		}
 		cleanupBackups()
+		if len(restoreErrs) > 0 {
+			return errors.Join(append([]error{cause}, restoreErrs...)...)
+		}
+		return cause
 	}
 
 	if mdExisted {
 		mdBackup, err = backupToTemp(mdFile, mdPath)
 		if err != nil {
-			rollbackPair()
-			return nil, fmt.Errorf("capture: backup transcript %s: %w", mdPath, err)
+			return nil, rollbackPair(fmt.Errorf("capture: backup transcript %s: %w", mdPath, err))
 		}
 	}
 	if mp3File != nil && mp3Existed {
 		mp3Backup, err = backupToTemp(mp3File, mp3Path)
 		if err != nil {
-			rollbackPair()
-			return nil, fmt.Errorf("capture: backup audio %s: %w", mp3Path, err)
+			return nil, rollbackPair(fmt.Errorf("capture: backup audio %s: %w", mp3Path, err))
 		}
 	}
 
 	if mdExisted {
 		if truncErr := mdFile.Truncate(0); truncErr != nil {
-			rollbackPair()
-			return nil, fmt.Errorf("capture: truncate transcript %s: %w", mdPath, truncErr)
+			return nil, rollbackPair(fmt.Errorf("capture: truncate transcript %s: %w", mdPath, truncErr))
 		}
-	}
-	if mp3File != nil && mp3Existed {
-		if truncErr := mp3File.Truncate(0); truncErr != nil {
-			rollbackPair()
-			return nil, fmt.Errorf("capture: truncate audio %s: %w", mp3Path, truncErr)
-		}
+		mdTruncated = true
 	}
 	w := transcript.NewWriter(mdFile)
 	if err := w.WriteHeader(transcript.Metadata{
@@ -416,8 +408,7 @@ func setupOutputWithFlushHook(cfg OutputConfig, flushHeader func(*transcript.Wri
 	}); err != nil {
 		// Best-effort rollback of newly created files or restoration of
 		// pre-existing files from backup.
-		rollbackPair()
-		return nil, fmt.Errorf("capture: write transcript header: %w", err)
+		return nil, rollbackPair(fmt.Errorf("capture: write transcript header: %w", err))
 	}
 	// Flush the header immediately so a physical write failure (e.g. a full
 	// filesystem) surfaces here and triggers rollback, rather than being
@@ -427,8 +418,13 @@ func setupOutputWithFlushHook(cfg OutputConfig, flushHeader func(*transcript.Wri
 		flushErr = flushHeader(w)
 	}
 	if flushErr != nil {
-		rollbackPair()
-		return nil, fmt.Errorf("capture: flush transcript header: %w", flushErr)
+		return nil, rollbackPair(fmt.Errorf("capture: flush transcript header: %w", flushErr))
+	}
+	if mp3File != nil && mp3Existed {
+		if truncErr := mp3File.Truncate(0); truncErr != nil {
+			return nil, rollbackPair(fmt.Errorf("capture: truncate audio %s: %w", mp3Path, truncErr))
+		}
+		mp3Truncated = true
 	}
 	cleanupBackups()
 	if cfg.CaptionsOnly {
@@ -448,6 +444,40 @@ func setupOutputWithFlushHook(cfg OutputConfig, flushHeader func(*transcript.Wri
 		mdFile:         mdFile,
 		mp3File:        mp3File,
 	}, nil
+}
+
+// restoreFromTemp restores f byte-for-byte from backupPath and removes
+// backupPath only after Sync succeeds. On any error, backupPath is preserved on
+// disk so the caller can surface its path for recovery.
+func restoreFromTemp(f *os.File, backupPath string) error {
+	if f == nil || backupPath == "" {
+		return nil
+	}
+	src, openErr := os.Open(backupPath)
+	if openErr != nil {
+		return openErr
+	}
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; seekErr is returned
+		return seekErr
+	}
+	if truncErr := f.Truncate(0); truncErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; truncErr is returned
+		return truncErr
+	}
+	if _, copyErr := io.Copy(f, src); copyErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; copyErr is returned
+		return copyErr
+	}
+	if syncErr := f.Sync(); syncErr != nil {
+		_ = src.Close() // best-effort close of read-only backup handle; syncErr is returned
+		return syncErr
+	}
+	if closeErr := src.Close(); closeErr != nil {
+		return closeErr
+	}
+	_ = os.Remove(backupPath) // best-effort removal after verified restore+sync; original file is already intact
+	return nil
 }
 
 // Close flushes the buffered transcript and closes both files. Errors from each

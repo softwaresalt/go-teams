@@ -636,6 +636,25 @@ func TestSetupOutputOverwriteAndConfirmPrompt(t *testing.T) {
 		if len(entries) != 2 {
 			t.Fatalf("expected only original 2 files after rollback, got %v", entries)
 		}
+
+		// Failed restoreFromTemp must return an error and preserve backupPath on disk.
+		bDir := t.TempDir()
+		backupPath := filepath.Join(bDir, ".go-teams-backup-test")
+		if err := os.WriteFile(backupPath, []byte("precious backup"), 0o600); err != nil {
+			t.Fatalf("seed backup: %v", err)
+		}
+		closedTarget := filepath.Join(bDir, "target.md")
+		tf, err := os.OpenFile(closedTarget, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatalf("open target: %v", err)
+		}
+		_ = tf.Close()
+		if rErr := restoreFromTemp(tf, backupPath); rErr == nil {
+			t.Fatal("expected restoreFromTemp to fail on closed target handle")
+		}
+		if bData, bErr := os.ReadFile(backupPath); bErr != nil || string(bData) != "precious backup" {
+			t.Fatalf("backupPath must be preserved when restore fails: err=%v data=%q", bErr, string(bData))
+		}
 	})
 
 	t.Run("Session.Run 0-byte audio cleanup preserves pre-existing mp3 and removes newly created 0-byte mp3", func(t *testing.T) {

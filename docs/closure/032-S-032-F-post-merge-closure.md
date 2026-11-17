@@ -133,19 +133,19 @@ accurate (`keep`). `compaction_status` is `done`.
 
 ## Releasability evidence
 
-* **Invariants preserved**: All external actions pinned to 40-char SHAs with `persist-credentials: false`; top-level `permissions: contents: read` preserved (`contents: write` scoped exclusively to `release.yml` `jobs.release`); unconditional tracked-file secret hygiene scan preserved in `ci.yml` `jobs.changes`; complete `test-windows` quality gate enforced in both workflows; exact 3-target `release.yml` build matrix and `SHA256SUMS` (`wc -l == 3`) verification enforced; zero production Go code or unrelated stash entries mutated.
-* **Rollout and rollback**: Workflows, contract tests, docs, compound learning, and closure artifacts on `main`. Rollback via `git revert -m 1 80bf806112a0c887c5216a4be39bba888ca1f859`.
+* **Invariants preserved**: All external actions pinned to 40-char SHAs with `persist-credentials: false`; top-level `permissions: contents: read` preserved (`contents: write` scoped exclusively to `release.yml` `jobs.release`); unconditional tracked-file secret hygiene scan preserved in `ci.yml` `jobs.changes`; complete `test-windows` quality gate enforced in both workflows; exact 3-target `release.yml` build matrix and `SHA256SUMS` (`wc -l == 3`) verification enforced; zero production Go code or unrelated stash entries mutated
+* **Rollout and rollback**: Workflows, contract tests, docs, compound learning, and closure artifacts on `main`; rollback via `git revert -m 1 80bf806112a0c887c5216a4be39bba888ca1f859`
 * **Monitoring and validation window (7 days, owner: `softwaresalt`)**:
-  * **Healthy signals**: 100% pass rate on `CI` (`Detect code changes`, `Build, vet, lint & test (Windows)`) and `go test -race ./...`, zero linter issues, zero secret-hygiene findings, and clean 3-asset `SHA256SUMS` release publication on tag push.
-  * **Failure signals and rollback triggers**: Any `>= 1` workflow job failure in `test-windows` (`ci.yml` or `release.yml`) or `build` / `release` (`SHA256SUMS` check).
-* **Readiness verdict**: `READY` (all local quality gates, unit/E2E suites, 2 rounds of `multi-agent` Adversarial Review, 1 Copilot shadow-review round, PR #78 CI checks, and `cascade-close` postconditions passed).
+  * **Healthy signals**: 100% pass rate on `CI` (`Detect code changes`, `Build, vet, lint & test (Windows)`) and `go test -race ./...`, zero linter issues, zero secret-hygiene findings, and clean 3-asset `SHA256SUMS` release publication on tag push
+  * **Failure signals and rollback triggers**: Any `>= 1` workflow job failure in `test-windows` (`ci.yml` or `release.yml`) or `build` / `release` (`SHA256SUMS` check)
+* **Readiness verdict**: `READY` (all local quality gates, unit/E2E suites, 2 rounds of `multi-agent` Adversarial Review, 1 Copilot shadow-review round, PR #78 CI checks, and `cascade-close` postconditions passed)
 
 ## Autopilot Execution Summary
 
 * **Resolved route**: `gemini-4-hydrogen` / `google` / `high`
 * **Gates passed**:
-  * `pipeline-topology` (`pre_claim`, `post_claim`, `lifecycle` feature + `lifecycle` closure) — `exit_code: 0`
-  * Local Review Readiness (`P-014`) — `LOCAL_REVIEW_READY` for HEAD `009c0056bc3b9ff2e4f0cb47e36c5eae78effa85` (`READY_WITH_FOLLOWUPS`, `0` P0, `0` P1 consensus/majority)
-  * Copilot Review Completion Gate (`P-018`) — `SATISFIED` (`exit_code: 0`, thread `PRRT_kwDOTStvas64Pwye` deferred under P-021 C2 as `4AB8EAEE`, replied, and resolved)
-  * Merge Strategy (`P-009`) — merge commit `80bf806112a0c887c5216a4be39bba888ca1f859` (normal `gh pr merge 78 --merge` succeeded without admin fallback)
-  * Context Compaction (`P-020`) — `compaction_status: done`
+  * `pipeline-topology` (`pre_claim`, `post_claim`, `lifecycle` feature + `lifecycle` closure) -- `exit_code: 0`
+  * Local Review Readiness (`P-014`) -- `LOCAL_REVIEW_READY` for HEAD `009c0056bc3b9ff2e4f0cb47e36c5eae78effa85` (`READY_WITH_FOLLOWUPS`, `0` P0, `0` P1 consensus/majority)
+  * Copilot Review Completion Gate (`P-018`) -- `SATISFIED` (`exit_code: 0`, thread `PRRT_kwDOTStvas64Pwye` deferred under P-021 C2 as `4AB8EAEE`, replied, and resolved)
+  * Merge Strategy (`P-009`) -- merge commit `80bf806112a0c887c5216a4be39bba888ca1f859` (normal `gh pr merge 78 --merge` succeeded without admin fallback)
+  * Context Compaction (`P-020`) -- `compaction_status: done`

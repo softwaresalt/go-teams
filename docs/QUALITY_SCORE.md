@@ -21,7 +21,7 @@ Statement coverage in the table below was measured with `go test -cover` on a
 Windows development host on 2026-11-12; the `internal/cli` and `internal/config` rows
 were re-measured on 2026-11-14 after `024-S`. Treat the numbers as a point-in-time
 signal, not a target; CI reports its own figure with
-`go test -race -coverprofile=coverage.out ./...`.
+`go test -race "-coverprofile=coverage.out" ./...`.
 
 ## Grades by package
 

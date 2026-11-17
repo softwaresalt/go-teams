@@ -1,5 +1,5 @@
 ---
-title: Ship Session Memory — 032-S (Windows-only CI quality gates and 3-target release matrix)
+title: Ship Session Memory - 032-S (Windows-only CI quality gates and 3-target release matrix)
 description: Ship session memory for shipment 032-S (032-F, 032.001-T..032.003-T, PR #78)
 date: 2026-11-16
 agent: ship

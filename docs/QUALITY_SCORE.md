@@ -1,7 +1,7 @@
 ---
 title: Quality Grades by Domain
 description: Honest quality grades, test coverage tiers, and live-verification gaps for each go-teams package
-date: 2026-11-15
+date: 2026-11-16
 ---
 
 ## How to read this document
@@ -33,7 +33,7 @@ signal, not a target; CI reports its own figure with
 | `internal/transcript` | A | 91.2% | Deduplication, ordering, and Markdown sanitization are covered with deterministic fixtures |
 | `internal/audio` | A | 87.5% | Encoder output is pinned by a golden digest, and sibling tests parse MPEG-1 Layer III frame headers to count frames. The grade covers the encoder only; real Teams audio fidelity is a browser-domain gap |
 | `internal/updater` | A | 84.5% | Fail-closed lock protocol, identity guards, checksum verification, and rollback are tested with injected clocks, process liveness, and rename failures. The Windows rename window is exercised on `windows-latest` in CI (`test-windows`) as well as on Windows development hosts |
-| `internal/capture` | A | 84.8% | Output path resolution, filename templates, activity-aware nominal duration/overtime/idle shutdown, call-end early stop, fallback `MeetingTitle`, and idempotent `AppendAISummaryToFile` are covered. `internal/capture/output_unix_test.go` asserts the `0o700` (`dirPerm`) directory and `0o600` (`filePerm`) file creation modes under `syscall.Umask(0)`, the preservation of a pre-existing directory's mode, and `AppendAISummaryToFile` mode preservation, so the owner-only guarantee has a POSIX regression test. The coverage figure was measured on a Windows host, where the `//go:build unix` tests do not run |
+| `internal/capture` | A | 84.8% | Output path resolution, filename templates, activity-aware nominal duration/overtime/idle shutdown, call-end early stop, fallback `MeetingTitle`, and idempotent `AppendAISummaryToFile` are covered. `internal/capture/output_unix_test.go` asserts the `0o700` (`dirPerm`) directory and `0o600` (`filePerm`) file creation modes under `syscall.Umask(0)`, the preservation of a pre-existing directory's mode, and `AppendAISummaryToFile` mode preservation, so the owner-only guarantee has a POSIX regression test. CI consolidates Go test and lint execution onto `windows-latest` (`test-windows`), where `//go:build unix` tests do not execute or get linted by `golangci-lint` at runtime; they remain type-checked in CI via `GOOS=darwin GOARCH=amd64 go vet ./...` and runnable/lintable locally via `GOOS=linux` |
 | `internal/cli` | A | 80.6% | Flag binding, the `generate-config` subcommand (aliases, positional file-versus-directory handling, `--force` collision, and invalid-name rejection, with the root `--config` flag proven unused), capture protocols, Idea 2C delayed AI summary timer + inter-process locked queue fallback, `--not-before` gating, schedule overrides, output precedence, and flag inheritance are covered through the injected `deps`; the compiled-binary harness adds an end-to-end check |
 | `internal/config` | A | 81.6% | Load, `TemplateYAML` / `ResolveTemplatePath` / `WriteTemplate` (template parses before and after uncommenting, filename traversal rejection, `O_EXCL` and atomic `--force` writes, owner-only modes, and `config.example.yaml` parity), capture modes, lifecycle durations, per-meeting overrides (`cron` vs `at`), `default_account` (`entra_account` / `account`) and output alias precedence (`output` versus `output_file` versus `output_folder` versus `default_path`), `headless` / `headed` and `audio` pointer combinations, `expandUserPath`, `defaultProfileDir`, atomic `Save`, and validation are table-tested, and the tracked-file secret scan lives here |
 | `internal/browser` | B | 71.6% | Synthetic-page and unit tests cover the pre-join machine, lobby timeout (`ErrLobbyTimeout`), `ForceRecap`, PCM RMS voice activity (`PCMRMS`/`HasVoiceActivity`), interim caption heartbeats, call-end probes (`shouldNotifyCallEnded`), recap export, and sandbox flags. The Teams DOM changes without notice, and no automated test runs against a real tenant (queued in `010-S` and `029-S`) |
@@ -52,13 +52,19 @@ that skips on a given host does not prove anything for that host.
 
 ### Tier 1: unit and concurrency suite
 
-`go test -race ./...` runs every hermetic test with the race detector. CI runs
-it on both `ubuntu-latest` (`test`) and `windows-latest` (`test-windows`) in
-`.github/workflows/ci.yml`, alongside `go vet ./...`,
-`go vet -tags=integration ./...`, and, on `ubuntu-latest` only,
-`golangci-lint run`. The `//go:build unix` mode tests in
-`internal/capture/output_unix_test.go` run on `ubuntu-latest`; the Windows
-updater rename-window tests run on `windows-latest`. Run the suite with
+`go test -race "-coverprofile=coverage.out" ./...` runs every hermetic test with
+the race detector. Both `.github/workflows/ci.yml` and
+`.github/workflows/release.yml` run the consolidated quality-gate suite on
+`windows-latest` (`test-windows`), covering `go build`, `go vet ./...`,
+`go vet -tags=integration ./...`, `GOOS=darwin GOARCH=amd64 go vet ./...`,
+`golangci-lint run` (`install-mode: goinstall`), the non-skipped
+`TestChromeMeetingEndToEnd` browser E2E check, and
+`go test -race "-coverprofile=coverage.out" ./...`. Note that `golangci-lint`
+on `windows-latest` analyzes Windows-targeted files only (`//go:build unix`
+files such as `internal/capture/output_unix_test.go` are type-checked in CI via
+`GOOS=darwin GOARCH=amd64 go vet ./...` and remain runnable locally via
+`GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c ./internal/capture`). The
+Windows updater rename-window tests run on `windows-latest`. Run the suite with
 `-p 1` on memory-constrained hosts, because parallel package builds can exhaust
 the Windows commit limit.
 
@@ -135,7 +141,7 @@ These gaps are known and unresolved. Tiers 1 to 4 cannot close them.
 | No automated run against a real Microsoft Teams tenant: login, MFA, tenant policy, lobby, overtime continuation, call-end teardown, and caption DOM selectors are verified only against synthetic pages | A Teams UI change can break capture without failing any test | `010-S`, `029-S` |
 | Real Meeting Recap completeness and delayed Idea 2C AI Summary availability are unverified | Recap export can miss entries or the summary in production | `010-S`, `029-S` |
 | Real meeting audio fidelity (levels, sync, long recordings) is unverified; only the encoder is pinned by golden output | MP3 output may differ from the meeting audio in ways tests cannot see | `010-S` |
-| The `darwin/{amd64,arm64}`, `linux/arm64`, and `windows/arm64` release binaries are cross-compiled on `ubuntu-latest` at release time and never execute a test suite; only `linux/amd64` (`ubuntu-latest`) and `windows/amd64` (`windows-latest`) run native tests in CI | Platform-specific regressions on the cross-compiled targets surface only after release | `023-S` |
+| The `darwin/amd64` and `windows/arm64` release binaries are cross-compiled on `ubuntu-latest` at release time and never execute a native test suite; only `windows/amd64` (`windows-latest`) runs the native test suite in CI (with `GOOS=darwin GOARCH=amd64 go vet ./...` type-checking `unix`/`darwin` files), and `//go:build unix` permission tests in `internal/capture/output_unix_test.go` do not execute at runtime in CI after `032-S` | Platform-specific regressions on cross-compiled or POSIX-only targets surface only after release or during local `GOOS=linux` cross-compile checks | `023-S`, `032-S` |
 
 ## Improvement roadmap
 

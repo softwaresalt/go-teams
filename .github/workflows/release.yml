@@ -57,7 +57,7 @@ jobs:
             exit 1
           }
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race "-coverprofile=coverage.out" ./...
 
   changelog:
     name: Generate Changelog

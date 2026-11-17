@@ -3,8 +3,8 @@ name: CI
 on:
   # No paths-ignore: the lightweight `changes` job must run (and report a status
   # check) on every push and pull request, including docs/backlog-only changes,
-  # so the tracked-file secret-hygiene scan is never skipped. The expensive
-  # `test` job stays self-gated on the `code` filter output below.
+  # so the tracked-file secret-hygiene scan is never skipped. The `test-windows`
+  # job stays self-gated on the `code` filter output below.
   push:
     branches:
       - main
@@ -212,7 +212,7 @@ jobs:
             exit 1
           }
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
+        run: go test -race "-coverprofile=coverage.out" ./...
       - name: Coverage report
-        run: go tool cover -func=coverage.out
+        run: go tool cover "-func=coverage.out"
 

@@ -129,24 +129,40 @@ func assertWindowsQualityGateSteps(t *testing.T, steps []workflowStep) {
 	assert.Equal(t, "--timeout=5m", steps[lintIdx].With["args"])
 
 	var hasBuildWin, hasVet, hasVetIntegration, hasVetDarwin, hasBrowserE2E, hasRaceTest bool
+	assertUnconditional := func(step workflowStep) {
+		assert.Empty(t, step.If, "quality-gate step %q must not set if:", step.Name)
+		assert.False(t, step.ContinueOnError, "quality-gate step %q must not set continue-on-error", step.Name)
+	}
+	assertUnconditional(steps[setupGoIdx])
+	assertUnconditional(steps[lintIdx])
+
 	for _, step := range steps {
 		if strings.Contains(step.Run, "go build -o bin/go-teams.exe ./cmd/go-teams") {
+			assertUnconditional(step)
 			hasBuildWin = true
 		}
 		if step.Name == "Vet" && strings.Contains(step.Run, "go vet ./...") {
+			assertUnconditional(step)
 			hasVet = true
 		}
 		if strings.Contains(step.Run, "go vet -tags=integration ./...") {
+			assertUnconditional(step)
 			hasVetIntegration = true
 		}
 		if step.Env["GOOS"] == "darwin" && step.Env["GOARCH"] == "amd64" && strings.Contains(step.Run, "go vet ./...") {
+			assertUnconditional(step)
 			hasVetDarwin = true
 		}
 		if strings.Contains(step.Run, "TestChromeMeetingEndToEnd") &&
-			strings.Contains(step.Run, "--- PASS: TestChromeMeetingEndToEnd") {
+			strings.Contains(step.Run, "--- PASS: TestChromeMeetingEndToEnd") &&
+			strings.Contains(step.Run, "--- SKIP:") &&
+			strings.Contains(step.Run, "$LASTEXITCODE") &&
+			strings.Contains(step.Run, "exit 1") {
+			assertUnconditional(step)
 			hasBrowserE2E = true
 		}
-		if strings.Contains(step.Run, "go test -race -coverprofile=coverage.out ./...") {
+		if strings.Contains(step.Run, `go test -race "-coverprofile=coverage.out" ./...`) {
+			assertUnconditional(step)
 			hasRaceTest = true
 		}
 	}
@@ -190,11 +206,13 @@ func TestCIWorkflowRunsWindowsQualityGatesOnly(t *testing.T) {
 
 	var hasCoverageReport bool
 	for _, step := range winJob.Steps {
-		if strings.Contains(step.Run, "go tool cover -func=coverage.out") {
+		if strings.Contains(step.Run, `go tool cover "-func=coverage.out"`) {
+			assert.Empty(t, step.If)
+			assert.False(t, step.ContinueOnError)
 			hasCoverageReport = true
 		}
 	}
-	assert.True(t, hasCoverageReport, "test-windows in ci.yml must report coverage via go tool cover -func=coverage.out")
+	assert.True(t, hasCoverageReport, `test-windows in ci.yml must report coverage via go tool cover "-func=coverage.out"`)
 }
 
 func TestReleaseWorkflowBuildsThreeSupportedTargetsOnly(t *testing.T) {

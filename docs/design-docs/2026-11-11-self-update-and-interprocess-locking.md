@@ -58,11 +58,12 @@ avoids a dependency for roughly a hundred lines of logic.
 
 * The updater queries the GitHub Releases API for `softwaresalt/go-teams`
   (`DefaultAPIBaseURL`) and selects the asset named
-  `teams-cli-<goos>-<goarch>[.exe]`, matching what the release workflow
+  `go-teams-<goos>-<goarch>[.exe]`, matching what the release workflow
   publishes: `.github/workflows/release.yml` builds CGO-free binaries for
-  `linux`, `darwin`, and `windows` on `amd64` and `arm64`, all cross-compiled
-  on `ubuntu-latest` (including `darwin` and `linux/arm64`), and verifies that
-  `SHA256SUMS` lists all six assets before publishing.
+  `windows/amd64`, `windows/arm64`, and `darwin/amd64` (cross-compiled on
+  `ubuntu-latest` after `test-windows` passes) and verifies that `SHA256SUMS`
+  lists all three published assets (ensuring manifest completeness and digest
+  integrity) before publishing.
 * Every request URL, and every redirect target, must be `https`, or `http` on a
   loopback host so `httptest` servers work. The HTTP client's `CheckRedirect`
   re-runs this validation on each hop and stops after 10 redirects.
@@ -262,7 +263,7 @@ for operators.
 * Behavior on the Windows rename window is verified on `windows-latest` in CI
   (the `test-windows` job, `023-S`) as well as on Windows development hosts (see
   [QUALITY_SCORE.md](../QUALITY_SCORE.md#live-verification-gaps)).
-* The `darwin/{amd64,arm64}`, `linux/arm64`, and `windows/arm64` release
-  binaries are cross-compiled on `ubuntu-latest` at release time. Only
-  `linux/amd64` (`ubuntu-latest`) and `windows/amd64` (`windows-latest`) execute
-  native test suites in CI.
+* `.github/workflows/release.yml` publishes `windows/amd64`, `windows/arm64`,
+  and `darwin/amd64` release binaries (`linux/*` and `darwin/arm64` are omitted
+  in `032-S` to conserve GitHub Actions budget); `windows/amd64`
+  (`windows-latest`) executes the native quality-gate and test suite in CI.

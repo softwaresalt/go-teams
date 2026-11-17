@@ -77,7 +77,7 @@ rounds on PR #76 (`P-018` `copilot-review` gate `SATISFIED` on HEAD
 | Copilot PR #76 Round 1 (`PRRT_kwDOTStvas64JR_i`, `JSAK`, `JSAx`, `JSBP`) | Path B contiguous buffered coverage, incomplete chunk transfer error, cross-realm `ArrayBuffer`, and bounded `sb.remove` eviction | Fixed in-scope (P-021 C1) in `685e08b`/`ed092e5`; replied and resolved |
 | Copilot PR #76 Round 2 (`PRRT_kwDOTStvas64LgOi`, `LgPU`, `LgP4`, `LgQe`) | Path B unknown-duration `!ended` check, `normalizeHeaders` array handling, single-dispatch XHR suppression, and pre-hook video `SourceBuffer` suppression | Fixed in-scope (P-021 C1) in `e27ff89`; replied and resolved |
 | Copilot PR #76 Round 3 (`PRRT_kwDOTStvas64MQNJ`) | Restoring overridden XHR descriptors on `open()` and hook cleanup | Fixed in-scope (P-021 C1) in `5f3ec41`; replied and resolved |
-| Adversarial Review Round 8 (`5f3ec41`) | `0` P0, `0` P1 on delta, `0` HIGH/MEDIUM; `LOW` Unique advisories `U1-R5`, `U2-R5`, `U1-R6`, `U1-R8` | Stashed in `7883544E` / recorded as residual advisories; outcome `READY_WITH_FOLLOWUPS` |
+| Adversarial Review Round 8 (`5f3ec41`) | `0` P0, `0` P1 on delta, `0` HIGH/MEDIUM; `LOW` Unique advisories `U1-R5`, `U2-R5`, `U1-R6`, `U1-R8` | `U1-R5` and `U2-R5` stashed in `7883544E`; `U1-R6` and `U1-R8` recorded as residual advisories in `docs/archive/closure/2026-11-16/` (outcome `READY_WITH_FOLLOWUPS`) |
 
 ## Post-merge closure
 
@@ -99,8 +99,8 @@ rounds on PR #76 (`P-018` `copilot-review` gate `SATISFIED` on HEAD
 |---|---|---|
 | Stash `9A16B213` | Already archived by Stage at harvest; absent from active stash | skipped |
 | Deliberation `020-DL` | Archived via `backlogit archive 020-DL` prior to `cascade-close`; resolved to `already-archived` in `pre_close.linked_deliberation_disposition` (`docs/closure/evidence/031-S-031-F-close-evidence.json`) | archived (`.backlogit/archive/020-DL.md`) |
-| Stash `39450846` | Captured during R3 (`U1-R3`..`U6-R3`, subsequently remediated in `685e08b`/`ed092e5`); left in stash for Stage disposition | retained for Stage triage |
-| Stash `7883544E` | Captured during R5 for `LOW` Unique advisories `U1-R5` and `U2-R5` | retained active for Stage triage |
+| Stash `39450846` | Captured during R3 (`U1-R3`..`U6-R3`, subsequently remediated in `685e08b`/`ed092e5`; pre-compaction R3 report archived to `docs/archive/closure/2026-11-16/2026-11-16-031-s-r3-adversarial-review.md`); untouched per Ship Role Boundary | retained for Stage disposition |
+| Stash `7883544E` | Captured during R5 for `LOW` Unique advisories `U1-R5` and `U2-R5` (pre-compaction R5 report archived to `docs/archive/closure/2026-11-16/2026-11-16-031-s-r5-adversarial-review.md`); `U1-R6` and `U1-R8` are recorded in archived R6/R8 reviews only | retained active for Stage triage |
 | Pre-existing active stash entries | `9BDFB275`, `560B0C44`, `188D4FBB`, `232C6844`, `AD451E00`, `3F6BA819` | preserved untouched in `.backlogit/stash.jsonl` |
 
 ### Knowledge graduation, compaction (P-020), and compound refresh

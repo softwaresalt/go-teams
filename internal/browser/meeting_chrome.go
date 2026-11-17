@@ -414,19 +414,26 @@ func (t *headedAuthTracker) onNonAuthPage(st headedPageState) string {
 func hasSpecificMeetingOrRecapTarget(meetingURL string) bool {
 	lower := strings.ToLower(strings.TrimSpace(meetingURL))
 	if strings.Contains(lower, "meetingrecap") ||
+		strings.Contains(lower, "stream.aspx") ||
+		strings.Contains(lower, "streamembed.aspx") ||
 		strings.Contains(lower, "meetup-join") ||
 		strings.Contains(lower, "/meet/") {
 		return true
 	}
 	id := ExtractMeetingIdentity(meetingURL)
-	return id.ThreadID != "" || id.MeetingToken != "" || id.DriveItemID != "" || id.CallID != "" || id.ICalUID != "" || id.MeetID != ""
+	return id.ThreadID != "" || id.MeetingToken != "" || id.DriveItemID != "" || id.CallID != "" || id.ICalUID != "" || id.RecordingName != "" || id.MeetID != ""
 }
 
 func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 	if !hasSpecificMeetingOrRecapTarget(meetingURL) {
 		return true
 	}
-	if hasPositiveMeetingIdentityMatch(meetingURL, pageURL) {
+	exp := ExtractMeetingIdentity(meetingURL)
+	act := ExtractMeetingIdentity(pageURL)
+	if hasMeetingIdentityConflict(exp, act) {
+		return false
+	}
+	if hasRecapAudioIdentityMatch(exp, act) {
 		return true
 	}
 	lowerMeeting := strings.ToLower(meetingURL)
@@ -434,6 +441,10 @@ func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 	switch {
 	case strings.Contains(lowerMeeting, "meetingrecap"):
 		return strings.Contains(combined, "meetingrecap")
+	case strings.Contains(lowerMeeting, "stream.aspx"):
+		return strings.Contains(combined, "stream.aspx")
+	case strings.Contains(lowerMeeting, "streamembed.aspx"):
+		return strings.Contains(combined, "streamembed.aspx")
 	case strings.Contains(lowerMeeting, "meetup-join"):
 		return strings.Contains(combined, "meetup-join")
 	case strings.Contains(lowerMeeting, "/meet/"):
@@ -744,6 +755,7 @@ func isRecapIframeTarget(t cdpTargetInfo) bool {
 	}
 	return strings.Contains(t.URL, "xplatplugins.aspx") ||
 		strings.Contains(t.URL, "streamembed.aspx") ||
+		strings.Contains(t.URL, "stream.aspx") ||
 		hasHTTPSHostSuffix(t.URL, "sharepoint.com")
 }
 

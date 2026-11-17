@@ -79,6 +79,13 @@ const extractRecapAudioJS = `(async () => {
 		}
 		if (positive) state.matched = true;
 	}
+	function safeDecodeURIComponent(s) {
+		try {
+			return decodeURIComponent(String(s || ''));
+		} catch (_) {
+			return String(s || '');
+		}
+	}
 	function checkIdentityAgainst(raw, baseUrl, state) {
 		if (!raw) return;
 		let u;
@@ -108,18 +115,18 @@ const extractRecapAudioJS = `(async () => {
 					}
 					if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
 						const rawName = filePath.split('/').pop();
-						const recName = alreadyDecoded ? rawName : decodeURIComponent(rawName);
+						const recName = alreadyDecoded ? rawName : safeDecodeURIComponent(rawName);
 						matchField('RecordingName', recName, true, state);
 					}
 				}
 			}
 		}
-		const decoded = decodeURIComponent(raw);
+		const decoded = safeDecodeURIComponent(raw);
 		const token = decoded.match(/meeting_[a-z0-9_-]+/i);
 		if (token) matchField('MeetingToken', token[0], true, state);
 		const meet = decoded.match(/\/meet\/([a-z0-9_-]+)/i);
 		if (meet) matchField('MeetID', meet[1], true, state);
-		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', decodeURIComponent(u.pathname.split('/').pop()), true, state);
+		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', safeDecodeURIComponent(u.pathname.split('/').pop()), true, state);
 	}
 	const playBtnSelector = 'button[aria-label="Play video"], button[title="Play video"], button[data-automationid="playButton"], button[aria-label="Play"], [role="menuitem"][aria-label="Play"], .vjs-big-play-button, [role="button"][aria-label="Play video"]';
 	function validateFrameContext(win, doc) {
@@ -2459,15 +2466,20 @@ const copyAISummaryJS = `(async () => {
 					await new Promise(r => setTimeout(r, 300));
 				}
 			}
-			const candidates = Array.from(document.querySelectorAll('button, [role="button"], .fui-ChatMyMessage__body, [class*="PromptStarter"], [class*="zeroPrompt"]') || []);
-			const recapBtn = candidates.find(el => String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting');
-			if (recapBtn && typeof recapBtn.click === 'function' && !recapBtn.dataset.goTeamsRecapClicked) {
-				recapBtn.dataset.goTeamsRecapClicked = 'true';
-				for (const existingMsg of Array.from(document.querySelectorAll('.fai-CopilotMessage') || [])) {
-					if (existingMsg && existingMsg.dataset) existingMsg.dataset.goTeamsPreexisting = 'true';
+			const rootEl = document.documentElement;
+			const recapTriggered = Boolean(rootEl && rootEl.dataset && rootEl.dataset.goTeamsStreamRecapTriggered === 'true');
+			if (!recapTriggered) {
+				const candidates = Array.from(document.querySelectorAll('button, [role="button"], [class*="PromptStarter"], [class*="zeroPrompt"]') || []);
+				const recapBtn = candidates.find(el => String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting');
+				if (recapBtn && typeof recapBtn.click === 'function' && !(recapBtn.dataset && recapBtn.dataset.goTeamsRecapClicked === 'true')) {
+					if (recapBtn.dataset) recapBtn.dataset.goTeamsRecapClicked = 'true';
+					if (rootEl && rootEl.dataset) rootEl.dataset.goTeamsStreamRecapTriggered = 'true';
+					for (const existingMsg of Array.from(document.querySelectorAll('.fai-CopilotMessage') || [])) {
+						if (existingMsg && existingMsg.dataset) existingMsg.dataset.goTeamsPreexisting = 'true';
+					}
+					recapBtn.click();
+					return '';
 				}
-				recapBtn.click();
-				return '';
 			}
 			const spCopyBtns = Array.from(document.querySelectorAll('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]') || []);
 			const freshCopyBtns = spCopyBtns.filter(btn => {

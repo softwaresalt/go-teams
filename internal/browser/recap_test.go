@@ -4345,6 +4345,11 @@ const copyJS = fs.readFileSync(0, 'utf8');
   const preExistingCopyBtn = {
     closest: (sel) => sel === '.fai-CopilotMessage' ? preExistingMsg : null
   };
+  const sentPromptBubble = {
+    dataset: {},
+    innerText: 'Recap the meeting',
+    click: () => { throw new Error('must not re-click sent user prompt bubble'); }
+  };
   const msgEl = {
     dataset: {},
     querySelector: (sel) => sel === '.fai-CopilotMessage__content' ? { innerText: 'Generated Copilot meeting summary.' } : null
@@ -4354,6 +4359,7 @@ const copyJS = fs.readFileSync(0, 'utf8');
   };
 
   globalThis.document = {
+    documentElement: { dataset: {} },
     querySelector: (sel) => {
       if (sel === 'button[aria-label="Close Copilot"]') return copilotOpen ? closeCopilotBtn : null;
       if (sel.includes('aria-label="Copilot"')) return copilotBtn;
@@ -4362,7 +4368,7 @@ const copyJS = fs.readFileSync(0, 'utf8');
     },
     querySelectorAll: (sel) => {
       if (sel === '.fai-CopilotMessage') return summaryReady ? [preExistingMsg, msgEl] : [preExistingMsg];
-      if (sel.includes('PromptStarter')) return copilotOpen ? [recapBtn] : [];
+      if (sel.includes('PromptStarter')) return copilotOpen ? (summaryReady ? [sentPromptBubble] : [recapBtn]) : [];
       if (sel.includes('.fai-CopilotMessage__actions')) return summaryReady ? [preExistingCopyBtn, spCopyBtn] : [preExistingCopyBtn];
       return [];
     },

@@ -4202,10 +4202,10 @@ const recapExpectedIdentity = { RecordingName: 'recap.mp4' };
   };
   globalThis.performance = {
     getEntriesByType: (type) => type === 'resource' ? [
-      { name: base + '?part=initsegment&track=video&quality=vcopy&wsd=96000&ppd=192512' },
+      { name: base + '?part=initsegment&track=video&quality=vcopy&wsd=96000&ppd=120320000' },
       { name: base + '?part=initsegment&track=audio&quality=audcopy&wsd=96256&ppd=192512' },
-      { name: base + '?part=mediasegment&track=video&quality=vcopy&segmentTime=0&wsd=96000&ppd=192512' },
-      { name: base + '?part=mediasegment&track=video&quality=vcopy&segmentTime=96000&wsd=96000&ppd=192512' }
+      { name: base + '?part=mediasegment&track=video&quality=vcopy&segmentTime=0&wsd=96000&ppd=120320000' },
+      { name: base + '?part=mediasegment&track=video&quality=vcopy&segmentTime=96000&wsd=96000&ppd=120320000' }
     ] : []
   };
   globalThis.AudioContext = class {
@@ -4341,6 +4341,7 @@ const copyJS = fs.readFileSync(0, 'utf8');
     },
     querySelectorAll: (sel) => {
       if (sel.includes('PromptStarter')) return copilotOpen ? [recapBtn] : [];
+      if (sel.includes('.fai-CopilotMessage__actions')) return summaryReady ? [spCopyBtn] : [];
       return [];
     },
     addEventListener: () => {},
@@ -4379,7 +4380,10 @@ const copyJS = fs.readFileSync(0, 'utf8');
       if (sel.includes('aria-label="Copilot"')) return guardCopilotBtn;
       return null;
     },
-    querySelectorAll: () => [guardRecapBtn],
+    querySelectorAll: (sel) => {
+      if (sel.includes('.fai-CopilotMessage__actions')) return [];
+      return [guardRecapBtn];
+    },
     addEventListener: () => {},
     removeEventListener: () => {}
   };
@@ -4411,5 +4415,30 @@ const copyJS = fs.readFileSync(0, 'utf8');
 		assert.True(t, isOnTargetMeetingOrRecapURL(streamURL, streamURL+"&ga=1", "/personal/u/_layouts/15/stream.aspx", ""))
 		otherStreamURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FOther-20261116.mp4"
 		assert.False(t, isOnTargetMeetingOrRecapURL(streamURL, otherStreamURL, "/personal/u/_layouts/15/stream.aspx", ""), "conflicting RecordingName must be rejected")
+
+		// F-2: verify JS checkIdentityAgainst propagates mismatch for conflicting ?id=...mp4.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		mismatchJS := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapExpectedIdentity = { RecordingName: 'recap-20261116.mp4' };
+(async () => {
+  globalThis.location = { href: 'https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FOther-20261116.mp4', origin: 'https://contoso.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { isDownloadBlocked: true };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!failure || !String(failure.message || failure).includes('recap audio recording identity mismatch')) {
+    throw new Error('expected ?id= identity mismatch error, got: ' + String(failure));
+  }
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmdMismatch := exec.CommandContext(ctx, "node", "-e", mismatchJS)
+		cmdMismatch.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := cmdMismatch.CombinedOutput(); err != nil {
+			t.Fatalf("SharePoint ?id= identity mismatch probe failed: %v\n%s", err, out)
+		}
 	})
 }

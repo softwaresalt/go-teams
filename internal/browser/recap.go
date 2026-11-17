@@ -93,13 +93,15 @@ const extractRecapAudioJS = `(async () => {
 			for (const paramKey of ['fileUrl', 'id']) {
 				for (const value of params.getAll(paramKey)) {
 					if (paramKey === 'id' && !/\.(mp4|mkv|webm|mov|m4a)(?:$|[?#])/i.test(String(value || ''))) continue;
+					let filePath = '';
 					try {
-						const filePath = new URL(value, baseUrl).pathname;
-						if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
-							matchField('RecordingName', decodeURIComponent(filePath.split('/').pop()), true, state);
-						}
+						filePath = new URL(value, baseUrl).pathname;
 					} catch (_) {
 						if (paramKey === 'fileUrl') throw new Error('recap audio recording identity mismatch');
+						continue;
+					}
+					if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
+						matchField('RecordingName', decodeURIComponent(filePath.split('/').pop()), true, state);
 					}
 				}
 			}
@@ -927,7 +929,7 @@ const extractRecapAudioJS = `(async () => {
 			const wsd = Number(u.searchParams.get('wsd'));
 			const ppd = Number(u.searchParams.get('ppd'));
 			if (track !== 'video' && Number.isFinite(wsd) && wsd > 0) transcodeWsd = wsd;
-			if (Number.isFinite(ppd) && ppd > 0) {
+			if (track !== 'video' && Number.isFinite(ppd) && ppd > 0) {
 				transcodePpd = ppd;
 				const ppdSec = transcodeDurationSec(ppd, (Number.isFinite(wsd) && wsd > 0) ? wsd : transcodeWsd);
 				if (Number.isFinite(ppdSec) && (ppdSec > maxRecapAudioDurationSec || Math.ceil(ppdSec * 44100) * 2 > maxRecapAudioPCMBytes)) {
@@ -2277,8 +2279,8 @@ func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
 	for _, key := range []string{"fileUrl", "id"} {
 		if v := strings.TrimSpace(vals.Get(key)); v != "" && id.RecordingName == "" {
 			if fu, err := url.Parse(v); err == nil && fu.Path != "" && !strings.Contains(fu.Path, "/:") {
-				base := filepath.Base(filepath.FromSlash(fu.Path))
-				ext := strings.ToLower(filepath.Ext(base))
+				base := path.Base(fu.Path)
+				ext := strings.ToLower(path.Ext(base))
 				if base != "." && base != "/" && (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" || ext == ".m4a") {
 					id.RecordingName = strings.ToLower(base)
 				}
@@ -2419,15 +2421,15 @@ const copyAISummaryJS = `(async () => {
 	}
 	const copyBtn = document.querySelector('button[aria-label="Copy all"]');
 	if (!copyBtn) {
-		const spCopyBtn = document.querySelector('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]');
-		if (spCopyBtn) {
-			const msgEl = spCopyBtn.closest ? spCopyBtn.closest('.fai-CopilotMessage') : null;
-			const contentEl = msgEl && msgEl.querySelector ? msgEl.querySelector('.fai-CopilotMessage__content') : null;
-			const txt = String((contentEl ? (contentEl.innerText || contentEl.textContent) : (msgEl ? (msgEl.innerText || msgEl.textContent) : '')) || '').trim();
-			if (txt) return txt;
-		}
 		const isTeamsRecapSurface = Boolean(notesTab || aiNotesTab || document.querySelector('[data-tid="intelligent-recap-header"]'));
-		if (!isTeamsRecapSurface) {
+		const locRef = String((typeof location !== 'undefined' && (location.pathname || location.href)) || '').toLowerCase();
+		const hostRef = String((typeof location !== 'undefined' && (location.hostname || location.href)) || '').toLowerCase();
+		const isSharePointStreamSurface = Boolean(
+			locRef.includes('stream.aspx') ||
+			hostRef.includes('sharepoint.com') ||
+			(window.g_fileInfo && (window.g_fileInfo.isDownloadBlocked !== undefined || window.g_fileInfo.name || window.g_fileInfo.EncKey))
+		);
+		if (!isTeamsRecapSurface && isSharePointStreamSurface) {
 			const closeCopilotBtn = document.querySelector('button[aria-label="Close Copilot"]');
 			if (!closeCopilotBtn) {
 				const copilotBtn = document.querySelector('[role="menuitem"][aria-label="Copilot"], button[aria-label="Copilot"]');
@@ -2442,6 +2444,15 @@ const copyAISummaryJS = `(async () => {
 			if (recapBtn && typeof recapBtn.click === 'function' && !recapBtn.dataset.goTeamsRecapClicked) {
 				recapBtn.dataset.goTeamsRecapClicked = 'true';
 				recapBtn.click();
+				return '';
+			}
+			const spCopyBtns = Array.from(document.querySelectorAll('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]') || []);
+			const spCopyBtn = spCopyBtns.length ? spCopyBtns[spCopyBtns.length - 1] : null;
+			if (spCopyBtn) {
+				const msgEl = spCopyBtn.closest ? spCopyBtn.closest('.fai-CopilotMessage') : null;
+				const contentEl = msgEl && msgEl.querySelector ? msgEl.querySelector('.fai-CopilotMessage__content') : null;
+				const txt = String((contentEl ? (contentEl.innerText || contentEl.textContent) : (msgEl ? (msgEl.innerText || msgEl.textContent) : '')) || '').trim();
+				if (txt) return txt;
 			}
 		}
 		return '';

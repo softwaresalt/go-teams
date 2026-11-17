@@ -99,8 +99,8 @@ rounds on PR #76 (`P-018` `copilot-review` gate `SATISFIED` on HEAD
 |---|---|---|
 | Stash `9A16B213` | Already archived by Stage at harvest; absent from active stash | skipped |
 | Deliberation `020-DL` | Archived via `backlogit archive 020-DL` prior to `cascade-close`; resolved to `already-archived` in `pre_close.linked_deliberation_disposition` (`docs/closure/evidence/031-S-031-F-close-evidence.json`) | archived (`.backlogit/archive/020-DL.md`) |
-| Stash `39450846` | Captured during R3 (`U1-R3`..`U6-R3`, subsequently remediated in `685e08b`/`ed092e5`; pre-compaction R3 report archived to `docs/archive/closure/2026-11-16/2026-11-16-031-s-r3-adversarial-review.md`); untouched per Ship Role Boundary | retained for Stage disposition |
-| Stash `7883544E` | Captured during R5 for `LOW` Unique advisories `U1-R5` and `U2-R5` (pre-compaction R5 report archived to `docs/archive/closure/2026-11-16/2026-11-16-031-s-r5-adversarial-review.md`); `U1-R6` and `U1-R8` are recorded in archived R6/R8 reviews only | retained active for Stage triage |
+| Stash `39450846` | Captured during R3 (`U1-R3`..`U6-R3`, subsequently remediated in `685e08b`/`ed092e5`; referenced R3 report kept at `docs/closure/2026-11-16-031-s-r3-adversarial-review.md`); untouched per Ship Role Boundary | retained for Stage disposition |
+| Stash `7883544E` | Captured during R5 for `LOW` Unique advisories `U1-R5` and `U2-R5` (referenced R5 report kept at `docs/closure/2026-11-16-031-s-r5-adversarial-review.md`); `U1-R6` and `U1-R8` are recorded in archived R6/R8 reviews only | retained active for Stage triage |
 | Pre-existing active stash entries | `9BDFB275`, `560B0C44`, `188D4FBB`, `232C6844`, `AD451E00`, `3F6BA819` | preserved untouched in `.backlogit/stash.jsonl` |
 
 ### Knowledge graduation, compaction (P-020), and compound refresh
@@ -111,8 +111,11 @@ Graduated documentation in `docs/ARCHITECTURE.md` and `docs/USER_GUIDE.md`
 `compact-context` consolidated `stage-031-s-download-blocked-recap-audio-memory.md`
 and `ship-031-s-download-blocked-recap-audio-memory.md` into
 `docs/memory/compacted/2026-11-16-031-S-download-blocked-recap-audio-compacted.md`
-and archived the verbose memory and intermediate review artifacts to
-`docs/archive/memory/2026-11-16/` and `docs/archive/closure/2026-11-16/`.
+and archived the verbose memory and unreferenced review artifacts to
+`docs/archive/memory/2026-11-16/` and `docs/archive/closure/2026-11-16/` (retaining
+`docs/closure/2026-11-16-031-s-r3-adversarial-review.md` and
+`docs/closure/2026-11-16-031-s-r5-adversarial-review.md` in place while active
+stash entries `39450846` and `7883544E` reference them).
 `compound-refresh` verified existing `docs/compound/` entries remain valid
 (`keep`). `compaction_status` is `done`.
 

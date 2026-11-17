@@ -2,9 +2,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,10 +38,69 @@ type deps struct {
 	// writeTemplate writes the commented configuration template to path,
 	// replacing an existing file only when force is true.
 	writeTemplate func(path string, force bool) error
+	// promptCtx, promptIn, and promptOut preserve the outer command's context
+	// and interactive I/O streams across --queue execution.
+	promptCtx context.Context
+	promptIn  io.Reader
+	promptOut io.Writer
+}
+
+func bindPromptStreams(cmd *cobra.Command, d *deps) {
+	if cmd == nil || d == nil || isInsideQueueExecution(cmd.Context()) {
+		return
+	}
+	d.promptCtx = cmd.Context()
+	d.promptIn = cmd.InOrStdin()
+	d.promptOut = cmd.ErrOrStderr()
+}
+
+func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, paths []string) (bool, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
+	if in == nil {
+		in = os.Stdin
+	}
+	if out == nil {
+		out = os.Stderr
+	}
+	if _, err := fmt.Fprintf(out, "File already exists: %s\nOverwrite? (Y)es | (N)o: ", strings.Join(paths, ", ")); err != nil {
+		return false, err
+	}
+	type readResult struct {
+		line string
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		ch <- readResult{line: line, err: err}
+	}()
+	var res readResult
+	if ctx != nil && ctx.Done() != nil {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case res = <-ch:
+		}
+	} else {
+		res = <-ch
+	}
+	if res.err != nil && !errors.Is(res.err, io.EOF) {
+		return false, res.err
+	}
+	switch strings.ToLower(strings.TrimSpace(res.line)) {
+	case "y", "yes", "(y)es":
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func defaultDeps() *deps {
-	return &deps{
+	d := &deps{
 		loadConfig:    config.Load,
 		runUpdate:     defaultRunUpdate,
 		writeTemplate: config.WriteTemplate,
@@ -47,25 +108,34 @@ func defaultDeps() *deps {
 			return browser.NewChromeRunner(browserOptions(c))
 		},
 		newMeeting: defaultNewMeeting,
-		newSession: func(c config.Config, meetingURL string) meetingSession {
-			dur, _ := parseOptionalDuration(c.Duration)
-			idle, _ := parseOptionalDuration(c.IdleTimeout)
-			return capture.NewSession(capture.SessionConfig{
-				OutputDir:        c.OutputDir,
-				OutputFile:       c.OutputFile,
-				FilenameTemplate: c.FilenameTemplate,
-				MeetingURL:       meetingURL,
-				MeetingTitle:     c.MeetingTitle,
-				Category:         c.Category,
-				BotName:          c.BotName,
-				CaptionsOnly:     !c.CaptureAudio,
-				Mode:             c.CaptureMode,
-				Duration:         dur,
-				IdleTimeout:      idle,
-				DisableAISummary: isAISummaryDisabled(c),
-			})
-		},
 	}
+	d.newSession = func(c config.Config, meetingURL string) meetingSession {
+		dur, _ := parseOptionalDuration(c.Duration)
+		idle, _ := parseOptionalDuration(c.IdleTimeout)
+		var confirmOverwrite func([]string) (bool, error)
+		if !c.Overwrite {
+			confirmOverwrite = func(paths []string) (bool, error) {
+				return promptOverwriteApproval(d.promptCtx, d.promptIn, d.promptOut, paths)
+			}
+		}
+		return capture.NewSession(capture.SessionConfig{
+			OutputDir:        c.OutputDir,
+			OutputFile:       c.OutputFile,
+			FilenameTemplate: c.FilenameTemplate,
+			MeetingURL:       meetingURL,
+			MeetingTitle:     c.MeetingTitle,
+			Category:         c.Category,
+			BotName:          c.BotName,
+			CaptionsOnly:     !c.CaptureAudio,
+			Overwrite:        c.Overwrite,
+			ConfirmOverwrite: confirmOverwrite,
+			Mode:             c.CaptureMode,
+			Duration:         dur,
+			IdleTimeout:      idle,
+			DisableAISummary: isAISummaryDisabled(c),
+		})
+	}
+	return d
 }
 
 // defaultRunUpdate runs the production updater against GitHub Releases.
@@ -174,6 +244,7 @@ func newRootCommand(d *deps) *cobra.Command {
 		Version:      version.Version,
 		Args:         cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			bindPromptStreams(cmd, d)
 			if flags.queueFile != "" {
 				if isInsideQueueExecution(cmd.Context()) {
 					return errors.New("cli: nested --queue flag is not allowed")

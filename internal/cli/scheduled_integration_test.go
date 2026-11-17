@@ -113,7 +113,8 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 	)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgYAML), 0o600))
 
-	if strings.Contains(strings.ToLower(rawURL), "meetingrecap") {
+	lowerURL := strings.ToLower(rawURL)
+	if strings.Contains(lowerURL, "meetingrecap") || strings.Contains(lowerURL, "stream.aspx") || strings.Contains(lowerURL, "streamembed.aspx") {
 		recapArgs := []string{
 			"join",
 			rawURL,
@@ -123,6 +124,7 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 			"--category", "LIVE",
 			"--output-dir", outDir,
 			"--profile-dir", profile,
+			"--audio",
 			"--headless",
 		}
 		if bPath := strings.TrimSpace(os.Getenv("TEAMS_BROWSER_PATH")); bPath != "" {
@@ -140,11 +142,23 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 
 		entries, err := os.ReadDir(outDir)
 		require.NoError(t, err)
-		var mdPath string
+		var (
+			mdPath  string
+			mp3Path string
+		)
 		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-				mdPath = filepath.Join(outDir, e.Name())
-				break
+			if e.IsDir() {
+				continue
+			}
+			switch filepath.Ext(e.Name()) {
+			case ".md":
+				if mdPath == "" {
+					mdPath = filepath.Join(outDir, e.Name())
+				}
+			case ".mp3":
+				if mp3Path == "" {
+					mp3Path = filepath.Join(outDir, e.Name())
+				}
 			}
 		}
 		require.NotEmpty(t, mdPath, "expected flushed Markdown recap transcript in output directory")
@@ -157,6 +171,10 @@ func TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown(t *testing.T) {
 		require.True(t, strings.Contains(mdText, "## Transcript"), "expected transcript body section in saved Markdown")
 		require.True(t, strings.Contains(mdText, "\n> "), "expected at least one captured caption utterance in saved Markdown")
 		require.True(t, strings.Contains(mdText, "# AI Summary"), "expected appended # AI Summary section in saved Markdown")
+		require.NotEmpty(t, mp3Path, "expected captured MP3 audio file in output directory")
+		mp3Bytes, err := os.ReadFile(mp3Path)
+		require.NoError(t, err)
+		require.True(t, len(mp3Bytes) >= 2 && mp3Bytes[0] == 0xff && (mp3Bytes[1]&0xe0) == 0xe0, "expected non-empty MP3 file with valid MPEG frame sync header")
 		return
 	}
 
@@ -267,7 +285,11 @@ func TestLiveTenantDelayedAISummaryQueueReplay(t *testing.T) {
 	if rawRecapURL == "" {
 		mURL := strings.TrimSpace(os.Getenv("TEAMS_MEETING_URL"))
 		lower := strings.ToLower(mURL)
-		if strings.Contains(lower, "meetingrecap") || strings.Contains(lower, "19:meeting_") || strings.Contains(lower, "19%3ameeting_") {
+		if strings.Contains(lower, "meetingrecap") ||
+			strings.Contains(lower, "stream.aspx") ||
+			strings.Contains(lower, "streamembed.aspx") ||
+			strings.Contains(lower, "19:meeting_") ||
+			strings.Contains(lower, "19%3ameeting_") {
 			rawRecapURL = mURL
 		} else {
 			t.Skip("set TEAMS_RECAP_URL (or a TEAMS_MEETING_URL carrying threadId) to run live delayed AI summary queue replay test")

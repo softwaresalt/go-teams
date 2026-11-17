@@ -691,8 +691,8 @@ func TestSetupOutputOverwriteAndConfirmPrompt(t *testing.T) {
 		<-promptStarted
 		cancel()
 
-		if runErr := <-errCh; runErr != nil {
-			t.Fatalf("cancelled ConfirmOverwrite in Session.Run should exit gracefully, got %v", runErr)
+		if runErr := <-errCh; !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("cancelled ConfirmOverwrite in Session.Run err = %v, want wrapping context.Canceled", runErr)
 		}
 		got, readErr := os.ReadFile(mdPath)
 		if readErr != nil {

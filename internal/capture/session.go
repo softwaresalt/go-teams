@@ -69,6 +69,9 @@ type SessionConfig struct {
 	// ConfirmOverwrite prompts the operator before overwriting existing target
 	// files when Overwrite is false.
 	ConfirmOverwrite func(paths []string) (bool, error)
+	// ConfirmOverwriteWithContext is an optional context-aware variant of
+	// ConfirmOverwrite that receives Session.Run's active context directly.
+	ConfirmOverwriteWithContext func(ctx context.Context, paths []string) (bool, error)
 }
 
 // Session orchestrates a single meeting capture end to end: join, then
@@ -182,7 +185,21 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 	captionsOnly := s.cfg.CaptionsOnly
 
 	var confirmOverwrite func([]string) (bool, error)
-	if s.cfg.ConfirmOverwrite != nil {
+	if s.cfg.ConfirmOverwriteWithContext != nil {
+		confirmOverwrite = func(paths []string) (bool, error) {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			approved, confirmErr := s.cfg.ConfirmOverwriteWithContext(ctx, paths)
+			if confirmErr != nil {
+				return false, confirmErr
+			}
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			return approved, nil
+		}
+	} else if s.cfg.ConfirmOverwrite != nil {
 		confirmOverwrite = func(paths []string) (bool, error) {
 			if err := ctx.Err(); err != nil {
 				return false, err
@@ -233,15 +250,12 @@ func (s *Session) Run(ctx context.Context, m browser.Meeting) (err error) {
 		}
 	}
 
-	if err := ctx.Err(); err != nil && isShutdown(ctx, err) {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	out, err := s.setupOutput(outCfg)
 	if err != nil {
-		if isShutdown(ctx, err) {
-			return nil
-		}
 		return err
 	}
 	s.mu.Lock()

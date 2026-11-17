@@ -56,6 +56,20 @@ func TestPromptOverwriteApproval(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.False(t, got)
 	})
+
+	t.Run("oversized line drains through newline without leaking trailing bytes", func(t *testing.T) {
+		longLine := strings.Repeat("x", 5000) + "\ny\n"
+		reader := strings.NewReader(longLine)
+		var out1, out2 bytes.Buffer
+
+		got1, err1 := promptOverwriteApproval(context.Background(), reader, &out1, []string{"a.md"})
+		require.NoError(t, err1)
+		assert.False(t, got1)
+
+		got2, err2 := promptOverwriteApproval(context.Background(), reader, &out2, []string{"b.md"})
+		require.NoError(t, err2)
+		assert.True(t, got2)
+	})
 }
 
 func TestOverwriteFlagAndConfigPrecedenceAndQueueInheritance(t *testing.T) {
@@ -266,5 +280,36 @@ func TestCLIJoinInteractiveOverwritePromptAndDecline(t *testing.T) {
 		data2, _ := os.ReadFile(target2)
 		assert.Contains(t, string(data1), "Fresh transcript line.")
 		assert.Contains(t, string(data2), "Fresh transcript line.")
+	})
+
+	t.Run("--queue does not mark line complete when browserCtx cancels during ConfirmOverwrite", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "cancelled.md")
+		require.NoError(t, os.WriteFile(target, []byte("keep original"), 0o600))
+
+		queuePath := filepath.Join(dir, "queue.txt")
+		queueLine := url + " -o " + quoteQueueArg(target)
+		require.NoError(t, os.WriteFile(queuePath, []byte(queueLine+"\n"), 0o600))
+
+		d := setupDeps(t)
+		d.newMeeting = func(ctx context.Context, _ config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+			bCtx, bCancel := context.WithCancel(ctx)
+			bCancel()
+			return fakeCLIOverwriteMeeting{}, bCtx, func() {}, nil
+		}
+		root := newRootCommand(d)
+		var errBuf bytes.Buffer
+		root.SetIn(strings.NewReader("y\n"))
+		root.SetOut(io.Discard)
+		root.SetErr(&errBuf)
+		root.SetArgs([]string{"join", "--queue", queuePath})
+
+		err := root.ExecuteContext(context.Background())
+		require.ErrorIs(t, err, context.Canceled)
+
+		data, _ := os.ReadFile(target)
+		assert.Equal(t, "keep original", string(data))
+		qData, _ := os.ReadFile(queuePath)
+		assert.NotContains(t, string(qData), "::"+queueLine, "cancelled queue line must remain uncommented")
 	})
 }

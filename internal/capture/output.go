@@ -189,33 +189,36 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		}
 	}
 
-	checkTarget := func(p string) (bool, error) {
+	checkTarget := func(p string) (os.FileInfo, bool, error) {
 		info, statErr := os.Lstat(p)
 		if statErr == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
-				return false, fmt.Errorf("capture: output path must not be a symlink: %s", p)
+				return nil, false, fmt.Errorf("capture: output path must not be a symlink: %s", p)
 			}
 			if info.IsDir() {
-				return false, fmt.Errorf("capture: output path is a directory: %s", p)
+				return nil, false, fmt.Errorf("capture: output path is a directory: %s", p)
 			}
 			if !info.Mode().IsRegular() {
-				return false, fmt.Errorf("capture: output path is not a regular file: %s", p)
+				return nil, false, fmt.Errorf("capture: output path is not a regular file: %s", p)
 			}
-			return true, nil
+			return info, true, nil
 		}
 		if !errors.Is(statErr, os.ErrNotExist) {
-			return false, fmt.Errorf("capture: stat %s: %w", p, statErr)
+			return nil, false, fmt.Errorf("capture: stat %s: %w", p, statErr)
 		}
-		return false, nil
+		return nil, false, nil
 	}
 
-	mdExisted, err := checkTarget(mdPath)
+	mdPreInfo, mdExisted, err := checkTarget(mdPath)
 	if err != nil {
 		return nil, err
 	}
-	var mp3Existed bool
+	var (
+		mp3PreInfo os.FileInfo
+		mp3Existed bool
+	)
 	if !cfg.CaptionsOnly {
-		mp3Existed, err = checkTarget(mp3Path)
+		mp3PreInfo, mp3Existed, err = checkTarget(mp3Path)
 		if err != nil {
 			return nil, err
 		}
@@ -242,11 +245,43 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		}
 	}
 
-	mdOpenFlg := os.O_CREATE | os.O_WRONLY | os.O_EXCL
-	if mdExisted {
-		mdOpenFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	openOutputFile := func(p string, preInfo os.FileInfo, existed bool) (*os.File, error) {
+		if !existed {
+			return os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
+		}
+		lstatInfo, lErr := os.Lstat(p)
+		if lErr != nil {
+			return nil, lErr
+		}
+		if lstatInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("output path must not be a symlink: %s", p)
+		}
+		if lstatInfo.IsDir() || !lstatInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("output path is not a regular file: %s", p)
+		}
+		if !os.SameFile(preInfo, lstatInfo) {
+			return nil, fmt.Errorf("output path changed before overwrite: %s", p)
+		}
+		f, openErr := os.OpenFile(p, os.O_WRONLY, filePerm)
+		if openErr != nil {
+			return nil, openErr
+		}
+		fdInfo, fStatErr := f.Stat()
+		if fStatErr != nil || !os.SameFile(preInfo, fdInfo) || !os.SameFile(lstatInfo, fdInfo) {
+			_ = f.Close()
+			if fStatErr != nil {
+				return nil, fStatErr
+			}
+			return nil, fmt.Errorf("output file identity changed before truncation: %s", p)
+		}
+		if truncErr := f.Truncate(0); truncErr != nil {
+			_ = f.Close()
+			return nil, truncErr
+		}
+		return f, nil
 	}
-	mdFile, err := os.OpenFile(mdPath, mdOpenFlg, filePerm)
+
+	mdFile, err := openOutputFile(mdPath, mdPreInfo, mdExisted)
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
@@ -287,11 +322,7 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			mdFile:         mdFile,
 		}, nil
 	}
-	mp3OpenFlg := os.O_CREATE | os.O_WRONLY | os.O_EXCL
-	if mp3Existed {
-		mp3OpenFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-	}
-	mp3File, err := os.OpenFile(mp3Path, mp3OpenFlg, filePerm)
+	mp3File, err := openOutputFile(mp3Path, mp3PreInfo, mp3Existed)
 	if err != nil {
 		// Best-effort rollback so a failed pair leaves no newly created partial
 		// artifacts; never remove a pre-existing mdPath.

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -37,11 +39,14 @@ type deps struct {
 	// writeTemplate writes the commented configuration template to path,
 	// replacing an existing file only when force is true.
 	writeTemplate func(path string, force bool) error
-	// promptCtx, promptIn, and promptOut preserve the outer command's context
-	// and interactive I/O streams across --queue execution.
-	promptCtx context.Context
-	promptIn  io.Reader
-	promptOut io.Writer
+	// promptCtx, promptIn, promptOut, promptTimeout, and promptMu preserve the
+	// outer command's interactive I/O streams safely across --queue and
+	// schedule execution.
+	promptCtx     context.Context
+	promptIn      io.Reader
+	promptOut     io.Writer
+	promptTimeout time.Duration
+	promptMu      sync.Mutex
 }
 
 func bindPromptStreams(cmd *cobra.Command, d *deps) {
@@ -100,7 +105,8 @@ func promptOverwriteApproval(ctx context.Context, in io.Reader, out io.Writer, p
 
 // readPromptLine reads up to one newline-terminated line byte-by-byte so
 // buffered lookahead never consumes answers intended for subsequent --queue
-// prompts.
+// prompts. Bytes beyond maxPromptLineBytes are drained through the end of the
+// line so trailing characters never leak into the next prompt.
 func readPromptLine(in io.Reader) (string, error) {
 	const maxPromptLineBytes = 4096
 	var (
@@ -113,9 +119,8 @@ func readPromptLine(in io.Reader) (string, error) {
 			if buf[0] == '\n' {
 				return out.String(), nil
 			}
-			out.WriteByte(buf[0])
-			if out.Len() >= maxPromptLineBytes {
-				return out.String(), nil
+			if out.Len() < maxPromptLineBytes {
+				out.WriteByte(buf[0])
 			}
 		}
 		if err != nil {
@@ -137,27 +142,50 @@ func defaultDeps() *deps {
 	d.newSession = func(c config.Config, meetingURL string) meetingSession {
 		dur, _ := parseOptionalDuration(c.Duration)
 		idle, _ := parseOptionalDuration(c.IdleTimeout)
-		var confirmOverwrite func([]string) (bool, error)
+		var (
+			confirmOverwrite    func([]string) (bool, error)
+			confirmOverwriteCtx func(context.Context, []string) (bool, error)
+		)
 		if !c.Overwrite {
+			confirmOverwriteCtx = func(sessCtx context.Context, paths []string) (bool, error) {
+				if !d.promptMu.TryLock() {
+					return false, errors.New("cli: prompt stream busy after cancelled prompt")
+				}
+				defer d.promptMu.Unlock()
+				effectiveCtx := sessCtx
+				if effectiveCtx == nil {
+					effectiveCtx = d.promptCtx
+				}
+				if effectiveCtx == nil {
+					effectiveCtx = context.Background()
+				}
+				if d.promptTimeout > 0 {
+					var cancel context.CancelFunc
+					effectiveCtx, cancel = context.WithTimeout(effectiveCtx, d.promptTimeout)
+					defer cancel()
+				}
+				return promptOverwriteApproval(effectiveCtx, d.promptIn, d.promptOut, paths)
+			}
 			confirmOverwrite = func(paths []string) (bool, error) {
-				return promptOverwriteApproval(d.promptCtx, d.promptIn, d.promptOut, paths)
+				return confirmOverwriteCtx(d.promptCtx, paths)
 			}
 		}
 		return capture.NewSession(capture.SessionConfig{
-			OutputDir:        c.OutputDir,
-			OutputFile:       c.OutputFile,
-			FilenameTemplate: c.FilenameTemplate,
-			MeetingURL:       meetingURL,
-			MeetingTitle:     c.MeetingTitle,
-			Category:         c.Category,
-			BotName:          c.BotName,
-			CaptionsOnly:     !c.CaptureAudio,
-			Overwrite:        c.Overwrite,
-			ConfirmOverwrite: confirmOverwrite,
-			Mode:             c.CaptureMode,
-			Duration:         dur,
-			IdleTimeout:      idle,
-			DisableAISummary: isAISummaryDisabled(c),
+			OutputDir:                   c.OutputDir,
+			OutputFile:                  c.OutputFile,
+			FilenameTemplate:            c.FilenameTemplate,
+			MeetingURL:                  meetingURL,
+			MeetingTitle:                c.MeetingTitle,
+			Category:                    c.Category,
+			BotName:                     c.BotName,
+			CaptionsOnly:                !c.CaptureAudio,
+			Overwrite:                   c.Overwrite,
+			ConfirmOverwrite:            confirmOverwrite,
+			ConfirmOverwriteWithContext: confirmOverwriteCtx,
+			Mode:                        c.CaptureMode,
+			Duration:                    dur,
+			IdleTimeout:                 idle,
+			DisableAISummary:            isAISummaryDisabled(c),
 		})
 	}
 	return d

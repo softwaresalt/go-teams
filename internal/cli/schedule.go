@@ -325,6 +325,9 @@ func newScheduleCommand(d *deps, configPath *string) *cobra.Command {
 			"  go-teams schedule --mode ephemeral-live --audio=false --headless",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if d != nil && d.promptTimeout == 0 {
+				d.promptTimeout = 15 * time.Second
+			}
 			bindPromptStreams(cmd, d)
 			cfg, err := loadConfigFrom(d, *configPath)
 			if err != nil {

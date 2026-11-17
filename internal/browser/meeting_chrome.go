@@ -442,8 +442,14 @@ func isOnTargetMeetingOrRecapURL(meetingURL, pageURL, path, hash string) bool {
 	case strings.Contains(lowerMeeting, "meetingrecap"):
 		return strings.Contains(combined, "meetingrecap")
 	case strings.Contains(lowerMeeting, "stream.aspx"):
+		if exp != (MeetingIdentity{}) {
+			return false
+		}
 		return strings.Contains(combined, "stream.aspx")
 	case strings.Contains(lowerMeeting, "streamembed.aspx"):
+		if exp != (MeetingIdentity{}) {
+			return false
+		}
 		return strings.Contains(combined, "streamembed.aspx")
 	case strings.Contains(lowerMeeting, "meetup-join"):
 		return strings.Contains(combined, "meetup-join")

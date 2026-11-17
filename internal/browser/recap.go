@@ -94,14 +94,22 @@ const extractRecapAudioJS = `(async () => {
 				for (const value of params.getAll(paramKey)) {
 					if (paramKey === 'id' && !/\.(mp4|mkv|webm|mov|m4a)(?:$|[?#])/i.test(String(value || ''))) continue;
 					let filePath = '';
-					try {
-						filePath = new URL(value, baseUrl).pathname;
-					} catch (_) {
-						if (paramKey === 'fileUrl') throw new Error('recap audio recording identity mismatch');
-						continue;
+					let alreadyDecoded = false;
+					if (/^https?:\/\//i.test(value)) {
+						try {
+							filePath = new URL(value).pathname;
+						} catch (_) {
+							if (paramKey === 'fileUrl') throw new Error('recap audio recording identity mismatch');
+							continue;
+						}
+					} else {
+						filePath = String(value || '');
+						alreadyDecoded = true;
 					}
 					if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
-						matchField('RecordingName', decodeURIComponent(filePath.split('/').pop()), true, state);
+						const rawName = filePath.split('/').pop();
+						const recName = alreadyDecoded ? rawName : decodeURIComponent(rawName);
+						matchField('RecordingName', recName, true, state);
 					}
 				}
 			}
@@ -1604,7 +1612,6 @@ const extractRecapAudioJS = `(async () => {
 				const importedKey = await origPlayerSubtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
 				if (!audioCryptoKeyInfo) {
 					audioCryptoKeyInfo = { algorithm: 'AES-CBC', key: importedKey, iv: ivBytes, prefixIV: false };
-					activityObserved = true;
 					signalWake();
 				}
 			} catch (_) {}
@@ -1619,6 +1626,11 @@ const extractRecapAudioJS = `(async () => {
 				if (!rawName) continue;
 				const lower = rawName.toLowerCase();
 				if (lower.includes('onedrive.transcode') || lower.includes('part=initsegment') || lower.includes('part=mediasegment')) {
+					try { checkIdentityAgainst(rawName, pageUrl, { matched: false }); } catch (_) { continue; }
+					if (itemId) {
+						const itemMatch = rawName.match(/\/items\/([^/?#]+)\//i);
+						if (itemMatch && itemMatch[1].toLowerCase() !== itemId.toLowerCase()) continue;
+					}
 					inspectTranscodeRequest(rawName, null, w);
 				}
 			}
@@ -1663,7 +1675,7 @@ const extractRecapAudioJS = `(async () => {
 				if (!playTriggered) triggerPlaybackIfReady();
 				if (fatalErr) throw fatalErr;
 				if (!audioCryptoKeyInfo) await seedEncKeyFromFileInfo();
-				if (!transcodeAudioTemplateUrl) {
+				if (!transcodeAudioTemplateUrl || !(transcodeWsd > 0) || !(transcodePpd > 0)) {
 					scanPerformanceTranscodeEntries(playerWin);
 					if (playerWin !== window) scanPerformanceTranscodeEntries(window);
 				}
@@ -2278,8 +2290,16 @@ func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
 	}
 	for _, key := range []string{"fileUrl", "id"} {
 		if v := strings.TrimSpace(vals.Get(key)); v != "" && id.RecordingName == "" {
-			if fu, err := url.Parse(v); err == nil && fu.Path != "" && !strings.Contains(fu.Path, "/:") {
-				base := path.Base(fu.Path)
+			var p string
+			if strings.Contains(v, "://") {
+				if fu, err := url.Parse(v); err == nil {
+					p = fu.Path
+				}
+			} else {
+				p = v
+			}
+			if p != "" && !strings.Contains(p, "/:") {
+				base := path.Base(p)
 				ext := strings.ToLower(path.Ext(base))
 				if base != "." && base != "/" && (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" || ext == ".m4a") {
 					id.RecordingName = strings.ToLower(base)
@@ -2443,11 +2463,18 @@ const copyAISummaryJS = `(async () => {
 			const recapBtn = candidates.find(el => String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting');
 			if (recapBtn && typeof recapBtn.click === 'function' && !recapBtn.dataset.goTeamsRecapClicked) {
 				recapBtn.dataset.goTeamsRecapClicked = 'true';
+				for (const existingMsg of Array.from(document.querySelectorAll('.fai-CopilotMessage') || [])) {
+					if (existingMsg && existingMsg.dataset) existingMsg.dataset.goTeamsPreexisting = 'true';
+				}
 				recapBtn.click();
 				return '';
 			}
 			const spCopyBtns = Array.from(document.querySelectorAll('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]') || []);
-			const spCopyBtn = spCopyBtns.length ? spCopyBtns[spCopyBtns.length - 1] : null;
+			const freshCopyBtns = spCopyBtns.filter(btn => {
+				const msg = btn && btn.closest ? btn.closest('.fai-CopilotMessage') : null;
+				return !(msg && msg.dataset && msg.dataset.goTeamsPreexisting === 'true');
+			});
+			const spCopyBtn = freshCopyBtns.length ? freshCopyBtns[freshCopyBtns.length - 1] : null;
 			if (spCopyBtn) {
 				const msgEl = spCopyBtn.closest ? spCopyBtn.closest('.fai-CopilotMessage') : null;
 				const contentEl = msgEl && msgEl.querySelector ? msgEl.querySelector('.fai-CopilotMessage__content') : null;

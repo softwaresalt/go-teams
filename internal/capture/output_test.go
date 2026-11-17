@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/softwaresalt/go-teams/internal/transcript"
 )
 
 var safeName = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -596,6 +598,43 @@ func TestSetupOutputOverwriteAndConfirmPrompt(t *testing.T) {
 			if string(mdBytes) != "keep md intact" {
 				t.Fatalf("pre-existing mdPath was truncated on mp3 open failure: %q", string(mdBytes))
 			}
+		}
+
+		// Forced header-flush failure after truncation must restore BOTH
+		// pre-existing .md and .mp3 files byte-for-byte with zero backup leftovers.
+		flushDir := t.TempDir()
+		flushMD := filepath.Join(flushDir, "flush.md")
+		flushMP3 := filepath.Join(flushDir, "flush.mp3")
+		if err := os.WriteFile(flushMD, []byte("original md content"), 0o600); err != nil {
+			t.Fatalf("seed flushMD: %v", err)
+		}
+		if err := os.WriteFile(flushMP3, []byte("original mp3 content"), 0o600); err != nil {
+			t.Fatalf("seed flushMP3: %v", err)
+		}
+		flushBoom := errors.New("simulated header flush failure")
+		_, flushErr := setupOutputWithFlushHook(OutputConfig{
+			FilePath:   flushMD,
+			MeetingURL: url,
+			BotName:    "Bot",
+			Now:        fixedTime(),
+			Overwrite:  true,
+		}, func(*transcript.Writer) error {
+			return flushBoom
+		})
+		if !errors.Is(flushErr, flushBoom) {
+			t.Fatalf("setupOutputWithFlushHook err = %v, want %v", flushErr, flushBoom)
+		}
+		gotMD, _ := os.ReadFile(flushMD)
+		gotMP3, _ := os.ReadFile(flushMP3)
+		if string(gotMD) != "original md content" {
+			t.Fatalf("pre-existing md not restored on flush failure: got %q", string(gotMD))
+		}
+		if string(gotMP3) != "original mp3 content" {
+			t.Fatalf("pre-existing mp3 not restored on flush failure: got %q", string(gotMP3))
+		}
+		entries, _ := os.ReadDir(flushDir)
+		if len(entries) != 2 {
+			t.Fatalf("expected only original 2 files after rollback, got %v", entries)
 		}
 	})
 

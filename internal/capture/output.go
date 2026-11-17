@@ -133,6 +133,10 @@ type Output struct {
 // same overwrite policy: existing files require Overwrite or ConfirmOverwrite
 // approval before any file is opened or truncated.
 func setupOutput(cfg OutputConfig) (*Output, error) {
+	return setupOutputWithFlushHook(cfg, nil)
+}
+
+func setupOutputWithFlushHook(cfg OutputConfig, flushHeader func(*transcript.Writer) error) (*Output, error) {
 	now := cfg.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -265,7 +269,7 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		if !os.SameFile(preInfo, lstatInfo) {
 			return nil, fmt.Errorf("output path changed before overwrite: %s", p)
 		}
-		f, openErr := os.OpenFile(p, os.O_WRONLY, filePerm)
+		f, openErr := os.OpenFile(p, os.O_RDWR, filePerm)
 		if openErr != nil {
 			return nil, openErr
 		}
@@ -278,6 +282,47 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			return nil, fmt.Errorf("output file identity changed before truncation: %s", p)
 		}
 		return f, nil
+	}
+
+	backupToTemp := func(f *os.File, p string) (string, error) {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(p), ".go-teams-backup-*")
+		if err != nil {
+			return "", err
+		}
+		tmpPath := tmp.Name()
+		if _, copyErr := io.Copy(tmp, f); copyErr != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+			return "", copyErr
+		}
+		if closeErr := tmp.Close(); closeErr != nil {
+			_ = os.Remove(tmpPath)
+			return "", closeErr
+		}
+		if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+			_ = os.Remove(tmpPath)
+			return "", seekErr
+		}
+		return tmpPath, nil
+	}
+
+	restoreFromTemp := func(f *os.File, backupPath string) {
+		if f == nil || backupPath == "" {
+			return
+		}
+		if src, openErr := os.Open(backupPath); openErr == nil {
+			if _, seekErr := f.Seek(0, io.SeekStart); seekErr == nil {
+				if truncErr := f.Truncate(0); truncErr == nil {
+					_, _ = io.Copy(f, src)
+					_ = f.Sync()
+				}
+			}
+			_ = src.Close()
+		}
+		_ = os.Remove(backupPath)
 	}
 
 	mdFile, err := openOutputFileNoTrunc(mdPath, mdPreInfo, mdExisted)
@@ -297,18 +342,55 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)
 		}
 	}
+
+	var mdBackup, mp3Backup string
+	cleanupBackups := func() {
+		if mdBackup != "" {
+			_ = os.Remove(mdBackup)
+			mdBackup = ""
+		}
+		if mp3Backup != "" {
+			_ = os.Remove(mp3Backup)
+			mp3Backup = ""
+		}
+	}
 	rollbackPair := func() {
+		if mdExisted {
+			restoreFromTemp(mdFile, mdBackup)
+			mdBackup = ""
+		}
 		_ = mdFile.Close()
 		if !mdExisted {
 			_ = os.Remove(mdPath)
 		}
 		if mp3File != nil {
+			if mp3Existed {
+				restoreFromTemp(mp3File, mp3Backup)
+				mp3Backup = ""
+			}
 			_ = mp3File.Close()
 			if !mp3Existed {
 				_ = os.Remove(mp3Path)
 			}
 		}
+		cleanupBackups()
 	}
+
+	if mdExisted {
+		mdBackup, err = backupToTemp(mdFile, mdPath)
+		if err != nil {
+			rollbackPair()
+			return nil, fmt.Errorf("capture: backup transcript %s: %w", mdPath, err)
+		}
+	}
+	if mp3File != nil && mp3Existed {
+		mp3Backup, err = backupToTemp(mp3File, mp3Path)
+		if err != nil {
+			rollbackPair()
+			return nil, fmt.Errorf("capture: backup audio %s: %w", mp3Path, err)
+		}
+	}
+
 	if mdExisted {
 		if truncErr := mdFile.Truncate(0); truncErr != nil {
 			rollbackPair()
@@ -332,18 +414,23 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		Attendees:    cfg.Attendees,
 		BotName:      cfg.BotName,
 	}); err != nil {
-		// Best-effort rollback of newly created files; never remove a
-		// pre-existing file pathname.
+		// Best-effort rollback of newly created files or restoration of
+		// pre-existing files from backup.
 		rollbackPair()
 		return nil, fmt.Errorf("capture: write transcript header: %w", err)
 	}
 	// Flush the header immediately so a physical write failure (e.g. a full
 	// filesystem) surfaces here and triggers rollback, rather than being
 	// deferred inside the bufio buffer until the first caption is written.
-	if err := w.Flush(); err != nil {
-		rollbackPair()
-		return nil, fmt.Errorf("capture: flush transcript header: %w", err)
+	flushErr := w.Flush()
+	if flushErr == nil && flushHeader != nil {
+		flushErr = flushHeader(w)
 	}
+	if flushErr != nil {
+		rollbackPair()
+		return nil, fmt.Errorf("capture: flush transcript header: %w", flushErr)
+	}
+	cleanupBackups()
 	if cfg.CaptionsOnly {
 		return &Output{
 			Transcript:     w,

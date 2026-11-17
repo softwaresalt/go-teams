@@ -34,6 +34,11 @@ const (
 )
 
 var (
+	// ErrOverwriteDeclined is returned when one or more target output files
+	// already exist, Overwrite is false, and the operator declines the
+	// overwrite confirmation prompt.
+	ErrOverwriteDeclined = errors.New("capture: file overwrite declined")
+
 	meetingIDToken  = regexp.MustCompile(`meeting_[A-Za-z0-9]+`)
 	meetPathToken   = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
 	unsafeIDChars   = regexp.MustCompile(`[^a-z0-9]+`)
@@ -96,6 +101,14 @@ type OutputConfig struct {
 	// CaptionsOnly skips creating the MP3 audio output file when only live
 	// captions are being captured to Markdown.
 	CaptionsOnly bool
+	// Overwrite permits replacing existing transcript and audio files without
+	// prompting. When false and a target file already exists, setupOutput
+	// invokes ConfirmOverwrite (or fails with os.ErrExist when nil).
+	Overwrite bool
+	// ConfirmOverwrite prompts the operator before overwriting existing target
+	// files when Overwrite is false. It receives the existing paths in
+	// deterministic order (mdPath, then mp3Path).
+	ConfirmOverwrite func(paths []string) (bool, error)
 }
 
 // Output is the open transcript+audio file pair for a capture session.
@@ -107,14 +120,18 @@ type Output struct {
 	// TranscriptPath and AudioPath are the absolute output file paths.
 	TranscriptPath string
 	AudioPath      string
+	// AudioExisted reports whether AudioPath already existed before setupOutput
+	// opened it, so failed-capture cleanup never deletes a pre-existing file.
+	AudioExisted bool
 
 	mdFile  *os.File
 	mp3File *os.File
 }
 
 // setupOutput creates the output directory and files, writes the transcript
-// header, and returns the open Output. Generated names use O_EXCL to reject
-// collisions; an explicit FilePath replaces the destination on each run.
+// header, and returns the open Output. Both Dir and FilePath modes enforce the
+// same overwrite policy: existing files require Overwrite or ConfirmOverwrite
+// approval before any file is opened or truncated.
 func setupOutput(cfg OutputConfig) (*Output, error) {
 	now := cfg.Now
 	if now.IsZero() {
@@ -132,7 +149,6 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	var (
 		mdPath  string
 		mp3Path string
-		openFlg = os.O_CREATE | os.O_WRONLY | os.O_EXCL
 	)
 	if explicitFile != "" {
 		absFile, err := filepath.Abs(explicitFile)
@@ -150,9 +166,6 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		} else {
 			mp3Path = absFile + ".mp3"
 		}
-		// When an explicit output file path is requested (automation mode),
-		// truncate/overwrite if it already exists.
-		openFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	} else {
 		dir, err := filepath.Abs(cfg.Dir)
 		if err != nil {
@@ -176,7 +189,58 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		}
 	}
 
-	mdFile, err := os.OpenFile(mdPath, openFlg, filePerm)
+	checkTarget := func(p string) (bool, error) {
+		info, statErr := os.Stat(p)
+		if statErr == nil {
+			if info.IsDir() {
+				return false, fmt.Errorf("capture: output path is a directory: %s", p)
+			}
+			return true, nil
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return false, fmt.Errorf("capture: stat %s: %w", p, statErr)
+		}
+		return false, nil
+	}
+
+	mdExisted, err := checkTarget(mdPath)
+	if err != nil {
+		return nil, err
+	}
+	var mp3Existed bool
+	if !cfg.CaptionsOnly {
+		mp3Existed, err = checkTarget(mp3Path)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var existingPaths []string
+	if mdExisted {
+		existingPaths = append(existingPaths, mdPath)
+	}
+	if !cfg.CaptionsOnly && mp3Existed {
+		existingPaths = append(existingPaths, mp3Path)
+	}
+
+	if len(existingPaths) > 0 && !cfg.Overwrite {
+		if cfg.ConfirmOverwrite == nil {
+			return nil, fmt.Errorf("capture: target file already exists: %s: %w", existingPaths[0], os.ErrExist)
+		}
+		approved, confirmErr := cfg.ConfirmOverwrite(existingPaths)
+		if confirmErr != nil {
+			return nil, fmt.Errorf("capture: confirm overwrite: %w", confirmErr)
+		}
+		if !approved {
+			return nil, fmt.Errorf("%w: %s", ErrOverwriteDeclined, strings.Join(existingPaths, ", "))
+		}
+	}
+
+	mdOpenFlg := os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	if mdExisted {
+		mdOpenFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	}
+	mdFile, err := os.OpenFile(mdPath, mdOpenFlg, filePerm)
 	if err != nil {
 		return nil, fmt.Errorf("capture: create transcript %s: %w", mdPath, err)
 	}
@@ -191,10 +255,12 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		Attendees:    cfg.Attendees,
 		BotName:      cfg.BotName,
 	}); err != nil {
-		// Best-effort rollback of the partial transcript; the header-write
-		// error is the failure worth surfacing to the caller.
+		// Best-effort rollback of a newly created transcript; never remove a
+		// pre-existing file pathname.
 		_ = mdFile.Close()
-		_ = os.Remove(mdPath)
+		if !mdExisted {
+			_ = os.Remove(mdPath)
+		}
 		return nil, fmt.Errorf("capture: write transcript header: %w", err)
 	}
 	// Flush the header immediately so a physical write failure (e.g. a full
@@ -202,7 +268,9 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 	// deferred inside the bufio buffer until the first caption is written.
 	if err := w.Flush(); err != nil {
 		_ = mdFile.Close()
-		_ = os.Remove(mdPath)
+		if !mdExisted {
+			_ = os.Remove(mdPath)
+		}
 		return nil, fmt.Errorf("capture: flush transcript header: %w", err)
 	}
 	if cfg.CaptionsOnly {
@@ -213,12 +281,18 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 			mdFile:         mdFile,
 		}, nil
 	}
-	mp3File, err := os.OpenFile(mp3Path, openFlg, filePerm)
+	mp3OpenFlg := os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	if mp3Existed {
+		mp3OpenFlg = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	}
+	mp3File, err := os.OpenFile(mp3Path, mp3OpenFlg, filePerm)
 	if err != nil {
-		// Best-effort rollback so a failed pair leaves no partial artifacts;
-		// the audio-create error is the failure worth surfacing.
+		// Best-effort rollback so a failed pair leaves no newly created partial
+		// artifacts; never remove a pre-existing mdPath.
 		_ = mdFile.Close()
-		_ = os.Remove(mdPath)
+		if !mdExisted {
+			_ = os.Remove(mdPath)
+		}
 		return nil, fmt.Errorf("capture: create audio %s: %w", mp3Path, err)
 	}
 	return &Output{
@@ -226,6 +300,7 @@ func setupOutput(cfg OutputConfig) (*Output, error) {
 		Audio:          mp3File,
 		TranscriptPath: mdPath,
 		AudioPath:      mp3Path,
+		AudioExisted:   mp3Existed,
 		mdFile:         mdFile,
 		mp3File:        mp3File,
 	}, nil

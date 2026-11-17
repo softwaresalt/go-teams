@@ -31,6 +31,7 @@ type Entry struct {
 	LobbyTimeout   time.Duration
 	Category       string
 	CaptureAudio   *bool
+	Overwrite      *bool
 	OutputDir      string
 	ValidateURL    func(string) error
 }

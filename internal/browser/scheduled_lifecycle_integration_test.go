@@ -84,7 +84,11 @@ func recapIntegrationURL(t *testing.T) (string, string) {
 	if raw == "" {
 		mURL := strings.TrimSpace(os.Getenv("TEAMS_MEETING_URL"))
 		lower := strings.ToLower(mURL)
-		if strings.Contains(lower, "meetingrecap") || strings.Contains(lower, "19:meeting_") || strings.Contains(lower, "19%3ameeting_") {
+		if strings.Contains(lower, "meetingrecap") ||
+			strings.Contains(lower, "stream.aspx") ||
+			strings.Contains(lower, "streamembed.aspx") ||
+			strings.Contains(lower, "19:meeting_") ||
+			strings.Contains(lower, "19%3ameeting_") {
 			raw = mURL
 		} else {
 			t.Skip("set TEAMS_RECAP_URL (or a TEAMS_MEETING_URL carrying threadId) to run live Recap AI Summary integration tests")

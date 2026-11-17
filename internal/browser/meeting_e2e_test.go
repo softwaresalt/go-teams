@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -652,6 +653,179 @@ func TestChromeRecapDownloadBlockedStreamEmbedAudioEndToEnd(t *testing.T) {
 		assert.GreaterOrEqual(t, audioSegRequests[i].Load(), int32(1), "expected audio segment %d to be fetched", i)
 	}
 	assert.Zero(t, videoSegRequests.Load(), "expected track=video transcode requests to be stripped")
+}
+
+// TestChromeSharePointStreamAspxRecapEndToEnd verifies that headless Chromium
+// captures transcript (after activating the SharePoint Transcript tab), Copilot
+// "Recap the meeting" AI summary, and pre-buffered MP3 audio (via
+// PerformanceResourceTiming + g_fileInfo.EncKey AES-CBC seeding with track=video
+// wsd isolation) on a top-level SharePoint stream.aspx page.
+func TestChromeSharePointStreamAspxRecapEndToEnd(t *testing.T) {
+	LoadTestEnv(t)
+	if runtime.GOOS != "windows" {
+		t.Skip("live browser e2e test targets Windows consumer hosts only")
+	}
+	if ResolveExecPath("") == "" {
+		t.Skip("no Chromium-based browser executable found on host")
+	}
+
+	aesKey := []byte("0123456789abcdef")
+	aesIV := []byte("fedcba9876543210")
+	initSeg := buildSilentAACAudioInitFMP4()
+	const framesPerSeg = 44
+	segPlain := make([][]byte, 2)
+	segEnc := make([][]byte, 2)
+	for k := range segPlain {
+		segPlain[k] = buildSilentAACMediaSegmentFMP4(uint32(k+1), uint64(k*framesPerSeg*1024), framesPerSeg)
+		segEnc[k] = encryptAESCBC(t, aesKey, aesIV, segPlain[k])
+	}
+	initEnc := encryptAESCBC(t, aesKey, aesIV, initSeg)
+
+	keyB64 := base64.StdEncoding.EncodeToString(aesKey)
+	ivB64 := base64.StdEncoding.EncodeToString(aesIV)
+	encKeyJSON, err := json.Marshal(map[string]string{"Key": keyB64, "IV": ivB64})
+	require.NoError(t, err)
+
+	var audioSegRequests [2]atomic.Int32
+	var badAudioWsdRequests atomic.Int32
+	var videoSegRequests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/_layouts/15/stream.aspx":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = fmt.Fprintf(w, `<!doctype html>
+<html>
+<head><title>Stream.aspx E2E Recap</title></head>
+<body>
+  <div role="menubar">
+    <button role="menuitem" aria-label="Transcript" id="txTab">Transcript</button>
+    <button role="menuitem" aria-label="Copilot" id="copilotTab">Copilot</button>
+  </div>
+  <div id="transcriptPane"></div>
+  <div id="copilotPane"></div>
+  <script>
+    window.g_fileInfo = {
+      isDownloadBlocked: true,
+      title: 'Stream.aspx E2E Recap',
+      name: 'StreamE2E.mp4',
+      EncKey: %q
+    };
+    // Pre-buffer initsegments on page load before CaptureAudio runs, without calling crypto.subtle.decrypt on main thread.
+    (async () => {
+      const base = location.origin + '/_api/v2.1/drives/d1/items/s1/oneDrive.transcode';
+      await fetch(base + '?part=initsegment&track=audio&quality=audcopy&wsd=96256&ppd=192512').catch(() => {});
+      await fetch(base + '?part=initsegment&track=video&quality=vcopy&wsd=96000&ppd=192512').catch(() => {});
+    })();
+    document.getElementById('txTab').addEventListener('click', () => {
+      const pane = document.getElementById('transcriptPane');
+      if (pane.querySelector('.ms-List')) return;
+      pane.innerHTML = '<div class="ms-List"><div class="ms-List-cell" data-transcript-entry-id="e1"><span data-transcript-copy-field="speaker">Alice</span><span data-transcript-copy-field="timestamp">0:05</span><span class="entryText-1">Hello from top-level stream.aspx.</span></div></div>';
+    });
+    document.getElementById('copilotTab').addEventListener('click', () => {
+      const pane = document.getElementById('copilotPane');
+      if (pane.querySelector('#recapPromptBtn')) return;
+      pane.innerHTML = '<button aria-label="Close Copilot">Close</button><button id="recapPromptBtn">Recap the meeting</button>';
+      pane.querySelector('#recapPromptBtn').addEventListener('click', () => {
+        if (pane.querySelector('.fai-CopilotMessage')) return;
+        const msg = document.createElement('div');
+        msg.className = 'fai-CopilotMessage';
+        msg.innerHTML = '<div class="fai-CopilotMessage__content">Copilot summary from stream.aspx.</div><div class="fai-CopilotMessage__actions"><button title="Copy">Copy</button></div>';
+        pane.appendChild(msg);
+      });
+    });
+  </script>
+</body>
+</html>`, string(encKeyJSON))
+		case "/_api/v2.1/drives/d1/items/s1/oneDrive.transcode":
+			q := r.URL.Query()
+			if q.Get("track") == "video" {
+				videoSegRequests.Add(1)
+				w.Header().Set("Content-Type", "video/mp4")
+				_, _ = w.Write([]byte("video"))
+				return
+			}
+			if q.Get("wsd") != "96256" {
+				badAudioWsdRequests.Add(1)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "video/mp4")
+			if q.Get("part") == "initsegment" {
+				_, _ = w.Write(initEnc)
+				return
+			}
+			if q.Get("part") == "mediasegment" {
+				segTime, err := strconv.Atoi(q.Get("segmentTime"))
+				if err == nil {
+					idx := segTime / 96256
+					if idx >= 0 && idx < len(segEnc) {
+						audioSegRequests[idx].Add(1)
+						_, _ = w.Write(segEnc[idx])
+						return
+					}
+				}
+			}
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+
+	profileDir := t.TempDir()
+	t.Cleanup(func() {
+		for range 10 {
+			if os.RemoveAll(profileDir) == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+
+	m, bctx, cleanup, err := NewLiveMeeting(
+		context.Background(),
+		Options{UserDataDir: profileDir, Headless: true},
+		MeetingOptions{
+			MeetingURL:       srv.URL + "/_layouts/15/stream.aspx?id=%2Fpersonal%2Fu%2FDocuments%2FRecordings%2FStreamE2E.mp4",
+			ForceRecap:       true,
+			DisableAISummary: false,
+			LobbyTimeout:     20 * time.Second,
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(bctx, 30*time.Second)
+	defer cancel()
+
+	require.NoError(t, m.Join(ctx))
+
+	rm, ok := m.(RecapMeeting)
+	require.True(t, ok)
+	require.True(t, rm.IsRecap(), "expected Join to activate Transcript tab and extract recap transcript")
+
+	var transcriptLines [][2]string
+	require.NoError(t, m.EnableCaptions(ctx, func(speaker, text string) {
+		transcriptLines = append(transcriptLines, [2]string{speaker, text})
+	}))
+	require.Equal(t, [][2]string{{"Alice\x0000:00:05", "Hello from top-level stream.aspx."}}, transcriptLines)
+
+	sp, ok := m.(AISummaryProvider)
+	require.True(t, ok)
+	assert.Equal(t, "Copilot summary from stream.aspx.", sp.AISummary())
+
+	var buf bytes.Buffer
+	require.NoError(t, m.CaptureAudio(ctx, &buf))
+
+	b := buf.Bytes()
+	require.NotEmpty(t, b, "expected non-empty MP3 stream")
+	require.True(t, len(b) >= 2 && b[0] == 0xff && (b[1]&0xe0) == 0xe0, "expected valid MPEG MP3 frame sync header")
+	for i := range audioSegRequests {
+		assert.GreaterOrEqual(t, audioSegRequests[i].Load(), int32(1), "expected audio segment %d to be fetched with wsd=96256", i)
+	}
+	assert.Zero(t, badAudioWsdRequests.Load(), "expected zero audio requests with wrong wsd")
+	assert.LessOrEqual(t, videoSegRequests.Load(), int32(1), "expected only the initial pre-buffer video init request")
 }
 
 func encryptAESCBC(t *testing.T, key, iv, plaintext []byte) []byte {

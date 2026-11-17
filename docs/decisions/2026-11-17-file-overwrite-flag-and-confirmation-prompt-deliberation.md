@@ -11,10 +11,11 @@ shipment: 034-S
 source_stash:
   - DF20598F
 linked_artifacts:
-  - docs/plans/2026-11-17-file-overwrite-flag-and-confirmation-prompt-plan.md
-  - .backlogit/queue/023-DL.md
-  - .backlogit/queue/034-F.md
-  - .backlogit/queue/034-S.md
+  - docs/plans/2026-11-17-file-overwrite-flag-and-confirmation-prompt-decided-plan.md
+  - docs/archive/plans/2026-11-17/2026-11-17-file-overwrite-flag-and-confirmation-prompt-plan.md
+  - .backlogit/archive/023-DL.md
+  - .backlogit/archive/034-F.md
+  - .backlogit/archive/034-S.md
 date: 2026-11-17
 status: accepted
 tags:

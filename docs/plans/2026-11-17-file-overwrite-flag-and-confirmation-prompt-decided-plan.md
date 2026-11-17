@@ -28,7 +28,7 @@ archived_plan: docs/archive/plans/2026-11-17/2026-11-17-file-overwrite-flag-and-
 
 ## Protected Invariants
 
-1. **Zero data loss on decline, `nil` callback, or pre-open error**: `setupOutput` must not open, truncate, or remove any file before `ConfirmOverwrite` returns `true, nil`.
+1. **Zero data loss on decline, `nil` callback, or pre-open error**: When `mdPath` or `mp3Path` already exists on disk and `Overwrite` is `false`, `setupOutput` must not open, truncate, or remove any file before `ConfirmOverwrite` returns `true, nil` (first-time captures and explicit `Overwrite: true` skip confirmation).
 2. **Pre-existing pathname and rollback protection**: `os.Remove` on post-open rollback executes only when `!mdExisted` / `!mp3Existed`, header-flush rollback restores `mdFile` from backup (preserving backup on disk if restore fails), and `Session.Run` 0-byte audio cleanup executes only when `!out.AudioExisted`.
 3. **Owner-only permissions (`0o600` / `0o700`)**: `filePerm` and `dirPerm` remain unchanged, and pre-existing overwritten files retain their existing permissions (`O_RDWR` in-place).
 4. **Template parity**: `TemplateYAML()` and `config.example.yaml` remain byte-for-byte identical (LF-normalized).

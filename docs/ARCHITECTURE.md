@@ -34,7 +34,7 @@ The module contains one entrypoint and ten packages under `internal/`.
 | `internal/config` | YAML configuration model, defaults, key aliases, validation, atomic save, commented template generation (`template.go`) | `Config`, `Load`, `Save`, `DefaultConfig`, `TemplateYAML`, `ResolveTemplatePath`, `WriteTemplate` |
 | `internal/teams` | Meeting URL allowlist validation, join URL mutation, URL redaction | `ValidateMeetingURL`, `MutateJoinURL`, `RedactURL`, `RedactArgs` |
 | `internal/browser` | `chromedp` allocator and stealth flags, pre-join state machine, live caption observer, Meeting Recap export, AI Summary extraction, audio capture | `Runner`, `Meeting`, `RecapMeeting`, `Options`, `NewLiveMeeting` |
-| `internal/capture` | Capture session that connects a meeting to a transcript writer; output path resolution, filename templates, owner-only file creation | `Session`, `SessionConfig`, `Output`, `FormatTranscriptFilename` |
+| `internal/capture` | Capture session that connects a meeting to a transcript writer; output path resolution, filename templates, uniform overwrite protection (`Overwrite`, `ConfirmOverwrite`, `ErrOverwriteDeclined`), and owner-only file creation | `Session`, `SessionConfig`, `Output`, `ErrOverwriteDeclined`, `FormatTranscriptFilename` |
 | `internal/transcript` | Caption event model, caption deduplication, Markdown rendering with text sanitization | `CaptionEvent`, `Deduplicator`, `Writer`, `Metadata` |
 | `internal/audio` | PCM to MP3 encoding (`shine-mp3`) | `Encoder`, `NewEncoder` |
 | `internal/scheduler` | Cron schedule construction for the `schedule` daemon | `Entry`, `JobFunc`, `Build` |
@@ -131,12 +131,18 @@ password entry, MFA, or lobby admission themselves.
    events and notifies `capture.Session` of caption activity. Meanwhile, a
    background DOM poller checks `callEndedProbeJS()` every 2 seconds for
    in-browser call-end teardown (`#hangup-button` loss or post-call banner).
-4. `capture.Session` writes each event through `transcript.Writer` to the
-   resolved Markdown file (using `SessionConfig.MeetingTitle` as the fallback
-   title when the DOM supplies none). When `Duration` is set, `capture.Session`
-   treats it as the nominal baseline window, extending into overtime while
-   caption mutations or PCM voice energy (`PCMRMS >= 300.0`) continue and
-   stopping cleanly once neither signal occurs for `IdleTimeout` (default `3m`).
+4. `capture.Session` checks context shutdown before `setupOutput`, enforces
+   uniform overwrite protection across both `Dir` and `FilePath` modes (invoking
+   `ConfirmOverwrite` for `(Y)es | (N)o` approval when `Overwrite` is `false`,
+   returning `ErrOverwriteDeclined` without touching existing files when
+   declined, and preserving pre-existing `.md` / `.mp3` files on rollback or
+   0-byte audio errors via `!mdExisted` / `!out.AudioExisted`), and writes each
+   event through `transcript.Writer` to the resolved Markdown file (using
+   `SessionConfig.MeetingTitle` as the fallback title when the DOM supplies
+   none). When `Duration` is set, `capture.Session` treats it as the nominal
+   baseline window, extending into overtime while caption mutations or PCM voice
+   energy (`PCMRMS >= 300.0`) continue and stopping cleanly once neither signal
+   occurs for `IdleTimeout` (default `3m`).
 5. With `--audio` (or by default in `ephemeral-live` mode), the page's
    `getDisplayMedia` stream delivers PCM that `browser.HasVoiceActivity`
    measures for speech activity and `audio.Encoder` writes to an `.mp3` next to
@@ -202,9 +208,10 @@ transcript instead of listening live:
    `executeQueueLine`, with `inheritedQueueFlags` prepended. Those flags
    forward the outer capture flags (config path, output settings, template,
    profile, bot name, category, browser path, default account, headless,
-   audio, mode, duration, idle timeout, AI summary delay, lobby timeout) but
-   never the outer `--url`, `--queue`, `--append-ai-summary`, or `--not-before`.
-   When a due line carries `--append-ai-summary <transcript.md>`, `runCapture`
+   audio, overwrite, mode, duration, idle timeout, AI summary delay, lobby
+   timeout) while preserving outer prompt streams (`promptIn` / `promptOut`),
+   but never the outer `--url`, `--queue`, `--append-ai-summary`, or
+   `--not-before`. When a due line carries `--append-ai-summary <transcript.md>`, `runCapture`
    dispatches to `runAppendAISummary` (`ForceRecap: true`) and appends
    `# AI Summary` in place via `capture.AppendAISummaryToFile`.
 3. After a line succeeds it is commented out by prepending `::` under

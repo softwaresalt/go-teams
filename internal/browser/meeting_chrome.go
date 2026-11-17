@@ -434,6 +434,30 @@ func hasRecordingSpecificIdentity(id MeetingIdentity) bool {
 		id.MeetID != ""
 }
 
+func singleCaseInsensitiveQueryValue(vals url.Values, key string, caseFold bool) (val string, present bool, ambiguous bool) {
+	for k, vs := range vals {
+		if !strings.EqualFold(k, key) {
+			continue
+		}
+		for _, raw := range vs {
+			trimmed := strings.TrimSpace(raw)
+			if trimmed == "" {
+				continue
+			}
+			if caseFold {
+				trimmed = strings.ToLower(trimmed)
+			}
+			if !present {
+				val = trimmed
+				present = true
+			} else if val != trimmed {
+				return "", true, true
+			}
+		}
+	}
+	return val, present, false
+}
+
 func canonicalStreamTargetMatch(meetingURL, pageURL string) bool {
 	mu, err1 := url.Parse(strings.TrimSpace(meetingURL))
 	pu, err2 := url.Parse(strings.TrimSpace(pageURL))
@@ -447,16 +471,24 @@ func canonicalStreamTargetMatch(meetingURL, pageURL string) bool {
 	}
 	mq := mu.Query()
 	pq := pu.Query()
-	for _, key := range []string{"id", "UniqueId", "driveId"} {
-		if want := strings.TrimSpace(mq.Get(key)); want != "" {
-			got := strings.TrimSpace(pq.Get(key))
-			if key == "id" {
-				if got != want {
-					return false
-				}
-			} else if !strings.EqualFold(got, want) {
-				return false
-			}
+	for _, spec := range []struct {
+		key      string
+		caseFold bool
+	}{
+		{key: "id", caseFold: false},
+		{key: "uniqueid", caseFold: true},
+		{key: "driveid", caseFold: true},
+	} {
+		want, hasWant, wantAmb := singleCaseInsensitiveQueryValue(mq, spec.key, spec.caseFold)
+		if wantAmb {
+			return false
+		}
+		if !hasWant {
+			continue
+		}
+		got, hasGot, gotAmb := singleCaseInsensitiveQueryValue(pq, spec.key, spec.caseFold)
+		if gotAmb || !hasGot || got != want {
+			return false
 		}
 	}
 	return true

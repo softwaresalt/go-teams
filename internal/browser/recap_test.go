@@ -4471,6 +4471,9 @@ const copyJS = fs.readFileSync(0, 'utf8');
 		assert.True(t, isOnTargetMeetingOrRecapURL(opaqueURL1, opaqueURL1+"&ga=1", "/personal/u/_layouts/15/stream.aspx", ""), "same opaque ?id= stream URL with extra params must match")
 		driveOnlyURL := "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?driveId=b%21123&id=111"
 		assert.True(t, isOnTargetMeetingOrRecapURL(driveOnlyURL, driveOnlyURL, "/personal/u/_layouts/15/stream.aspx", ""), "exact requested URL with driveId-only identity must match")
+		assert.False(t, isOnTargetMeetingOrRecapURL("https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?uniqueId=abc-1", "https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?uniqueId=abc-2", "/personal/u/_layouts/15/streamembed.aspx", ""), "lowercase uniqueId mismatch must be rejected")
+		assert.True(t, isOnTargetMeetingOrRecapURL("https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?uniqueId=abc-1", "https://contoso.sharepoint.com/personal/u/_layouts/15/streamembed.aspx?UniqueId=abc-1", "/personal/u/_layouts/15/streamembed.aspx", ""), "case-variant uniqueId match must be accepted")
+		assert.False(t, isOnTargetMeetingOrRecapURL("https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?ID=111", "https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=222", "/personal/u/_layouts/15/stream.aspx", ""), "uppercase ID mismatch must be rejected")
 
 		// Verify % and # characters in query-encoded server-relative ?id= paths are preserved without double decoding,
 		// and relative fileUrl values like /Recordings/Sync.mp4?web=1 still extract RecordingName.

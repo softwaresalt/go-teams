@@ -464,3 +464,115 @@ meetings:
 		})
 	}
 }
+
+func TestLoadOverwriteAndAliasesAndMeetings(t *testing.T) {
+	def, err := DefaultConfig()
+	require.NoError(t, err)
+	assert.False(t, def.Overwrite, "DefaultConfig must default Overwrite to false")
+
+	tests := []struct {
+		name            string
+		yaml            string
+		wantTop         bool
+		wantMeetingOver []*bool
+	}{
+		{
+			name:    "top-level overwrite true",
+			yaml:    "overwrite: true\n",
+			wantTop: true,
+		},
+		{
+			name:    "top-level overwrite false",
+			yaml:    "overwrite: false\n",
+			wantTop: false,
+		},
+		{
+			name:    "top-level file_overwrite alias true",
+			yaml:    "file_overwrite: true\n",
+			wantTop: true,
+		},
+		{
+			name:    "top-level overwrite false takes precedence over file_overwrite true",
+			yaml:    "file_overwrite: true\noverwrite: false\n",
+			wantTop: false,
+		},
+		{
+			name:    "top-level overwrite true takes precedence over file_overwrite false",
+			yaml:    "overwrite: true\nfile_overwrite: false\n",
+			wantTop: true,
+		},
+		{
+			name: "per-meeting overwrite and file_overwrite alias precedence",
+			yaml: `
+overwrite: false
+meetings:
+  - name: "m1"
+    url: "https://teams.microsoft.com/meet/1"
+    cron: "0 9 * * 1-5"
+    overwrite: true
+  - name: "m2"
+    url: "https://teams.microsoft.com/meet/2"
+    cron: "0 10 * * 1-5"
+    file_overwrite: true
+  - name: "m3"
+    url: "https://teams.microsoft.com/meet/3"
+    cron: "0 11 * * 1-5"
+    file_overwrite: true
+    overwrite: false
+  - name: "m4"
+    url: "https://teams.microsoft.com/meet/4"
+    cron: "0 12 * * 1-5"
+`,
+			wantTop: false,
+			wantMeetingOver: func() []*bool {
+				tr, fa := true, false
+				return []*bool{&tr, &tr, &fa, nil}
+			}(),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.yaml), 0o600))
+			got, loadErr := Load(path)
+			require.NoError(t, loadErr)
+			assert.Equal(t, tc.wantTop, got.Overwrite)
+			if tc.wantMeetingOver != nil {
+				require.Len(t, got.Meetings, len(tc.wantMeetingOver))
+				for i, want := range tc.wantMeetingOver {
+					if want == nil {
+						assert.Nil(t, got.Meetings[i].Overwrite)
+					} else {
+						require.NotNil(t, got.Meetings[i].Overwrite)
+						assert.Equal(t, *want, *got.Meetings[i].Overwrite)
+					}
+					assert.Nil(t, got.Meetings[i].FileOverwrite)
+				}
+			}
+		})
+	}
+
+	t.Run("Save and Load round-trip preserves Overwrite and Meetings.Overwrite", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "roundtrip.yaml")
+		overTrue := true
+		overFalse := false
+		want := Config{
+			OutputDir:        filepath.Join(dir, "out"),
+			FilenameTemplate: DefaultFilenameTemplate,
+			ProfileDir:       filepath.Join(dir, "prof"),
+			BotName:          "Bot",
+			Overwrite:        true,
+			Meetings: []MeetingSchedule{
+				{Name: "m1", URL: "https://teams.microsoft.com/meet/1", Cron: "0 9 * * 1-5", Overwrite: &overFalse},
+				{Name: "m2", URL: "https://teams.microsoft.com/meet/2", Cron: "0 10 * * 1-5", Overwrite: &overTrue},
+				{Name: "m3", URL: "https://teams.microsoft.com/meet/3", Cron: "0 11 * * 1-5"},
+			},
+		}
+		require.NoError(t, Save(path, want))
+		got, loadErr := Load(path)
+		require.NoError(t, loadErr)
+		assert.Equal(t, want, got)
+	})
+}

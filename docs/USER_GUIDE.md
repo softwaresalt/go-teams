@@ -641,11 +641,17 @@ Sign in using a visible capture session first and reuse that profile:
 The default profile directory comes from `config.DefaultConfig()`. It is
 `%LOCALAPPDATA%\go-teams\profile` on Windows when `LOCALAPPDATA` is set, and
 otherwise `go-teams/profile` under `os.UserConfigDir()` (for example
-`~/.config/go-teams/profile` on Linux). The code does not search for a profile
-next to the executable or in `bin\profile`; the `.\bin\profile` paths above are
-explicit `--profile-dir` values. When `UserDataDir` is empty, as with a direct
-library caller that bypasses `DefaultConfig`, the result depends on the launch
-path. The chromedp allocator paths pass no user-data directory, so chromedp
+`~/.config/go-teams/profile` on Linux). When a canonical per-user profile directory (`go-teams\profile` or
+`teams-cli\profile` under `APPDATA`, `os.UserConfigDir()`, or `LOCALAPPDATA`)
+has no persisted Teams session on disk (and neither does its same-parent
+`teams-cli` sibling), `go-teams` searches those per-user config bases in order
+(`APPDATA`, `os.UserConfigDir()`, `LOCALAPPDATA` — preferring
+`go-teams\profile` over `teams-cli\profile` within each base) and selects the
+first non-repository directory containing a persisted Teams session. The code does not search
+for a profile next to the executable or in `bin\profile`; the `.\bin\profile`
+paths above are explicit `--profile-dir` values. When `UserDataDir` is empty,
+as with a direct library caller that bypasses `DefaultConfig`, the result
+depends on the launch path. The chromedp allocator paths pass no user-data directory, so chromedp
 uses a temporary profile that does not keep your sign-in. The direct-exec
 headed launcher omits `--user-data-dir`, so Chromium uses its own default
 profile, which may retain credentials. Use an explicit `--profile-dir` for

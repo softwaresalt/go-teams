@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1049,7 +1050,7 @@ const extractRecapAudioJS = `(async () => {
 				if (!resp || !resp.ok) {
 					const st = resp ? Number(resp.status) : 0;
 					const err = new Error('transcode fetch failed: ' + (resp ? resp.status : 'network error'));
-					if (!resp || st === 429 || st >= 500) err.retryable = true;
+					if (!resp || st === 408 || st === 429 || st >= 500) err.retryable = true;
 					throw err;
 				}
 				const cl = Number(resp.headers && resp.headers.get && resp.headers.get('content-length'));
@@ -1134,8 +1135,11 @@ const extractRecapAudioJS = `(async () => {
 		}
 		async function fetchBytesWithCap(urlStr, origFetchFn, hookWin, signal) {
 			const parentSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
+			const maxAttempts = (typeof recapAudioFetchMaxAttempts === 'number' && recapAudioFetchMaxAttempts > 0)
+				? recapAudioFetchMaxAttempts
+				: ((typeof maxRecapAudioDurationSec === 'number' && maxRecapAudioDurationSec > 300) ? 5 : 3);
 			let lastAttemptErr = null;
-			for (let attempt = 0; attempt < 3; attempt++) {
+			for (let attempt = 0; attempt < maxAttempts; attempt++) {
 				if (fatalErr) throw fatalErr;
 				if (parentSignal && parentSignal.aborted) {
 					throw new Error('transcode fetch aborted');
@@ -1144,9 +1148,10 @@ const extractRecapAudioJS = `(async () => {
 					return await fetchBytesOnce(urlStr, origFetchFn, hookWin, signal);
 				} catch (err) {
 					lastAttemptErr = err;
-					if (fatalErr || !err || !err.retryable || attempt === 2 || (parentSignal && parentSignal.aborted)) {
+					if (fatalErr || !err || !err.retryable || attempt === maxAttempts - 1 || (parentSignal && parentSignal.aborted)) {
 						throw err;
 					}
+					const delayMs = attempt < 2 ? 250 * (attempt + 1) : 500 * Math.pow(2, attempt - 1);
 					await new Promise((resolve, reject) => {
 						let settled = false;
 						let tid = null;
@@ -1174,7 +1179,7 @@ const extractRecapAudioJS = `(async () => {
 								parentSignal.removeEventListener('abort', onBackoffAbort);
 							}
 							resolve();
-						}, 250 * (attempt + 1));
+						}, delayMs);
 						activeTimers.add(tid);
 					});
 				}
@@ -1287,7 +1292,7 @@ const extractRecapAudioJS = `(async () => {
 						segments[k] = decSeg;
 					}
 				}
-				for (let i = 0; i < Math.min(8, totalSegments); i++) workers.push(worker());
+				for (let i = 0; i < Math.min(12, totalSegments); i++) workers.push(worker());
 				await Promise.all(workers);
 				if (fatalErr) throw fatalErr;
 				if (segments.some(s => !s)) throw new Error('incomplete Path A segment set');
@@ -1650,36 +1655,41 @@ const extractRecapAudioJS = `(async () => {
 			scanPerformanceTranscodeEntries(playerWin);
 			if (playerWin !== window) scanPerformanceTranscodeEntries(window);
 
-			let playTriggered = false;
+			let btnClicked = false;
+			let mediaPlayTriggered = false;
 			function triggerPlaybackIfReady() {
-				if (playTriggered) return;
+				if (pathAActive || (btnClicked && mediaPlayTriggered)) return;
 				const btn = playerDoc.querySelector ? playerDoc.querySelector(playBtnSelector) : null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-				if (m) {
+				if (m && !mediaPlayTriggered) {
 					try {
 						m.muted = true;
 						m.volume = 0;
-						m.playbackRate = 16;
+						if (m.playbackRate !== 16) m.playbackRate = 16;
 					} catch (_) {}
 				}
-				if (btn && typeof btn.click === 'function') {
-					playTriggered = true;
+				if (!btnClicked && btn && typeof btn.click === 'function') {
+					btnClicked = true;
 					btn.click();
 				}
-				if (m && typeof m.play === 'function') {
-					playTriggered = true;
+				if (!mediaPlayTriggered && !pathAActive && m && typeof m.play === 'function') {
+					mediaPlayTriggered = true;
 					try { Promise.resolve(m.play()).catch(() => {}); } catch (_) {}
 				}
 			}
 			triggerPlaybackIfReady();
 
 			const startedAt = Date.now();
-			const deadlineAt = startedAt + 120000;
+			const isProdCap = typeof maxRecapAudioDurationSec === 'number' && maxRecapAudioDurationSec > 300;
+			const captureDeadlineMs = (typeof recapAudioCaptureDeadlineMs === 'number' && recapAudioCaptureDeadlineMs > 0)
+				? recapAudioCaptureDeadlineMs
+				: (isProdCap ? 240000 : 120000);
+			const deadlineAt = startedAt + captureDeadlineMs;
 			const initialActivityTimeoutMs = 10000;
 			let pathAResult = null;
 
 			while (Date.now() < deadlineAt) {
-				if (!playTriggered) triggerPlaybackIfReady();
+				if (!btnClicked || !mediaPlayTriggered) triggerPlaybackIfReady();
 				if (fatalErr) throw fatalErr;
 				if (!audioCryptoKeyInfo) await seedEncKeyFromFileInfo();
 				if (!transcodeAudioTemplateUrl || !(transcodeWsd > 0) || !(transcodePpd > 0)) {
@@ -1737,6 +1747,9 @@ const extractRecapAudioJS = `(async () => {
 				}
 			}
 			if (fatalErr) throw fatalErr;
+			if (pathAPromise && !pathAFailed && !pathAResult) {
+				throw new Error('recap audio Path A capture deadline exceeded');
+			}
 
 			let initSegment = null;
 			let orderedSegments = [];
@@ -1950,10 +1963,26 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		lastErr = err
 	}
 
+	captureCtx, cancelCapture := context.WithTimeout(ctx, recapAudioEvalTimeout)
+	defer cancelCapture()
+	captureTimeoutErr := func(capErr error) error {
+		if lastErr != nil {
+			return fmt.Errorf("browser: recap audio unavailable: %w", errors.Join(lastErr, capErr))
+		}
+		return fmt.Errorf("browser: recap audio unavailable: %w", capErr)
+	}
+	isStreamDeadlineMsg := func(msg string) bool {
+		return strings.Contains(msg, "Path A capture deadline exceeded") ||
+			strings.Contains(msg, "MSE stream incomplete before deadline")
+	}
+
 	const maxAttempts = 8
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("browser: recap audio cancelled: %w", err)
+		}
+		if err := captureCtx.Err(); err != nil {
+			return captureTimeoutErr(err)
 		}
 		targets, listErr := listCDPTargets(port)
 		if listErr != nil {
@@ -1975,7 +2004,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(owner.URL)) {
 			return fmt.Errorf("browser: recap audio page does not match requested recording")
 		}
-		frames := expandOwnedFrames(targets, ownerID, fetchOwnedFrames(ctx, owner.WebSocketDebuggerURL))
+		frames := expandOwnedFrames(targets, ownerID, fetchOwnedFrames(captureCtx, owner.WebSocketDebuggerURL))
 		orderedTargets := make([]cdpTargetInfo, len(targets))
 		copy(orderedTargets, targets)
 		hasStreamEmbedTarget := false
@@ -2012,6 +2041,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("browser: recap audio cancelled: %w", err)
 			}
+			if err := captureCtx.Err(); err != nil {
+				return captureTimeoutErr(err)
+			}
 			if isAuthRedirectURL(target.URL) {
 				continue
 			}
@@ -2020,10 +2052,19 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				continue
 			}
 			tStart := time.Now()
-			raw, evalErr := evalInCDPTargetWithin(ctx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
+			raw, evalErr := evalInCDPTargetWithin(captureCtx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
 			slog.Debug("browser: recap audio eval finished", "elapsed", time.Since(tStart).Round(time.Millisecond), "raw_len", len(raw), "err", evalErr)
 			if evalErr != nil {
+				if err := ctx.Err(); err != nil {
+					return fmt.Errorf("browser: recap audio cancelled: %w", err)
+				}
 				setLastErr(evalErr)
+				if err := captureCtx.Err(); err != nil {
+					return captureTimeoutErr(err)
+				}
+				if isStreamDeadlineMsg(evalErr.Error()) {
+					break
+				}
 				continue
 			}
 			if raw == "" {
@@ -2088,6 +2129,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			if payload.Error != "" {
 				cleanupPendingTransfer()
 				setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
+				if isStreamDeadlineMsg(payload.Error) {
+					break
+				}
 				continue
 			}
 			if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
@@ -2101,7 +2145,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 					continue
 				}
 				var sessErr error
-				pullSess, sessErr = newCDPEvalSession(ctx, target.WebSocketDebuggerURL, int64(maxRecapAudioPCMBytes)*2+65536)
+				pullSess, sessErr = newCDPEvalSession(captureCtx, target.WebSocketDebuggerURL, int64(maxRecapAudioPCMBytes)*2+65536)
 				if sessErr != nil {
 					cleanupPendingTransfer()
 					return fmt.Errorf("browser: open recap audio transfer session: %w", sessErr)
@@ -2113,7 +2157,11 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 						cleanupPendingTransfer()
 						return fmt.Errorf("browser: recap audio cancelled: %w", err)
 					}
-					batchRaw, pullErr := pullSess.eval(ctx, `(() => {
+					if err := captureCtx.Err(); err != nil {
+						cleanupPendingTransfer()
+						return fmt.Errorf("browser: recap audio timed out: %w", err)
+					}
+					batchRaw, pullErr := pullSess.eval(captureCtx, `(() => {
 						const t = window.__goTeamsRecapAudioTransfer;
 						if (!t || !Array.isArray(t.chunks)) return "[]";
 						return JSON.stringify(t.chunks.splice(0, 64));
@@ -2197,9 +2245,12 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
 			return nil
 		}
-		shouldRetry := !hasStreamEmbedTarget && attempt < maxAttempts-1 &&
-			((lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true")) ||
-				(lastErr == nil && hasXplatTarget))
+		isRetryableStreamDeadline := attempt == 0 && lastErr != nil && isStreamDeadlineMsg(lastErr.Error())
+		shouldRetry := attempt < maxAttempts-1 &&
+			(isRetryableStreamDeadline ||
+				(!hasStreamEmbedTarget &&
+					((lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true")) ||
+						(lastErr == nil && hasXplatTarget))))
 		if !shouldRetry {
 			break
 		}
@@ -2208,8 +2259,20 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		case <-ctx.Done():
 			timer.Stop()
 			return fmt.Errorf("browser: recap audio cancelled: %w", ctx.Err())
+		case <-captureCtx.Done():
+			timer.Stop()
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("browser: recap audio cancelled: %w", err)
+			}
+			return captureTimeoutErr(captureCtx.Err())
 		case <-timer.C:
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("browser: recap audio cancelled: %w", err)
+	}
+	if err := captureCtx.Err(); err != nil {
+		return captureTimeoutErr(err)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
@@ -2959,6 +3022,67 @@ func resolveExistingProfileDir(raw string) string {
 	return resolveExpandedProfileDir(expandProfilePath(raw))
 }
 
+func isPathInsideRepoRoot(p string) bool {
+	if p == "" {
+		return false
+	}
+	homeDir, homeErr := os.UserHomeDir()
+	cur := filepath.Clean(p)
+	for {
+		isHomeDir := homeErr == nil && strings.TrimSpace(homeDir) != "" && sameNormalizedPath(cur, homeDir)
+		if _, err := os.Stat(filepath.Join(cur, "go.mod")); err == nil {
+			return true
+		}
+		if !isHomeDir {
+			if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
+				return true
+			}
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return false
+		}
+		cur = parent
+	}
+}
+
+func sameNormalizedPath(a, b string) bool {
+	ca := filepath.Clean(a)
+	cb := filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(ca, cb)
+	}
+	return ca == cb
+}
+
+func userConfigProfileBases() []string {
+	var candidates []string
+	if appData := strings.TrimSpace(os.Getenv("APPDATA")); appData != "" {
+		candidates = append(candidates, appData)
+	}
+	if cfgDir, err := os.UserConfigDir(); err == nil && strings.TrimSpace(cfgDir) != "" {
+		candidates = append(candidates, cfgDir)
+	}
+	if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+		candidates = append(candidates, localAppData)
+	}
+	seen := make(map[string]bool, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		cleaned := filepath.Clean(c)
+		key := cleaned
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(cleaned)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, cleaned)
+	}
+	return out
+}
+
 func resolveExpandedProfileDir(expanded string) string {
 	if expanded == "" {
 		return ""
@@ -2969,6 +3093,33 @@ func resolveExpandedProfileDir(expanded string) string {
 	legacy := replaceRightmostPathSegment(expanded, "go-teams", "teams-cli")
 	if legacy != expanded && hasTeamsSessionInExpandedProfile(legacy) {
 		return legacy
+	}
+	bases := userConfigProfileBases()
+	isCanonicalUserConfigProfile := false
+	for _, base := range bases {
+		for _, app := range []string{"go-teams", "teams-cli"} {
+			if sameNormalizedPath(expanded, filepath.Join(base, app, "profile")) {
+				isCanonicalUserConfigProfile = true
+				break
+			}
+		}
+		if isCanonicalUserConfigProfile {
+			break
+		}
+	}
+	if !isCanonicalUserConfigProfile || isPathInsideRepoRoot(expanded) {
+		return expanded
+	}
+	for _, base := range bases {
+		for _, app := range []string{"go-teams", "teams-cli"} {
+			cand := filepath.Join(base, app, "profile")
+			if isPathInsideRepoRoot(cand) {
+				continue
+			}
+			if hasTeamsSessionInExpandedProfile(cand) {
+				return cand
+			}
+		}
 	}
 	return expanded
 }
@@ -3483,7 +3634,7 @@ var cdpEvalTimeout = 10 * time.Second
 // recapAudioEvalTimeout bounds Recap audio extraction, which downloads,
 // decodes, and serializes a whole recording before returning. The caller's
 // context still cancels the evaluation earlier.
-var recapAudioEvalTimeout = 5 * time.Minute
+var recapAudioEvalTimeout = 10 * time.Minute
 
 func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
 	audioLimit := int64(maxRecapAudioPCMBytes)*2 + 65536

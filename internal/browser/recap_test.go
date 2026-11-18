@@ -608,6 +608,91 @@ func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(siblingLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
 	repoLocalProfile := filepath.Join(fakeRepoRoot, "bin", "profile")
 	assert.Equal(t, repoLocalProfile, resolveExistingProfileDir(repoLocalProfile))
+
+	t.Run("localappdata-falls-back-to-appdata-go-teams-and-teams-cli", func(t *testing.T) {
+		localBase := t.TempDir()
+		roamingBase := t.TempDir()
+		t.Setenv("LOCALAPPDATA", localBase)
+		t.Setenv("APPDATA", roamingBase)
+		t.Setenv("XDG_CONFIG_HOME", roamingBase)
+
+		// 1. Cold LOCALAPPDATA falls back to APPDATA\teams-cli\profile when go-teams is also cold.
+		roamingLegacy := filepath.Join(roamingBase, "teams-cli", "profile")
+		roamingLegacyLDB := filepath.Join(roamingLegacy, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(roamingLegacyLDB, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(roamingLegacyLDB, "000001.ldb"), []byte("UserAuthState"), 0o600))
+
+		localDefault := filepath.Join(localBase, "go-teams", "profile")
+		assert.Equal(t, roamingLegacy, resolveExistingProfileDir(localDefault),
+			"cold %LOCALAPPDATA% must fall back to %APPDATA%\\teams-cli\\profile")
+
+		// 2. APPDATA\go-teams\profile takes precedence over APPDATA\teams-cli\profile.
+		roamingModern := filepath.Join(roamingBase, "go-teams", "profile")
+		roamingModernLDB := filepath.Join(roamingModern, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(roamingModernLDB, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(roamingModernLDB, "000001.ldb"), []byte("msal.2.account.keys"), 0o600))
+		assert.Equal(t, roamingModern, resolveExistingProfileDir(localDefault),
+			"cold %LOCALAPPDATA% must prefer %APPDATA%\\go-teams\\profile over %APPDATA%\\teams-cli\\profile")
+
+		// 3. Arbitrary t.TempDir() path outside canonical per-user roots must NOT redirect to APPDATA.
+		arbitraryProfile := filepath.Join(t.TempDir(), "go-teams", "profile")
+		assert.Equal(t, arbitraryProfile, resolveExistingProfileDir(arbitraryProfile),
+			"arbitrary non-user-config path must not redirect to %APPDATA%")
+
+		// 4. Repo-local profile path must NOT redirect to APPDATA even if APPDATA is warm,
+		// and a repo checkout inside APPDATA\go-teams must not be picked as a fallback candidate.
+		repoRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example\n"), 0o600))
+		inRepoProfile := filepath.Join(repoRoot, "go-teams", "profile")
+		assert.Equal(t, inRepoProfile, resolveExistingProfileDir(inRepoProfile),
+			"repo-local path must never redirect to %APPDATA%")
+		goModMarker := filepath.Join(roamingBase, "go-teams", "go.mod")
+		require.NoError(t, os.WriteFile(goModMarker, []byte("module example\n"), 0o600))
+		assert.Equal(t, roamingLegacy, resolveExistingProfileDir(localDefault),
+			"candidate inside a repo checkout (%APPDATA%\\go-teams with go.mod) must be skipped")
+		require.NoError(t, os.Remove(goModMarker))
+
+		// 4b. Dotfiles .git directory in the user's home directory (~/.git) must NOT disable
+		// %APPDATA% fallback, while a repo containing the config base itself (e.g. <repo>/.localappdata)
+		// MUST still be blocked.
+		dotfilesHome := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dotfilesHome, ".git"), 0o700))
+		dotLocalBase := filepath.Join(dotfilesHome, "AppData", "Local")
+		dotRoamingBase := filepath.Join(dotfilesHome, "AppData", "Roaming")
+		dotRoamingProfile := filepath.Join(dotRoamingBase, "go-teams", "profile")
+		dotRoamingLDB := filepath.Join(dotRoamingProfile, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(dotLocalBase, 0o700))
+		require.NoError(t, os.MkdirAll(dotRoamingLDB, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dotRoamingLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+		t.Setenv("USERPROFILE", dotfilesHome)
+		t.Setenv("HOME", dotfilesHome)
+		t.Setenv("LOCALAPPDATA", dotLocalBase)
+		t.Setenv("APPDATA", dotRoamingBase)
+		t.Setenv("XDG_CONFIG_HOME", dotRoamingBase)
+		assert.Equal(t, dotRoamingProfile, resolveExistingProfileDir(filepath.Join(dotLocalBase, "go-teams", "profile")),
+			"ancestor .git at home dir (dotfiles repo) must not block %APPDATA% fallback")
+
+		nestedRepo := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(nestedRepo, ".git"), 0o700))
+		nestedLocalBase := filepath.Join(nestedRepo, ".localappdata")
+		nestedLocalProfile := filepath.Join(nestedLocalBase, "go-teams", "profile")
+		require.NoError(t, os.MkdirAll(nestedLocalProfile, 0o700))
+		t.Setenv("LOCALAPPDATA", nestedLocalBase)
+		assert.Equal(t, nestedLocalProfile, resolveExistingProfileDir(nestedLocalProfile),
+			"canonical base nested inside a repository checkout (<repo>/.localappdata) must not redirect to %APPDATA%")
+
+		// Restore localBase/roamingBase for step 5.
+		t.Setenv("LOCALAPPDATA", localBase)
+		t.Setenv("APPDATA", roamingBase)
+		t.Setenv("XDG_CONFIG_HOME", roamingBase)
+
+		// 5. Warm LOCALAPPDATA takes precedence over warm APPDATA.
+		localLDB := filepath.Join(localDefault, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(localLDB, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(localLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+		assert.Equal(t, localDefault, resolveExistingProfileDir(localDefault),
+			"warm %LOCALAPPDATA% must take precedence over %APPDATA%")
+	})
 }
 
 func TestNewLiveMeetingExpandsProfileOncePreservingLiteralVarTokens(t *testing.T) {
@@ -4535,4 +4620,860 @@ const recapExpectedIdentity = { RecordingName: '100% sync.mp4' };
 			t.Fatalf("SharePoint ?id= identity mismatch / EncKey fast-fail probe failed: %v\n%s", err, out)
 		}
 	})
+}
+
+const recapColdTestMP4HelpersJS = `
+function u32(v) {
+  return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+}
+function u64(v) {
+  const hi = Math.floor(v / 0x100000000);
+  const lo = v >>> 0;
+  return [...u32(hi), ...u32(lo)];
+}
+function str4(s) {
+  return [s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)];
+}
+function box(type, ...parts) {
+  const len = 8 + parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(len);
+  out.set(u32(len), 0);
+  out.set(str4(type), 4);
+  let off = 8;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+function buildAudioInitSegment() {
+  const ftyp = box('ftyp', new Uint8Array([...str4('iso5'), ...u32(1), ...str4('mp41')]));
+  const hdlr = box('hdlr', new Uint8Array([0,0,0,0, 0,0,0,0, ...str4('soun'), ...new Array(12).fill(0), 0]));
+  const mp4a = box('mp4a', new Uint8Array([...new Array(6).fill(0), 0,1, ...new Array(8).fill(0), 0,1, 0,16, 0,0, 0,0, 0xac,0x44,0,0]));
+  const stsd = box('stsd', new Uint8Array([0,0,0,0, ...u32(1)]), mp4a);
+  const stbl = box('stbl', stsd);
+  const minf = box('minf', stbl);
+  const mdia = box('mdia', hdlr, minf);
+  const trak = box('trak', mdia);
+  const moov = box('moov', trak);
+  const out = new Uint8Array(ftyp.length + moov.length);
+  out.set(ftyp, 0);
+  out.set(moov, ftyp.length);
+  return out;
+}
+function buildMediaSegment(tfdtTime, tagByte) {
+  const styp = box('styp', new Uint8Array([...str4('msdh'), ...u32(0), ...str4('msdh')]));
+  const mfhd = box('mfhd', new Uint8Array([0,0,0,0, ...u32(1)]));
+  const tfhd = box('tfhd', new Uint8Array([0,2,0,0, ...u32(1)]));
+  const tfdt = box('tfdt', new Uint8Array([1,0,0,0, ...u64(tfdtTime)]));
+  const traf = box('traf', tfhd, tfdt);
+  const moof = box('moof', mfhd, traf);
+  const mdat = box('mdat', new Uint8Array([0xde, 0xad, 0xbe, 0xef, tagByte, tagByte, tagByte, tagByte]));
+  const out = new Uint8Array(styp.length + moof.length + mdat.length);
+  out.set(styp, 0);
+  out.set(moof, styp.length);
+  out.set(mdat, styp.length + moof.length);
+  return out;
+}
+function collectTFDTs(buf) {
+  const u8 = new Uint8Array(buf);
+  const out = [];
+  function walk(start, end) {
+    let pos = start;
+    while (pos + 8 <= end) {
+      const size = ((u8[pos] << 24) | (u8[pos+1] << 16) | (u8[pos+2] << 8) | u8[pos+3]) >>> 0;
+      if (size < 8 || pos + size > end) break;
+      const type = String.fromCharCode(u8[pos+4], u8[pos+5], u8[pos+6], u8[pos+7]);
+      if (type === 'moof' || type === 'traf') {
+        walk(pos + 8, pos + size);
+      } else if (type === 'tfdt' && pos + 16 <= pos + size) {
+        const ver = u8[pos+8];
+        if (ver === 1 && pos + 20 <= pos + size) {
+          const hi = ((u8[pos+12] << 24) | (u8[pos+13] << 16) | (u8[pos+14] << 8) | u8[pos+15]) >>> 0;
+          const lo = ((u8[pos+16] << 24) | (u8[pos+17] << 16) | (u8[pos+18] << 8) | u8[pos+19]) >>> 0;
+          out.push(hi * 0x100000000 + lo);
+        } else {
+          const val = ((u8[pos+12] << 24) | (u8[pos+13] << 16) | (u8[pos+14] << 8) | u8[pos+15]) >>> 0;
+          out.push(val);
+        }
+      }
+      pos += size;
+    }
+  }
+  walk(0, u8.length);
+  return out;
+}
+`
+
+func TestRecapAudioColdTranscodeResilienceAndDeadlineRetry(t *testing.T) {
+	t.Run("path-a-in-flight-at-deadline-throws-path-a-deadline-even-with-mse-segments", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		probeJS := recapColdTestMP4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 4200, maxRecapAudioPCMBytes = 377487360;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(2);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const audioInit = buildAudioInitSegment();
+  const mseSeg0 = buildMediaSegment(0, 0x05);
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, audioInit));
+
+  class FakeSourceBuffer extends EventTarget {
+    constructor(mime) {
+      super();
+      this.mime = mime;
+      this.updating = false;
+      this._end = 0;
+      this.buffered = { get length() { return this._sb._end > 0 ? 1 : 0; }, start: () => 0, end: () => this._end, _sb: null };
+      this.buffered._sb = this;
+    }
+    appendBuffer() {}
+    remove() {}
+    abort() {}
+  }
+  class FakeMediaSource extends EventTarget {
+    addSourceBuffer(mime) { return new FakeSourceBuffer(mime); }
+    removeSourceBuffer() {}
+  }
+
+  let fakeNow = 1000000;
+  Date.now = () => fakeNow;
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+    return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+  };
+
+  let seg0Started = false;
+  let steppedPast125s = false;
+  let testCompleted = false;
+  process.on('beforeExit', () => {
+    if (!testCompleted) {
+      console.error('test exited before async probe completed');
+      process.exit(1);
+    }
+  });
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  globalThis.fetch = async (url, init) => {
+    const s = String(url);
+    if (!s.includes('oneDrive.transcode')) {
+      throw new TypeError('Failed to fetch');
+    }
+    if (s.includes('initsegment')) {
+      return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, arrayBuffer: async () => encInit.slice().buffer };
+    }
+    if (s.includes('segmentTime=0') && !seg0Started) {
+      seg0Started = true;
+      // First jump +125s: production cap (4200 > 300) uses 240s deadline, so Path A must stay alive.
+      origSetTimeout(() => {
+        fakeNow += 125000;
+        steppedPast125s = true;
+        // Second jump +120s (total +245s > 240s): now Path A capture deadline must fire.
+        origSetTimeout(() => { fakeNow += 120000; }, 40);
+      }, 10);
+    }
+    return new Promise((resolve, reject) => {
+      const sig = init && init.signal;
+      if (sig && sig.aborted) {
+        reject(new Error('aborted'));
+        return;
+      }
+      if (sig) sig.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
+  };
+
+  globalThis.crypto = { subtle };
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 60 };
+
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    duration: 60,
+    ended: false,
+    paused: true,
+    muted: false,
+    volume: 1,
+    playbackRate: 1,
+    play: async () => { videoEl.paused = false; },
+    pause: () => { videoEl.paused = true; },
+    getAttribute: () => null
+  };
+  const playBtn = {
+    click: () => {
+      const ms = new FakeMediaSource();
+      const audioSB = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+      audioSB._end = 6;
+      audioSB.appendBuffer(audioInit);
+      audioSB.appendBuffer(mseSeg0);
+      (async () => {
+        const r = await globalThis.fetch(base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=600000000&driveItemId=recording-a');
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await r.arrayBuffer());
+      })().catch(() => {});
+    }
+  };
+  globalThis.document = {
+    querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null),
+    querySelectorAll: () => []
+  };
+
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (e) { failure = e; }
+  if (!steppedPast125s) throw new Error('expected test clock to advance past 125s');
+  const msg = String((failure && failure.message) || failure || '');
+  if (!msg.includes('recap audio Path A capture deadline exceeded')) {
+    throw new Error('expected Path A deadline error precedence over pre-pause MSE buffers, got: ' + msg);
+  }
+  if (fakeNow < 1000000 + 240000) {
+    throw new Error('expected production cap (>300s) to use 240s deadline, exited early at ' + (fakeNow - 1000000) + 'ms');
+  }
+  testCompleted = true;
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("path-a in-flight deadline precedence probe failed: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("path-a-12-workers-5-attempts-408-retry-and-late-video-mount-play", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		probeJS := recapColdTestMP4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 10485760, maxRecapAudioDurationSec = 4200, maxRecapAudioPCMBytes = 377487360;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(9);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+
+  const wsd = 96256;
+  const segCount = 15;
+  const ppd = wsd * segCount; // 1443840
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildAudioInitSegment()));
+  const encSegs = [];
+  const wantTFDTs = [];
+  for (let i = 0; i < segCount; i++) {
+    const tfdt = i * 220500;
+    wantTFDTs.push(tfdt);
+    encSegs.push(new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(tfdt, (i + 1) & 0xff))));
+  }
+
+  const backoffDelays = [];
+  let recordBackoffs = true;
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+    if (recordBackoffs && ms >= 250 && ms <= 4000) backoffDelays.push(ms);
+    return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+  };
+
+  let videoMounted = false;
+  let videoPlayCount = 0;
+  let initFetched = false;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let seg0Calls = 0;
+
+  let testCompleted = false;
+  process.on('beforeExit', () => {
+    if (!testCompleted) {
+      console.error('test exited before async probe completed');
+      process.exit(1);
+    }
+  });
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  const initURL = base + '?part=initsegment&track=audio&quality=audcopy&wsd=' + wsd + '&ppd=' + ppd + '&driveItemId=recording-a';
+
+  function makeResp(url, bytes) {
+    let sent = false;
+    return {
+      ok: true,
+      status: 200,
+      url,
+      headers: { get: () => null },
+      body: { getReader: () => ({ read: async () => sent ? { done: true } : (sent = true, { done: false, value: bytes }), cancel: async () => {} }) },
+      arrayBuffer: async () => bytes.slice().buffer
+    };
+  }
+
+  globalThis.fetch = async (url) => {
+    if (!String(url).includes('oneDrive.transcode')) {
+      throw new TypeError('Failed to fetch');
+    }
+    const u = new URL(String(url));
+    const part = u.searchParams.get('part');
+    if (part === 'initsegment') {
+      return makeResp(String(url), encInit);
+    }
+    if (part === 'mediasegment') {
+      const segTime = Number(u.searchParams.get('segmentTime'));
+      const idx = Math.round(segTime / wsd);
+      if (idx === 0) {
+        seg0Calls++;
+        if (seg0Calls === 1) return { ok: false, status: 408, url: String(url), headers: { get: () => null } };
+        if (seg0Calls === 2) return { ok: false, status: 429, url: String(url), headers: { get: () => null } };
+        if (seg0Calls === 3) return { ok: false, status: 502, url: String(url), headers: { get: () => null } };
+        if (seg0Calls === 4) return { ok: false, status: 503, url: String(url), headers: { get: () => null } };
+        recordBackoffs = false;
+      }
+      inFlight++;
+      if (inFlight > maxInFlight) maxInFlight = inFlight;
+      await new Promise(r => origSetTimeout(r, idx === 0 ? 15 : 80));
+      inFlight--;
+      return makeResp(String(url), encSegs[idx]);
+    }
+    throw new Error('unexpected url: ' + String(url));
+  };
+
+  const videoEl = {
+    src: 'blob:https://contoso-my.sharepoint.com/1',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+    duration: 150,
+    paused: true,
+    muted: false,
+    volume: 1,
+    playbackRate: 1,
+    play: async () => {
+      videoPlayCount++;
+      videoEl.paused = false;
+      if (!initFetched) {
+        initFetched = true;
+        const r = await globalThis.fetch(initURL);
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await r.arrayBuffer());
+      }
+    },
+    pause: () => { videoEl.paused = true; },
+    getAttribute: () => null
+  };
+
+  const playBtn = {
+    click: () => {
+      // Simulate <video> mounting asynchronously after Play video button click.
+      origSetTimeout(() => { videoMounted = true; }, 10);
+    }
+  };
+
+  let decodedTFDTs = [];
+  globalThis.AudioContext = class {
+    async decodeAudioData(ab) {
+      decodedTFDTs = collectTFDTs(ab);
+      return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) };
+    }
+    async close() {}
+  };
+  globalThis.crypto = { subtle };
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 150 };
+  globalThis.document = {
+    querySelector: (sel) => {
+      if (sel.includes('Play video')) return playBtn;
+      if ((sel === 'audio, video' || sel === 'video') && videoMounted) return videoEl;
+      return null;
+    },
+    querySelectorAll: () => []
+  };
+
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed.pcmChunks) || parsed.pcmChunks.length === 0) {
+    throw new Error('expected non-empty pcmChunks');
+  }
+  if (videoPlayCount < 1) {
+    throw new Error('expected late-mounted <video>.play() to be triggered');
+  }
+  if (seg0Calls !== 5) {
+    throw new Error('expected 5 fetch attempts on segmentTime=0 (408/429/502/503 + success), got: ' + seg0Calls);
+  }
+  if (JSON.stringify(backoffDelays) !== JSON.stringify([250, 500, 1000, 2000])) {
+    throw new Error('expected exponential backoff [250,500,1000,2000], got: ' + JSON.stringify(backoffDelays));
+  }
+  if (maxInFlight < 12) {
+    throw new Error('expected 12 concurrent Path A workers, observed maxInFlight=' + maxInFlight);
+  }
+  if (JSON.stringify(decodedTFDTs) !== JSON.stringify(wantTFDTs)) {
+    throw new Error('expected all 15 ordered tfdt timestamps, got: ' + JSON.stringify(decodedTFDTs));
+  }
+  testCompleted = true;
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("12-worker / 5-attempt / late-play probe failed: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("explicit-deadline-and-fetch-max-attempts-overrides", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		probeJS := recapColdTestMP4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapAudioCaptureDeadlineMs = 500, recapAudioFetchMaxAttempts = 4;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(1);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildAudioInitSegment()));
+  const encSeg0 = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(0, 0x11)));
+
+  let fakeNow = 1000000;
+  Date.now = () => fakeNow;
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+    return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+  };
+
+  let segCalls = 0;
+  let testCompleted = false;
+  process.on('beforeExit', () => { if (!testCompleted) process.exit(1); });
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  globalThis.fetch = async (url) => {
+    const s = String(url);
+    if (!s.includes('oneDrive.transcode')) throw new TypeError('Failed to fetch');
+    if (s.includes('initsegment')) {
+      return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, arrayBuffer: async () => encInit.slice().buffer };
+    }
+    if (s.includes('mediasegment')) {
+      segCalls++;
+      if (segCalls < 4) return { ok: false, status: 408, url: s, headers: { get: () => null } };
+      let sent = false;
+      return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => sent ? { done: true } : (sent = true, { done: false, value: encSeg0 }), cancel: async () => {} }) }, arrayBuffer: async () => encSeg0.slice().buffer };
+    }
+    throw new Error('unexpected url: ' + s);
+  };
+  globalThis.crypto = { subtle };
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 5 };
+  const videoEl = { src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1', duration: 5, paused: true, play: async () => {}, pause: () => {}, getAttribute: () => null };
+  const playBtn = {
+    click: () => {
+      (async () => {
+        const r = await globalThis.fetch(base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=50000000&driveItemId=recording-a');
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await r.arrayBuffer());
+      })().catch(() => {});
+    }
+  };
+  globalThis.document = { querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null), querySelectorAll: () => [] };
+
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(raw);
+  if (segCalls !== 4) throw new Error('expected recapAudioFetchMaxAttempts=4, got segCalls=' + segCalls);
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected PCM output');
+  testCompleted = true;
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("explicit overrides probe failed: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("capture-from-targets-retries-once-on-attempt-0-stream-deadline-error", func(t *testing.T) {
+		require.Equal(t, 10*time.Minute, recapAudioEvalTimeout, "recapAudioEvalTimeout must be 10m")
+
+		pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+		successPayload := `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-a","pcmChunks":["` + pcm + `"]}`
+
+		for _, tc := range []struct {
+			name         string
+			deadlineMsg  string
+			succeedOnTry int32 // 2 means succeed on attempt 1 (second try); 0 means always fail
+			wantEvals    int32
+			wantSuccess  bool
+		}{
+			{
+				name:         "succeeds-on-attempt-1-after-path-a-deadline",
+				deadlineMsg:  "recap audio Path A capture deadline exceeded",
+				succeedOnTry: 2,
+				wantEvals:    2,
+				wantSuccess:  true,
+			},
+			{
+				name:         "succeeds-on-attempt-1-after-mse-deadline",
+				deadlineMsg:  "recap audio MSE stream incomplete before deadline",
+				succeedOnTry: 2,
+				wantEvals:    2,
+				wantSuccess:  true,
+			},
+			{
+				name:         "stops-after-attempt-1-when-deadline-persists",
+				deadlineMsg:  "recap audio Path A capture deadline exceeded",
+				succeedOnTry: 0,
+				wantEvals:    2,
+				wantSuccess:  false,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var streamEvals atomic.Int32
+				var parentEvals atomic.Int32
+				var serverURL string
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/json/list" {
+						wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+						targets := []cdpTargetInfo{
+							{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+							{ID: "xplat", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/xplatplugins.aspx", WebSocketDebuggerURL: wsBase + "/xplat"},
+							{ID: "streamembed", ParentID: "xplat", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/streamembed"},
+						}
+						require.NoError(t, json.NewEncoder(w).Encode(targets))
+						return
+					}
+					conn, _, _, err := ws.UpgradeHTTP(r, w)
+					if err != nil {
+						t.Errorf("upgrade CDP: %v", err)
+						return
+					}
+					defer func() { _ = conn.Close() }()
+					raw, _, err := wsutil.ReadClientData(conn)
+					if err != nil {
+						t.Errorf("read CDP: %v", err)
+						return
+					}
+					var req struct {
+						ID     int    `json:"id"`
+						Method string `json:"method"`
+					}
+					require.NoError(t, json.Unmarshal(raw, &req))
+					var resp map[string]any
+					if req.Method == "Page.getFrameTree" {
+						resp = map[string]any{
+							"id": req.ID,
+							"result": map[string]any{
+								"frameTree": map[string]any{
+									"frame": map[string]string{"id": "owner", "url": harnessRecapURL},
+									"childFrames": []map[string]any{
+										{
+											"frame": map[string]string{"id": "xplat", "url": "https://contoso-my.sharepoint.com/_layouts/15/xplatplugins.aspx"},
+											"childFrames": []map[string]any{
+												{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}},
+											},
+										},
+									},
+								},
+							},
+						}
+					} else if r.URL.Path == "/streamembed" {
+						n := streamEvals.Add(1)
+						if tc.succeedOnTry > 0 && n >= tc.succeedOnTry {
+							resp = map[string]any{
+								"id":     req.ID,
+								"result": map[string]any{"result": map[string]string{"value": successPayload}},
+							}
+						} else {
+							resp = map[string]any{
+								"id": req.ID,
+								"result": map[string]any{
+									"exceptionDetails": map[string]any{
+										"exception": map[string]any{"description": "Error: " + tc.deadlineMsg},
+									},
+								},
+							}
+						}
+					} else {
+						parentEvals.Add(1)
+						resp = map[string]any{
+							"id":     req.ID,
+							"result": map[string]any{"result": map[string]string{"value": ""}},
+						}
+					}
+					b, err := json.Marshal(resp)
+					require.NoError(t, err)
+					require.NoError(t, wsutil.WriteServerText(conn, b))
+				}))
+				serverURL = srv.URL
+				defer srv.Close()
+
+				_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+				require.NoError(t, err)
+				port, err := strconv.Atoi(portText)
+				require.NoError(t, err)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				var out bytes.Buffer
+				err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
+				assert.Equal(t, tc.wantEvals, streamEvals.Load(), "streamembed target evaluation count mismatch")
+				assert.Zero(t, parentEvals.Load(), "same-origin parent targets must not be evaluated after a stream-deadline error in the same attempt")
+				if tc.wantSuccess {
+					require.NoError(t, err)
+					assert.NotEmpty(t, out.Bytes(), "expected encoded MP3 output after attempt-0 retry")
+				} else {
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), tc.deadlineMsg)
+				}
+			})
+		}
+
+		t.Run("cancelling-caller-during-retry-wait-preserves-context-canceled", func(t *testing.T) {
+			var serverURL string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					targets := []cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+						{ID: "streamembed", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/streamembed"},
+					}
+					require.NoError(t, json.NewEncoder(w).Encode(targets))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade CDP: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					t.Errorf("read CDP: %v", err)
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var resp map[string]any
+				if req.Method == "Page.getFrameTree" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"frameTree": map[string]any{
+								"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+								"childFrames": []map[string]any{{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}}},
+							},
+						},
+					}
+				} else if r.URL.Path == "/streamembed" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"exceptionDetails": map[string]any{
+								"exception": map[string]any{"description": "Error: recap audio Path A capture deadline exceeded"},
+							},
+						},
+					}
+				} else {
+					resp = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]string{"value": ""}}}
+				}
+				b, err := json.Marshal(resp)
+				require.NoError(t, err)
+				require.NoError(t, wsutil.WriteServerText(conn, b))
+			}))
+			serverURL = srv.URL
+			defer srv.Close()
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() {
+				time.Sleep(150 * time.Millisecond)
+				cancel()
+			}()
+			var out bytes.Buffer
+			err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+
+		t.Run("cancelling-caller-during-attempt-1-eval-preserves-context-canceled", func(t *testing.T) {
+			var evalCalls atomic.Int32
+			var serverURL string
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					targets := []cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+						{ID: "streamembed", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/streamembed"},
+					}
+					require.NoError(t, json.NewEncoder(w).Encode(targets))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade CDP: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var resp map[string]any
+				if req.Method == "Page.getFrameTree" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"frameTree": map[string]any{
+								"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+								"childFrames": []map[string]any{{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}}},
+							},
+						},
+					}
+				} else if r.URL.Path == "/streamembed" {
+					if evalCalls.Add(1) == 2 {
+						cancel()
+						time.Sleep(50 * time.Millisecond)
+						return
+					}
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"exceptionDetails": map[string]any{
+								"exception": map[string]any{"description": "Error: recap audio Path A capture deadline exceeded"},
+							},
+						},
+					}
+				} else {
+					resp = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]string{"value": ""}}}
+				}
+				b, err := json.Marshal(resp)
+				require.NoError(t, err)
+				_ = wsutil.WriteServerText(conn, b)
+			}))
+			serverURL = srv.URL
+			defer srv.Close()
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+
+		t.Run("attempt-1-exhausting-recapAudioEvalTimeout-preserves-deadline-exceeded", func(t *testing.T) {
+			origTimeout := recapAudioEvalTimeout
+			recapAudioEvalTimeout = 1300 * time.Millisecond
+			t.Cleanup(func() { recapAudioEvalTimeout = origTimeout })
+
+			var evalCalls atomic.Int32
+			var serverURL string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					targets := []cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+						{ID: "streamembed", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/streamembed"},
+					}
+					require.NoError(t, json.NewEncoder(w).Encode(targets))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade CDP: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var resp map[string]any
+				if req.Method == "Page.getFrameTree" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"frameTree": map[string]any{
+								"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+								"childFrames": []map[string]any{{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}}},
+							},
+						},
+					}
+				} else if r.URL.Path == "/streamembed" {
+					if evalCalls.Add(1) == 2 {
+						time.Sleep(500 * time.Millisecond)
+						return
+					}
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"exceptionDetails": map[string]any{
+								"exception": map[string]any{"description": "Error: recap audio Path A capture deadline exceeded"},
+							},
+						},
+					}
+				} else {
+					resp = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]string{"value": ""}}}
+				}
+				b, err := json.Marshal(resp)
+				require.NoError(t, err)
+				_ = wsutil.WriteServerText(conn, b)
+			}))
+			serverURL = srv.URL
+			defer srv.Close()
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			err = captureRecapAudioFromTargets(context.Background(), port, "owner", harnessRecapURL, &out)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Contains(t, err.Error(), "Path A capture deadline exceeded")
+		})
+	})
+}
+
+func TestRecapAudioColdTranscodeResilienceAndAppDataFallback(t *testing.T) {
+	// Combined fast verification covering both cold-transcode resilience invariants
+	// and %APPDATA% / os.UserConfigDir() profile fallback.
+	assert.Equal(t, 10*time.Minute, recapAudioEvalTimeout)
+
+	localBase := t.TempDir()
+	roamingBase := t.TempDir()
+	t.Setenv("LOCALAPPDATA", localBase)
+	t.Setenv("APPDATA", roamingBase)
+	t.Setenv("XDG_CONFIG_HOME", roamingBase)
+	roamingProfile := filepath.Join(roamingBase, "go-teams", "profile")
+	ldb := filepath.Join(roamingProfile, "Default", "Local Storage", "leveldb")
+	require.NoError(t, os.MkdirAll(ldb, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(ldb, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+	assert.Equal(t, roamingProfile, resolveExistingProfileDir(filepath.Join(localBase, "go-teams", "profile")))
 }

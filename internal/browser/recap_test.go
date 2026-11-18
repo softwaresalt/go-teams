@@ -5289,6 +5289,83 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 			err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
 			require.ErrorIs(t, err, context.Canceled)
 		})
+
+		t.Run("attempt-1-exhausting-recapAudioEvalTimeout-preserves-deadline-exceeded", func(t *testing.T) {
+			origTimeout := recapAudioEvalTimeout
+			recapAudioEvalTimeout = 1300 * time.Millisecond
+			t.Cleanup(func() { recapAudioEvalTimeout = origTimeout })
+
+			var evalCalls atomic.Int32
+			var serverURL string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					targets := []cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+						{ID: "streamembed", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/streamembed"},
+					}
+					require.NoError(t, json.NewEncoder(w).Encode(targets))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade CDP: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var resp map[string]any
+				if req.Method == "Page.getFrameTree" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"frameTree": map[string]any{
+								"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+								"childFrames": []map[string]any{{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}}},
+							},
+						},
+					}
+				} else if r.URL.Path == "/streamembed" {
+					if evalCalls.Add(1) == 2 {
+						time.Sleep(500 * time.Millisecond)
+						return
+					}
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"exceptionDetails": map[string]any{
+								"exception": map[string]any{"description": "Error: recap audio Path A capture deadline exceeded"},
+							},
+						},
+					}
+				} else {
+					resp = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]string{"value": ""}}}
+				}
+				b, err := json.Marshal(resp)
+				require.NoError(t, err)
+				_ = wsutil.WriteServerText(conn, b)
+			}))
+			serverURL = srv.URL
+			defer srv.Close()
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			err = captureRecapAudioFromTargets(context.Background(), port, "owner", harnessRecapURL, &out)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Contains(t, err.Error(), "Path A capture deadline exceeded")
+		})
 	})
 }
 

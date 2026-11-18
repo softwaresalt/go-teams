@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1964,6 +1965,12 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 
 	captureCtx, cancelCapture := context.WithTimeout(ctx, recapAudioEvalTimeout)
 	defer cancelCapture()
+	captureTimeoutErr := func(capErr error) error {
+		if lastErr != nil {
+			return fmt.Errorf("browser: recap audio unavailable: %w", errors.Join(lastErr, capErr))
+		}
+		return fmt.Errorf("browser: recap audio unavailable: %w", capErr)
+	}
 
 	const maxAttempts = 8
 	for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -1971,10 +1978,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			return fmt.Errorf("browser: recap audio cancelled: %w", err)
 		}
 		if err := captureCtx.Err(); err != nil {
-			if lastErr != nil {
-				return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
-			}
-			return fmt.Errorf("browser: recap audio unavailable: %w", err)
+			return captureTimeoutErr(err)
 		}
 		targets, listErr := listCDPTargets(port)
 		if listErr != nil {
@@ -2034,10 +2038,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				return fmt.Errorf("browser: recap audio cancelled: %w", err)
 			}
 			if err := captureCtx.Err(); err != nil {
-				if lastErr != nil {
-					return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
-				}
-				return fmt.Errorf("browser: recap audio unavailable: %w", err)
+				return captureTimeoutErr(err)
 			}
 			if isAuthRedirectURL(target.URL) {
 				continue
@@ -2054,6 +2055,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 					return fmt.Errorf("browser: recap audio cancelled: %w", err)
 				}
 				setLastErr(evalErr)
+				if err := captureCtx.Err(); err != nil {
+					return captureTimeoutErr(err)
+				}
 				continue
 			}
 			if raw == "" {
@@ -2252,15 +2256,15 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("browser: recap audio cancelled: %w", err)
 			}
-			if lastErr != nil {
-				return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
-			}
-			return fmt.Errorf("browser: recap audio unavailable: %w", captureCtx.Err())
+			return captureTimeoutErr(captureCtx.Err())
 		case <-timer.C:
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("browser: recap audio cancelled: %w", err)
+	}
+	if err := captureCtx.Err(); err != nil {
+		return captureTimeoutErr(err)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
@@ -3032,10 +3036,6 @@ func isPathInsideRepoRootBounded(p, stopAt string) bool {
 		}
 		cur = parent
 	}
-}
-
-func isPathInsideRepoRoot(p string) bool {
-	return isPathInsideRepoRootBounded(p, "")
 }
 
 func sameNormalizedPath(a, b string) bool {

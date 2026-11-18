@@ -652,8 +652,9 @@ func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
 			"candidate inside a repo checkout (%APPDATA%\\go-teams with go.mod) must be skipped")
 		require.NoError(t, os.Remove(goModMarker))
 
-		// 4b. Dotfiles .git directory in an ancestor above user config bases (e.g. ~/.git)
-		// must NOT disable %APPDATA% fallback.
+		// 4b. Dotfiles .git directory in the user's home directory (~/.git) must NOT disable
+		// %APPDATA% fallback, while a repo containing the config base itself (e.g. <repo>/.localappdata)
+		// MUST still be blocked.
 		dotfilesHome := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dotfilesHome, ".git"), 0o700))
 		dotLocalBase := filepath.Join(dotfilesHome, "AppData", "Local")
@@ -663,11 +664,22 @@ func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
 		require.NoError(t, os.MkdirAll(dotLocalBase, 0o700))
 		require.NoError(t, os.MkdirAll(dotRoamingLDB, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(dotRoamingLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+		t.Setenv("USERPROFILE", dotfilesHome)
+		t.Setenv("HOME", dotfilesHome)
 		t.Setenv("LOCALAPPDATA", dotLocalBase)
 		t.Setenv("APPDATA", dotRoamingBase)
 		t.Setenv("XDG_CONFIG_HOME", dotRoamingBase)
 		assert.Equal(t, dotRoamingProfile, resolveExistingProfileDir(filepath.Join(dotLocalBase, "go-teams", "profile")),
-			"ancestor .git above user config base (dotfiles repo) must not block %APPDATA% fallback")
+			"ancestor .git at home dir (dotfiles repo) must not block %APPDATA% fallback")
+
+		nestedRepo := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(nestedRepo, ".git"), 0o700))
+		nestedLocalBase := filepath.Join(nestedRepo, ".localappdata")
+		nestedLocalProfile := filepath.Join(nestedLocalBase, "go-teams", "profile")
+		require.NoError(t, os.MkdirAll(nestedLocalProfile, 0o700))
+		t.Setenv("LOCALAPPDATA", nestedLocalBase)
+		assert.Equal(t, nestedLocalProfile, resolveExistingProfileDir(nestedLocalProfile),
+			"canonical base nested inside a repository checkout (<repo>/.localappdata) must not redirect to %APPDATA%")
 
 		// Restore localBase/roamingBase for step 5.
 		t.Setenv("LOCALAPPDATA", localBase)
@@ -5005,6 +5017,83 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("12-worker / 5-attempt / late-play probe failed: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("explicit-deadline-and-fetch-max-attempts-overrides", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		probeJS := recapColdTestMP4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapAudioCaptureDeadlineMs = 500, recapAudioFetchMaxAttempts = 4;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(1);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildAudioInitSegment()));
+  const encSeg0 = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(0, 0x11)));
+
+  let fakeNow = 1000000;
+  Date.now = () => fakeNow;
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+    return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+  };
+
+  let segCalls = 0;
+  let testCompleted = false;
+  process.on('beforeExit', () => { if (!testCompleted) process.exit(1); });
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  globalThis.fetch = async (url) => {
+    const s = String(url);
+    if (!s.includes('oneDrive.transcode')) throw new TypeError('Failed to fetch');
+    if (s.includes('initsegment')) {
+      return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, arrayBuffer: async () => encInit.slice().buffer };
+    }
+    if (s.includes('mediasegment')) {
+      segCalls++;
+      if (segCalls < 4) return { ok: false, status: 408, url: s, headers: { get: () => null } };
+      let sent = false;
+      return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => sent ? { done: true } : (sent = true, { done: false, value: encSeg0 }), cancel: async () => {} }) }, arrayBuffer: async () => encSeg0.slice().buffer };
+    }
+    throw new Error('unexpected url: ' + s);
+  };
+  globalThis.crypto = { subtle };
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+  globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a', origin: 'https://contoso-my.sharepoint.com' };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 5 };
+  const videoEl = { src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1', duration: 5, paused: true, play: async () => {}, pause: () => {}, getAttribute: () => null };
+  const playBtn = {
+    click: () => {
+      (async () => {
+        const r = await globalThis.fetch(base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=50000000&driveItemId=recording-a');
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await r.arrayBuffer());
+      })().catch(() => {});
+    }
+  };
+  globalThis.document = { querySelector: sel => sel.includes('Play video') ? playBtn : ((sel === 'audio, video' || sel === 'video') ? videoEl : null), querySelectorAll: () => [] };
+
+  const raw = await eval(fs.readFileSync(0, 'utf8'));
+  const parsed = JSON.parse(raw);
+  if (segCalls !== 4) throw new Error('expected recapAudioFetchMaxAttempts=4, got segCalls=' + segCalls);
+  if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected PCM output');
+  testCompleted = true;
+})().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
+`
+		cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("explicit overrides probe failed: %v\n%s", err, out)
 		}
 	})
 

@@ -3014,21 +3014,21 @@ func resolveExistingProfileDir(raw string) string {
 	return resolveExpandedProfileDir(expandProfilePath(raw))
 }
 
-func isPathInsideRepoRootBounded(p, stopAt string) bool {
+func isPathInsideRepoRoot(p string) bool {
 	if p == "" {
 		return false
 	}
+	homeDir, homeErr := os.UserHomeDir()
 	cur := filepath.Clean(p)
-	stop := ""
-	if stopAt != "" {
-		stop = filepath.Clean(stopAt)
-	}
 	for {
-		if isRepoRootDir(cur) {
+		isHomeDir := homeErr == nil && strings.TrimSpace(homeDir) != "" && sameNormalizedPath(cur, homeDir)
+		if _, err := os.Stat(filepath.Join(cur, "go.mod")); err == nil {
 			return true
 		}
-		if stop != "" && sameNormalizedPath(cur, stop) {
-			return false
+		if !isHomeDir {
+			if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
+				return true
+			}
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
@@ -3087,25 +3087,25 @@ func resolveExpandedProfileDir(expanded string) string {
 		return legacy
 	}
 	bases := userConfigProfileBases()
-	matchedBase := ""
+	isCanonicalUserConfigProfile := false
 	for _, base := range bases {
 		for _, app := range []string{"go-teams", "teams-cli"} {
 			if sameNormalizedPath(expanded, filepath.Join(base, app, "profile")) {
-				matchedBase = base
+				isCanonicalUserConfigProfile = true
 				break
 			}
 		}
-		if matchedBase != "" {
+		if isCanonicalUserConfigProfile {
 			break
 		}
 	}
-	if matchedBase == "" || isPathInsideRepoRootBounded(expanded, matchedBase) {
+	if !isCanonicalUserConfigProfile || isPathInsideRepoRoot(expanded) {
 		return expanded
 	}
 	for _, base := range bases {
 		for _, app := range []string{"go-teams", "teams-cli"} {
 			cand := filepath.Join(base, app, "profile")
-			if isPathInsideRepoRootBounded(cand, base) {
+			if isPathInsideRepoRoot(cand) {
 				continue
 			}
 			if hasTeamsSessionInExpandedProfile(cand) {

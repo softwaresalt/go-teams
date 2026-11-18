@@ -641,14 +641,13 @@ Sign in using a visible capture session first and reuse that profile:
 The default profile directory comes from `config.DefaultConfig()`. It is
 `%LOCALAPPDATA%\go-teams\profile` on Windows when `LOCALAPPDATA` is set, and
 otherwise `go-teams/profile` under `os.UserConfigDir()` (for example
-`~/.config/go-teams/profile` on Linux). When both
-`%LOCALAPPDATA%\go-teams\profile` and its same-parent
-`%LOCALAPPDATA%\teams-cli\profile` sibling have no persisted Teams session on
-disk on Windows, `go-teams` automatically falls back to an existing
-authenticated profile under `%APPDATA%\go-teams\profile` or
-`%APPDATA%\teams-cli\profile` (`os.UserConfigDir()`). On Linux and macOS,
-`go-teams` checks `os.UserConfigDir()/go-teams/profile` and its legacy
-`teams-cli/profile` sibling. The code does not search
+`~/.config/go-teams/profile` on Linux). When a canonical per-user profile directory (`go-teams\profile` or
+`teams-cli\profile` under `APPDATA`, `os.UserConfigDir()`, or `LOCALAPPDATA`)
+has no persisted Teams session on disk (and neither does its same-parent
+`teams-cli` sibling), `go-teams` searches those per-user config bases in order
+(`APPDATA`, `os.UserConfigDir()`, `LOCALAPPDATA` — preferring
+`go-teams\profile` over `teams-cli\profile` within each base) and selects the
+first non-repository directory containing a persisted Teams session. The code does not search
 for a profile next to the executable or in `bin\profile`; the `.\bin\profile`
 paths above are explicit `--profile-dir` values. When `UserDataDir` is empty,
 as with a direct library caller that bypasses `DefaultConfig`, the result

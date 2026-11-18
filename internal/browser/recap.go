@@ -2246,6 +2246,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			return fmt.Errorf("browser: recap audio cancelled: %w", ctx.Err())
 		case <-captureCtx.Done():
 			timer.Stop()
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("browser: recap audio cancelled: %w", err)
+			}
 			if lastErr != nil {
 				return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
 			}
@@ -3091,6 +3094,9 @@ func resolveExpandedProfileDir(expanded string) string {
 		}
 		for _, app := range []string{"go-teams", "teams-cli"} {
 			cand := filepath.Join(base, app, "profile")
+			if isPathInsideRepoRoot(cand) {
+				continue
+			}
 			if hasTeamsSessionInExpandedProfile(cand) {
 				return cand
 			}

@@ -639,12 +639,18 @@ func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
 		assert.Equal(t, arbitraryProfile, resolveExistingProfileDir(arbitraryProfile),
 			"arbitrary non-user-config path must not redirect to %APPDATA%")
 
-		// 4. Repo-local profile path must NOT redirect to APPDATA even if APPDATA is warm.
+		// 4. Repo-local profile path must NOT redirect to APPDATA even if APPDATA is warm,
+		// and a repo checkout inside APPDATA\go-teams must not be picked as a fallback candidate.
 		repoRoot := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module example\n"), 0o600))
 		inRepoProfile := filepath.Join(repoRoot, "go-teams", "profile")
 		assert.Equal(t, inRepoProfile, resolveExistingProfileDir(inRepoProfile),
 			"repo-local path must never redirect to %APPDATA%")
+		goModMarker := filepath.Join(roamingBase, "go-teams", "go.mod")
+		require.NoError(t, os.WriteFile(goModMarker, []byte("module example\n"), 0o600))
+		assert.Equal(t, roamingLegacy, resolveExistingProfileDir(localDefault),
+			"candidate inside a repo checkout (%APPDATA%\\go-teams with go.mod) must be skipped")
+		require.NoError(t, os.Remove(goModMarker))
 
 		// 5. Warm LOCALAPPDATA takes precedence over warm APPDATA.
 		localLDB := filepath.Join(localDefault, "Default", "Local Storage", "leveldb")
@@ -5112,6 +5118,79 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 				}
 			})
 		}
+
+		t.Run("cancelling-caller-during-retry-wait-preserves-context-canceled", func(t *testing.T) {
+			var serverURL string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					targets := []cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+						{ID: "streamembed", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/streamembed"},
+					}
+					require.NoError(t, json.NewEncoder(w).Encode(targets))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade CDP: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					t.Errorf("read CDP: %v", err)
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var resp map[string]any
+				if req.Method == "Page.getFrameTree" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"frameTree": map[string]any{
+								"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+								"childFrames": []map[string]any{{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}}},
+							},
+						},
+					}
+				} else if r.URL.Path == "/streamembed" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"exceptionDetails": map[string]any{
+								"exception": map[string]any{"description": "Error: recap audio Path A capture deadline exceeded"},
+							},
+						},
+					}
+				} else {
+					resp = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]string{"value": ""}}}
+				}
+				b, err := json.Marshal(resp)
+				require.NoError(t, err)
+				require.NoError(t, wsutil.WriteServerText(conn, b))
+			}))
+			serverURL = srv.URL
+			defer srv.Close()
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() {
+				time.Sleep(150 * time.Millisecond)
+				cancel()
+			}()
+			var out bytes.Buffer
+			err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
+			require.ErrorIs(t, err, context.Canceled)
+		})
 	})
 }
 

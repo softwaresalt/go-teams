@@ -116,7 +116,13 @@ password entry, MFA, or lobby admission themselves.
    mutates it with `teams.MutateJoinURL`.
 2. `internal/browser` allocates Chromium and walks the pre-join state machine
    within any configured `LobbyTimeout` (`ErrLobbyTimeout` on expiration):
-   remote authenticated sessions with a `UserDataDir` (both headed and
+   profile directory resolution (`NewLiveMeeting` / `resolveExistingProfileDir`)
+   checks both `%LOCALAPPDATA%\go-teams\profile` (plus legacy
+   `teams-cli\profile`) and `%APPDATA%\go-teams\profile`
+   (`os.UserConfigDir()`, plus legacy `teams-cli\profile`) when a canonical
+   per-user profile path has no persisted Teams session on disk (while leaving
+   warm, custom `--profile-dir`, and repo-local paths untouched). Remote
+   authenticated sessions with a `UserDataDir` (both headed and
    `--headless=new`) launch through the direct-exec CDP launcher so host
    profile cookies and cross-origin Entra/Teams `targetId` rebinding work
    consistently; when `DefaultAccount` is configured and an Entra account picker
@@ -189,7 +195,15 @@ transcript instead of listening live:
    streams) and MSE `MediaSource.prototype.addSourceBuffer` /
    `SourceBuffer.prototype.appendBuffer` hooks (`16x` `playbackRate`,
    `currentTime` stepping, and `tfdt`-ordered deduplication), then decodes
-   through `AudioContext.decodeAudioData` to 44.1 kHz mono PCM. Inert
+   through `AudioContext.decodeAudioData` to 44.1 kHz mono PCM. For cold
+   SharePoint recordings (`maxRecapAudioDurationSec > 300`), Path A fetches and
+   decrypts segments with 12-worker concurrency, a 4-minute capture deadline
+   (`10m` operation-wide CDP evaluation budget in
+   `captureRecapAudioFromTargets`), 5-attempt exponential retry backoff
+   (`250ms-2000ms` across HTTP `408`/`429`/`5xx`), separate Play-button and
+   late-mounted `<video>.play()` tracking, in-flight Path A deadline
+   precedence over partial pre-pause MSE buffers, and a single attempt-0 retry
+   recovery pass when a cold recording exceeds the capture deadline. Inert
    `isDownloadBlocked=true` pages with no playable stream surface still fail
    explicitly rather than decoding HTML error bytes as audio.
 4. `capture.Session` writes the transcript, a Markdown horizontal rule, and the

@@ -1971,6 +1971,10 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		}
 		return fmt.Errorf("browser: recap audio unavailable: %w", capErr)
 	}
+	isStreamDeadlineMsg := func(msg string) bool {
+		return strings.Contains(msg, "Path A capture deadline exceeded") ||
+			strings.Contains(msg, "MSE stream incomplete before deadline")
+	}
 
 	const maxAttempts = 8
 	for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -2058,6 +2062,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 				if err := captureCtx.Err(); err != nil {
 					return captureTimeoutErr(err)
 				}
+				if isStreamDeadlineMsg(evalErr.Error()) {
+					break
+				}
 				continue
 			}
 			if raw == "" {
@@ -2122,6 +2129,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			if payload.Error != "" {
 				cleanupPendingTransfer()
 				setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
+				if isStreamDeadlineMsg(payload.Error) {
+					break
+				}
 				continue
 			}
 			if payload.SourceBytes < 0 || payload.SourceBytes > int64(maxRecapAudioSourceBytes) ||
@@ -2235,9 +2245,7 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
 			return nil
 		}
-		isRetryableStreamDeadline := attempt == 0 && lastErr != nil &&
-			(strings.Contains(lastErr.Error(), "Path A capture deadline exceeded") ||
-				strings.Contains(lastErr.Error(), "MSE stream incomplete before deadline"))
+		isRetryableStreamDeadline := attempt == 0 && lastErr != nil && isStreamDeadlineMsg(lastErr.Error())
 		shouldRetry := attempt < maxAttempts-1 &&
 			(isRetryableStreamDeadline ||
 				(!hasStreamEmbedTarget &&

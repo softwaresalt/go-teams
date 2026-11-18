@@ -5134,6 +5134,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				var streamEvals atomic.Int32
+				var parentEvals atomic.Int32
 				var serverURL string
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/json/list" {
@@ -5198,6 +5199,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 							}
 						}
 					} else {
+						parentEvals.Add(1)
 						resp = map[string]any{
 							"id":     req.ID,
 							"result": map[string]any{"result": map[string]string{"value": ""}},
@@ -5220,6 +5222,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 				var out bytes.Buffer
 				err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
 				assert.Equal(t, tc.wantEvals, streamEvals.Load(), "streamembed target evaluation count mismatch")
+				assert.Zero(t, parentEvals.Load(), "same-origin parent targets must not be evaluated after a stream-deadline error in the same attempt")
 				if tc.wantSuccess {
 					require.NoError(t, err)
 					assert.NotEmpty(t, out.Bytes(), "expected encoded MP3 output after attempt-0 retry")

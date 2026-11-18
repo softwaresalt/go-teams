@@ -11,10 +11,11 @@ shipment: 035-S
 source_stash:
   - 6E17E6EA
 linked_artifacts:
-  - docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-plan.md
-  - .backlogit/queue/024-DL.md
-  - .backlogit/queue/035-F.md
-  - .backlogit/queue/035-S.md
+  - docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-decided-plan.md
+  - docs/archive/plans/2026-11-17/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-plan.md
+  - .backlogit/archive/024-DL.md
+  - .backlogit/archive/035-F.md
+  - .backlogit/archive/035-S.md
 date: 2026-11-17
 status: accepted
 tags:
@@ -124,7 +125,7 @@ When running `go-teams` in `--queue` mode against a 60.6-minute (`3637.76s`, `60
 
 ## Decision
 
-We select **Option A** and promote directly to both implementation plan (`docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-plan.md`) and backlog queue (`024-DL`, covering feature `035-F`, tasks `035.001-T`..`035.003-T`, and shipment `035-S`).
+We select **Option A** and promote directly to both implementation plan (`docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-decided-plan.md`; verbose original archived at `docs/archive/plans/2026-11-17/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-plan.md`) and backlog queue (`024-DL`, covering feature `035-F`, tasks `035.001-T`..`035.003-T`, and shipment `035-S`, archived post-merge under `.backlogit/archive/`).
 
 ## Rejected Alternatives
 

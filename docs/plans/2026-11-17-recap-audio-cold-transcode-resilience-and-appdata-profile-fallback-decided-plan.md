@@ -25,7 +25,7 @@ archived_plan: docs/archive/plans/2026-11-17/2026-11-17-recap-audio-cold-transco
 
 ## Decisions, Rationale, and Rejected Alternatives
 
-* **Gate 4-minute `deadlineAt` and 5-attempt retries on `maxRecapAudioDurationSec > 300` (plus explicit overrides)**: Gives production 70-minute cold SharePoint captures a 4-minute deadline and 3.75s of per-segment backoff while preserving deterministic short-cap unit tests (`maxRecapAudioDurationSec = 120`) unchanged.
+* **Gate 4-minute `deadlineAt` and 5-attempt retries on `maxRecapAudioDurationSec > 300` (plus explicit overrides)**: Gives production 60.6-minute (`3637.76s`, `605`-segment) cold SharePoint captures (within the 70-minute `maxRecapAudioDurationSec = 4200` cap) a 4-minute deadline and 3.75s of per-segment backoff while preserving deterministic short-cap unit tests (`maxRecapAudioDurationSec = 120`) unchanged.
 * **Prioritize in-flight `pathAPromise` deadline error over pre-pause MSE segments**: Prevents 1–2 pre-pause MSE buffers (~12s) from masquerading as a truncated Path B stream (`'recap audio MSE stream incomplete before deadline'`).
 * **Restrict cross-root profile fallback to canonical per-user config paths outside repo roots**: Enables `--queue` / `DefaultConfig()` runs to discover `%APPDATA%\go-teams\profile` sessions while keeping `t.TempDir()`, custom `--profile-dir`, and repo-local paths hermetic.
 

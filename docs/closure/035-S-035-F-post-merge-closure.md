@@ -120,7 +120,7 @@ with the verbose original archived under `docs/archive/plans/2026-11-17/`.
 | Build, vet, fmt | `go build -o bin/go-teams.exe ./cmd/go-teams`, `go vet ./...`, `go vet -tags=integration ./...`, `GOOS=darwin GOARCH=amd64 go vet ./...`, `gofmt -l .` (0 files) | PASS |
 | Unit & E2E suite | `go test -race ./...` across all packages including `TestResolveExistingProfileDirExpansionAndFallback`, `TestRecapAudioColdTranscodeResilienceAndDeadlineRetry`, `TestRecapAudioColdTranscodeResilienceAndAppDataFallback`, and `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` | PASS |
 | CI `windows-latest` & `ubuntu-latest` | `Detect code changes`, `Detect CLI-affecting changes`, and `Build, vet, lint & test (Windows)` on PR #84 (HEAD `c123099`) | PASS |
-| Runtime verification probes | `go run ./cmd/go-teams --help`, `go run ./cmd/go-teams schedule --help` | PASS |
+| Runtime verification probes | `go run ./cmd/go-teams --help`, `go run ./cmd/go-teams schedule --help`; manual `teams-auth-mfa` (`required_for_release: true` in `.autoharness/workspace-profile.yaml`) and `scheduled-meeting-join` checkpoints deferred for live operator verification outside headless CI (`PASS_WITH_FOLLOW_UP`) | PASS (CLI probes); DEFERRED (`teams-auth-mfa`) |
 | Backlog & closure gate | `autoharness gate closure-evidence`, `backlogit sync`, and `backlogit doctor` | PASS |
 
 ## Strict-safety action record
@@ -138,7 +138,7 @@ with the verbose original archived under `docs/archive/plans/2026-11-17/`.
 * **Monitoring and validation window (7 days, owner: `softwaresalt`)**:
   * **Healthy signals**: 100% pass rate on `CI` (`Detect code changes`, `Detect CLI-affecting changes`, `Build, vet, lint & test (Windows)`) and `go test -race ./...`, including `TestResolveExistingProfileDirExpansionAndFallback`, `TestRecapAudioColdTranscodeResilienceAndDeadlineRetry`, `TestRecapAudioColdTranscodeResilienceAndAppDataFallback`, and `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`.
   * **Failure signals and rollback triggers**: Any test regression, unintended profile redirection, or CI check failure.
-* **Readiness verdict**: `READY` (all local quality gates, unit/E2E suites, 6 adversarial review rounds culminating in P-014 `READY_WITH_FOLLOWUPS` with follow-ups `920CF700`, `CDCE76CE`, and P-021 C2 `B98262C8` stashed for Stage triage, 2 Copilot review rounds, GitHub Actions CI checks, and cascade-close postconditions passed).
+* **Readiness verdict**: `READY_WITH_CONDITIONS` (all local quality gates, unit/E2E suites, 6 adversarial review rounds culminating in P-014 `READY_WITH_FOLLOWUPS` at `c123099` with `0` P0, `0` HIGH/MEDIUM P1, `1` LOW Unique P1 advisory `U1` tracked under `CDCE76CE`, plus `920CF700` and P-021 C2 `B98262C8` stashed for Stage triage, 2 Copilot review rounds, GitHub Actions CI checks, and cascade-close postconditions passed; live `teams-auth-mfa` manual checkpoint deferred for operator verification in `.autoharness/workspace-profile.yaml`).
 
 ## Dark Factory Execution Summary
 

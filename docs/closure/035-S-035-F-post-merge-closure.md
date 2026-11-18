@@ -111,7 +111,12 @@ the plan into
 `docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-decided-plan.md`
 with the verbose original archived under `docs/archive/plans/2026-11-17/`.
 `compound-refresh` verified existing `docs/compound/` entries remain accurate
-(`keep`). `compaction_status` is `done`.
+(`keep`). `compaction_status` is `done`. Note on archived backlog references:
+`.backlogit/archive/035-F.md` and `.backlogit/archive/035.001-T`..`035.003-T`
+retain the pre-compaction plan path
+`docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-plan.md`,
+which now resolves to the archived plan under `docs/archive/plans/2026-11-17/`
+and the consolidated `...-decided-plan.md`.
 
 ## Verification evidence
 
@@ -133,7 +138,7 @@ with the verbose original archived under `docs/archive/plans/2026-11-17/`.
 
 ## Releasability evidence
 
-* **Invariants preserved**: Same-origin HTTPS transcode containment and recording identity verification enforced; `track === 'video'` never seeds audio template/timing fields; in-flight `pathAPromise` deadline precedence prevents 1–2 pre-pause MSE buffers from misreporting `'MSE stream incomplete before deadline'`; `triggerPlaybackIfReady()` guards against `m.play()` while `pathAActive === true`; warm, custom `--profile-dir`, and lexical repo-local profiles are never redirected; zero new dependencies (`go.mod` unchanged).
+* **Invariants preserved**: Same-origin HTTPS transcode containment and recording identity verification enforced; `track === 'video'` never seeds audio template/timing fields; in-flight `pathAPromise` deadline precedence prevents 1–2 pre-pause MSE buffers from misreporting `'MSE stream incomplete before deadline'`; `triggerPlaybackIfReady()` guards against `m.play()` while `pathAActive === true`; warm, custom `--profile-dir`, and lexical repo-local profiles are not redirected (full repository-containment invariant preserved in `docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-decided-plan.md`; symlink/junction limitation tracked under `CDCE76CE`); zero new dependencies (`go.mod` unchanged).
 * **Deviations and residual risk**:
   * **Cross-root `UserDataDir` discovery exception (owner: `softwaresalt`)**: `%APPDATA%` / `os.UserConfigDir()` fallback discovers persisted Teams sessions across per-user OS config roots (`APPDATA`, `os.UserConfigDir()`, `LOCALAPPDATA`) outside the workspace root (`isPathInsideRepoRoot` lexical repo-root exclusion with `os.UserHomeDir()` `.git` carve-out); symlink/junction ancestor resolution (`CDCE76CE` / `U1`, `MAJOR`/`P1` `LOW`-confidence `1/3` `advisory` in `docs/closure/2026-11-17-035-s-adversarial-review.md`) was routed `advisory` under `adversarial-review.agent.md` full-pool rules (`0` P0, `0` HIGH Consensus, `0` MEDIUM Majority/Plurality under P-014 `READY_WITH_FOLLOWUPS`) and is escalated for Stage `bug` triage/reprioritization (`kind: task, priority: low` as captured under P-021 C5) and operator residual-risk review.
   * **Unexecuted manual checkpoints (owner: `softwaresalt`)**: Live interactive `teams-auth-mfa` (`required_for_release: true` in `.autoharness/workspace-profile.yaml` for `go-teams auth` MFA, unchanged by `035-S`) was not executed in headless CI without an interactive operator and is recorded `BLOCKED`; `scheduler-liveness-log` (`required: false` probe) and `scheduled-meeting-join` (`required_for_release: false` manual checkpoint) are deferred to the post-deploy observation window.

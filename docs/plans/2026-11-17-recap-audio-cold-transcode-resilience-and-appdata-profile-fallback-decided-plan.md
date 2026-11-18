@@ -34,7 +34,7 @@ archived_plan: docs/archive/plans/2026-11-17/2026-11-17-recap-audio-cold-transco
 1. **Same-origin HTTPS transcode containment and recording identity verification**: `isAllowedSameOriginTranscodeURL`, `allowlistedHeaderNames`, and `checkIdentityAgainst` remain enforced; `track === 'video'` never seeds audio template/timing fields.
 2. **In-flight Path A deadline precedence over partial pre-pause MSE buffers**: `pathAPromise && !pathAFailed && !pathAResult` throws `'recap audio Path A capture deadline exceeded'` before Path B MSE inspection.
 3. **No competing `<video>.play()` while Path A is active**: `triggerPlaybackIfReady()` checks `pathAActive`.
-4. **Scoped cross-root profile discovery**: Warm `expanded` / same-parent `legacy`, custom `--profile-dir` paths, and paths inside repo roots are never redirected (with an `os.UserHomeDir()` `.git` dotfiles carve-out).
+4. **Scoped cross-root profile discovery**: Warm `expanded` / same-parent `legacy`, custom `--profile-dir` paths, and lexical paths inside repo roots are not redirected (with an `os.UserHomeDir()` `.git` dotfiles carve-out; symlink/junction ancestor resolution is tracked as follow-up `CDCE76CE`).
 5. **Bounded attempt-0 stream deadline retry**: At most 1 retry (`attempt == 0`) bounded by `recapAudioEvalTimeout = 10m` and `ctx.Done()`.
 
 ## Scope Boundaries, Risks, and Rollback Triggers

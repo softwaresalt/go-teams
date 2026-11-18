@@ -2050,6 +2050,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			raw, evalErr := evalInCDPTargetWithin(captureCtx, target.WebSocketDebuggerURL, expr, recapAudioEvalTimeout)
 			slog.Debug("browser: recap audio eval finished", "elapsed", time.Since(tStart).Round(time.Millisecond), "raw_len", len(raw), "err", evalErr)
 			if evalErr != nil {
+				if err := ctx.Err(); err != nil {
+					return fmt.Errorf("browser: recap audio cancelled: %w", err)
+				}
 				setLastErr(evalErr)
 				continue
 			}
@@ -2255,6 +2258,9 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			return fmt.Errorf("browser: recap audio unavailable: %w", captureCtx.Err())
 		case <-timer.C:
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("browser: recap audio cancelled: %w", err)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("browser: recap audio unavailable: %w", lastErr)
@@ -3004,14 +3010,21 @@ func resolveExistingProfileDir(raw string) string {
 	return resolveExpandedProfileDir(expandProfilePath(raw))
 }
 
-func isPathInsideRepoRoot(p string) bool {
+func isPathInsideRepoRootBounded(p, stopAt string) bool {
 	if p == "" {
 		return false
 	}
 	cur := filepath.Clean(p)
+	stop := ""
+	if stopAt != "" {
+		stop = filepath.Clean(stopAt)
+	}
 	for {
 		if isRepoRootDir(cur) {
 			return true
+		}
+		if stop != "" && sameNormalizedPath(cur, stop) {
+			return false
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
@@ -3019,6 +3032,10 @@ func isPathInsideRepoRoot(p string) bool {
 		}
 		cur = parent
 	}
+}
+
+func isPathInsideRepoRoot(p string) bool {
+	return isPathInsideRepoRootBounded(p, "")
 }
 
 func sameNormalizedPath(a, b string) bool {
@@ -3069,32 +3086,26 @@ func resolveExpandedProfileDir(expanded string) string {
 	if legacy != expanded && hasTeamsSessionInExpandedProfile(legacy) {
 		return legacy
 	}
-	if isPathInsideRepoRoot(expanded) {
-		return expanded
-	}
 	bases := userConfigProfileBases()
-	isCanonicalUserConfigProfile := false
+	matchedBase := ""
 	for _, base := range bases {
 		for _, app := range []string{"go-teams", "teams-cli"} {
 			if sameNormalizedPath(expanded, filepath.Join(base, app, "profile")) {
-				isCanonicalUserConfigProfile = true
+				matchedBase = base
 				break
 			}
 		}
-		if isCanonicalUserConfigProfile {
+		if matchedBase != "" {
 			break
 		}
 	}
-	if !isCanonicalUserConfigProfile {
+	if matchedBase == "" || isPathInsideRepoRootBounded(expanded, matchedBase) {
 		return expanded
 	}
 	for _, base := range bases {
-		if isPathInsideRepoRoot(base) {
-			continue
-		}
 		for _, app := range []string{"go-teams", "teams-cli"} {
 			cand := filepath.Join(base, app, "profile")
-			if isPathInsideRepoRoot(cand) {
+			if isPathInsideRepoRootBounded(cand, base) {
 				continue
 			}
 			if hasTeamsSessionInExpandedProfile(cand) {

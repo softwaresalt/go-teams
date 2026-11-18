@@ -652,6 +652,28 @@ func TestResolveExistingProfileDirExpansionAndFallback(t *testing.T) {
 			"candidate inside a repo checkout (%APPDATA%\\go-teams with go.mod) must be skipped")
 		require.NoError(t, os.Remove(goModMarker))
 
+		// 4b. Dotfiles .git directory in an ancestor above user config bases (e.g. ~/.git)
+		// must NOT disable %APPDATA% fallback.
+		dotfilesHome := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dotfilesHome, ".git"), 0o700))
+		dotLocalBase := filepath.Join(dotfilesHome, "AppData", "Local")
+		dotRoamingBase := filepath.Join(dotfilesHome, "AppData", "Roaming")
+		dotRoamingProfile := filepath.Join(dotRoamingBase, "go-teams", "profile")
+		dotRoamingLDB := filepath.Join(dotRoamingProfile, "Default", "Local Storage", "leveldb")
+		require.NoError(t, os.MkdirAll(dotLocalBase, 0o700))
+		require.NoError(t, os.MkdirAll(dotRoamingLDB, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dotRoamingLDB, "000001.ldb"), []byte("SKYPE-TOKEN"), 0o600))
+		t.Setenv("LOCALAPPDATA", dotLocalBase)
+		t.Setenv("APPDATA", dotRoamingBase)
+		t.Setenv("XDG_CONFIG_HOME", dotRoamingBase)
+		assert.Equal(t, dotRoamingProfile, resolveExistingProfileDir(filepath.Join(dotLocalBase, "go-teams", "profile")),
+			"ancestor .git above user config base (dotfiles repo) must not block %APPDATA% fallback")
+
+		// Restore localBase/roamingBase for step 5.
+		t.Setenv("LOCALAPPDATA", localBase)
+		t.Setenv("APPDATA", roamingBase)
+		t.Setenv("XDG_CONFIG_HOME", roamingBase)
+
 		// 5. Warm LOCALAPPDATA takes precedence over warm APPDATA.
 		localLDB := filepath.Join(localDefault, "Default", "Local Storage", "leveldb")
 		require.NoError(t, os.MkdirAll(localLDB, 0o700))
@@ -5187,6 +5209,82 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 				time.Sleep(150 * time.Millisecond)
 				cancel()
 			}()
+			var out bytes.Buffer
+			err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+
+		t.Run("cancelling-caller-during-attempt-1-eval-preserves-context-canceled", func(t *testing.T) {
+			var evalCalls atomic.Int32
+			var serverURL string
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/json/list" {
+					wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+					targets := []cdpTargetInfo{
+						{ID: "owner", Type: "page", URL: harnessRecapURL, WebSocketDebuggerURL: wsBase + "/owner"},
+						{ID: "streamembed", ParentID: "owner", Type: "iframe", URL: "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a", WebSocketDebuggerURL: wsBase + "/streamembed"},
+					}
+					require.NoError(t, json.NewEncoder(w).Encode(targets))
+					return
+				}
+				conn, _, _, err := ws.UpgradeHTTP(r, w)
+				if err != nil {
+					t.Errorf("upgrade CDP: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				raw, _, err := wsutil.ReadClientData(conn)
+				if err != nil {
+					return
+				}
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+				}
+				require.NoError(t, json.Unmarshal(raw, &req))
+				var resp map[string]any
+				if req.Method == "Page.getFrameTree" {
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"frameTree": map[string]any{
+								"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+								"childFrames": []map[string]any{{"frame": map[string]string{"id": "streamembed", "url": "https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a"}}},
+							},
+						},
+					}
+				} else if r.URL.Path == "/streamembed" {
+					if evalCalls.Add(1) == 2 {
+						cancel()
+						time.Sleep(50 * time.Millisecond)
+						return
+					}
+					resp = map[string]any{
+						"id": req.ID,
+						"result": map[string]any{
+							"exceptionDetails": map[string]any{
+								"exception": map[string]any{"description": "Error: recap audio Path A capture deadline exceeded"},
+							},
+						},
+					}
+				} else {
+					resp = map[string]any{"id": req.ID, "result": map[string]any{"result": map[string]string{"value": ""}}}
+				}
+				b, err := json.Marshal(resp)
+				require.NoError(t, err)
+				_ = wsutil.WriteServerText(conn, b)
+			}))
+			serverURL = srv.URL
+			defer srv.Close()
+
+			_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+
 			var out bytes.Buffer
 			err = captureRecapAudioFromTargets(ctx, port, "owner", harnessRecapURL, &out)
 			require.ErrorIs(t, err, context.Canceled)

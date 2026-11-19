@@ -21,7 +21,7 @@ tags:
 
 ## Problem Frame
 
-Following the accepted deliberation in [2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-deliberation.md](../decisions/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-deliberation.md) (`024-DL`), stash entry **`6E17E6EA`** (`priority: high`, `kind: bug`) is planned under covering feature **`035-F`** and shipment **`035-S`**, sequenced immediately after `034-S` and before `010-S` in the shipment dependency DAG **`034-S -> 035-S -> 010-S`**.
+Following the accepted deliberation in [2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-deliberation.md](../../../decisions/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-deliberation.md) (`024-DL`), stash entry **`6E17E6EA`** (`priority: high`, `kind: bug`) is planned under covering feature **`035-F`** and shipment **`035-S`**, sequenced immediately after `034-S` and before `010-S` in the shipment dependency DAG **`034-S -> 035-S -> 010-S`**.
 
 When running `go-teams` in `--queue` mode against a cold 60.6-minute (`3637.76s`, `605`-segment) Teams Meeting Recap (`https://teams.microsoft.com/l/meetingrecap?...`), two issues surfaced in `internal/browser/recap.go`:
 

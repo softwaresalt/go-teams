@@ -1,0 +1,166 @@
+---
+title: Recap audio cold SharePoint transcode resilience and %APPDATA% profile fallback operational closure
+date: 2026-11-17
+feature: 035-F
+shipment: 035-S
+branch: feat/035-s-recap-audio-cold-sharepoint-transcode-resilience-and-appdata-profile-fallback
+status: closed
+closure_status: READY
+compaction_status: done
+merge_commit: b2538a2f7385b6e443d43771c02b6121da446a79
+pull_request: 84
+close_path: cascade
+close_evidence: docs/closure/evidence/035-S-035-F-close-evidence.json
+---
+
+## Release scope
+
+Shipment `035-S` (`035-F`, `035.001-T`..`035.003-T`) delivers deliberation
+`024-DL` (source stash `6E17E6EA`), hardening cold SharePoint `oneDrive.transcode`
+audio extraction and cross-root `%LOCALAPPDATA%` / `%APPDATA%` profile session
+discovery across `internal/browser` and `docs/`:
+
+* `035.001-T` (`internal/browser/recap.go`, commits `0dd4998`, `770fda6`,
+  `96c2fe0`, `619f01e`, `24ffd83`, `c123099`):
+  * In `extractRecapAudioJS`: marked HTTP `408` retryable alongside `429`/`5xx`
+    in `fetchBytesOnce`; scaled `fetchBytesWithCap` to `5` attempts
+    (`250ms, 500ms, 1000ms, 2000ms` backoff) and `deadlineAt` to `240000ms`
+    (`4m`) when `maxRecapAudioDurationSec > 300` (with optional
+    `recapAudioFetchMaxAttempts` and `recapAudioCaptureDeadlineMs` overrides);
+    increased `runPathA` worker concurrency from `8` to `12`; tracked
+    `btnClicked` and `mediaPlayTriggered` separately in
+    `triggerPlaybackIfReady()` so late-mounted `<video>` elements still receive
+    `m.play()`; and threw `'recap audio Path A capture deadline exceeded'` when
+    `pathAPromise && !pathAFailed && !pathAResult` before falling back to partial
+    pre-pause `mseInitSegment` / `mseSegments`.
+  * In `captureRecapAudioFromTargets`: increased `recapAudioEvalTimeout` from
+    `5m` to `10m` enforced as an operation-wide `captureCtx` deadline; allowed a
+    single attempt-0 retry on `'Path A capture deadline exceeded'` or
+    `'MSE stream incomplete before deadline'`; stopped the inner
+    `orderedTargets` loop on stream-deadline errors so same-origin parent
+    targets do not repeat capture in the same attempt; and preserved
+    `ctx.Err()` and `errors.Join(lastErr, captureCtx.Err())` on cancellation or
+    timeout.
+  * In `resolveExpandedProfileDir`: added `userConfigProfileBases` (`APPDATA`,
+    `os.UserConfigDir()`, `LOCALAPPDATA`), `sameNormalizedPath`, and
+    `isPathInsideRepoRoot` (with a `os.UserHomeDir()` `.git` dotfiles carve-out)
+    so cold canonical `<base>/<go-teams|teams-cli>/profile` paths fall back to
+    sibling per-user config directories with a persisted Teams session while
+    leaving warm, custom `--profile-dir`, and repo-local paths untouched.
+* `035.002-T` (`internal/browser/recap_test.go`, commits `f2d880a`, `770fda6`,
+  `96c2fe0`, `619f01e`, `24ffd83`, `c123099`):
+  * Extended `TestResolveExistingProfileDirExpansionAndFallback` and added
+    `TestRecapAudioColdTranscodeResilienceAndDeadlineRetry` and
+    `TestRecapAudioColdTranscodeResilienceAndAppDataFallback`.
+* `035.003-T` (`docs/ARCHITECTURE.md`, `docs/USER_GUIDE.md`, commits `4fccb86`,
+  `96c2fe0`, `24ffd83`):
+  * Documented `%LOCALAPPDATA%` / `%APPDATA%` (`os.UserConfigDir()`) profile
+    fallback and cold-transcode resilience (12 workers, 4m capture deadline,
+    10m operation-wide CDP budget, 5-attempt backoff, single attempt-0 retry).
+
+## Review
+
+Six rounds of `multi-agent` Adversarial Review (`gpt-6.1-sol` anchor +
+`claude-haiku-5.5` + `gemini-4-argon`, culminating in `READY_WITH_FOLLOWUPS` at
+HEAD `c123099888c88cabd65d0d23f059517ef4b4cda7`, `0` P0, `0` HIGH Consensus,
+`0` MEDIUM Majority/Plurality) and two GitHub Copilot review rounds on PR #84
+(`P-018` `copilot-review` gate `SATISFIED` on HEAD
+`c123099888c88cabd65d0d23f059517ef4b4cda7`):
+
+| Area | Finding | Disposition |
+|---|---|---|
+| Adversarial Review Rounds 1–5 | `770fda6`..`24ffd83` `U1`/`U2`/`U3`/`M1` items (caller cancellation on attempt 1, `captureCtx` `DeadlineExceeded` preservation, unused `isPathInsideRepoRoot` removal, full-ancestor repo check with home dotfiles carve-out, JS override tests, doc clarifications) | Remediated in-scope (P-021 C1) in `96c2fe0`, `619f01e`, `24ffd83`, and `c123099` |
+| Copilot PR #84 Round 1 (`PRRT_kwDOTStvas64wnOB`, `PRRT_kwDOTStvas64wnOR`) | Caller cancel loss on `captureCtx.Done()` select branch; full candidate `isPathInsideRepoRoot(cand)` check | Fixed in `770fda6`..`24ffd83`; replied and resolved |
+| Copilot PR #84 Round 2 (`PRRT_kwDOTStvas64x3cF`) | Break `orderedTargets` loop on stream-deadline error so same-origin parent does not duplicate capture inside same attempt | Fixed in `c123099`; replied and resolved |
+| Copilot PR #84 Round 2 (`PRRT_kwDOTStvas64x3cS`) | Reinitializing player or persisting Path B MSE state across CDP attempts for Path B-only streams | Captured under P-021 C2 as `B98262C8` (`DEFERRED SCOPE EXPANSION`); replied citing `B98262C8` and resolved |
+| Adversarial Review Round 1 & Round 6 (`LOW` advisories) | `920CF700` (R1 `U1`–`U3`, addressed in `96c2fe0`/`24ffd83`), `CDCE76CE` (R5/R6 `U1`–`U3`, including `U1` classified `MAJOR`/`P1` `LOW`-confidence `1/3` `IN_SCOPE` for Protected Invariant 4 symlink/junction ancestor resolution in `isPathInsideRepoRoot`, plus `U2`/`U3` `P2` advisories) | Stashed for Stage triage; zero `P0`, `HIGH` Consensus, or `MEDIUM` Majority P1 findings (`READY_WITH_FOLLOWUPS` at `c123099`; `LOW`-confidence findings are `advisory` in full-pool mode) |
+
+## Post-merge closure
+
+| Field | Value |
+|---|---|
+| Feature PR | #84, merge commit `b2538a2f7385b6e443d43771c02b6121da446a79`, merge commit strategy (P-009) |
+| Merge confirmation | `state: MERGED` (`2026-11-18T05:01:35Z`); `git merge-base --is-ancestor` against `origin/main` returned 0 |
+| Topology gate | `autoharness gate pipeline-topology --mode agent --shipment 035-S --phase lifecycle --json` passed (exit 0, `BRANCH_POST_MERGE_CLOSURE_ELIGIBLE`) on `post-merge/035-s-recap-audio-cold-sharepoint-transcode-resilience-and-appdata-profile-fallback` |
+| Close path | `cascade` (`autoharness shipment cascade-close --shipment 035-S --feature 035-F --sha b2538a2f7385b6e443d43771c02b6121da446a79 --message ... --author Ship --timeout 600 --caller-wait 1200` wrapped the `backlogit shipment ship 035-S` invocation recorded in `close-evidence.json` `invocation.argv_redacted` and returned `exit_code: 0`, `classifier_verdict: CASCADE`, `engine_verdict: VERIFIED`, `postcondition_verdict: pass`) |
+| Close evidence | `docs/closure/evidence/035-S-035-F-close-evidence.json` |
+| `archived_ids` | `035-F`, `035-S`, `035.001-T`, `035.002-T`, `035.003-T` (`unexpected_archived: []`) |
+| `returned_ids` | empty |
+| `parent_id` preservation | `035.001-T`..`035.003-T` retained `parent_id: 035-F` (`parent_id_preserved: true`) |
+| Archive integrity (P-007) | No archive file reported as deleted |
+
+### Source artifact cleanup and follow-up stash state
+
+| Artifact | Disposition | Result |
+|---|---|---|
+| Stash `6E17E6EA` | Already archived by Stage at harvest; absent from active stash | skipped |
+| Deliberation `024-DL` | Archived via `backlogit archive 024-DL` prior to `cascade-close`; resolved to `already-archived` in `pre_close.linked_deliberation_disposition` | archived (`.backlogit/archive/024-DL.md`) |
+| Stash `B98262C8` | Captured under P-021 C2 for Path B-only MSE state persistence / player reload across CDP retry attempts (PR #84 `PRRT_kwDOTStvas64x3cS`); untouched per Ship Role Boundary | retained active for Stage triage |
+| Stash `920CF700`, `CDCE76CE` | Adversarial review `LOW` Unique follow-up advisories (`920CF700` items were addressed in commits `96c2fe0`/`24ffd83`, retained active for Stage verification and retirement; `CDCE76CE` tracks R6 `U1` `MAJOR`/`P1` [`LOW`-confidence `1/3` `IN_SCOPE` advisory for `isPathInsideRepoRoot` symlink/junction resolution], plus `U2` `os.UserHomeDir()` doc note and `U3` hermetic `4b` isolation — captured as `kind: task, priority: low` under P-021 C5 and escalated here for Stage `bug` triage/reprioritization) | retained active for Stage triage/retirement |
+
+### Knowledge graduation, compaction (P-020), and compound refresh
+
+Graduated documentation in `docs/ARCHITECTURE.md` and `docs/USER_GUIDE.md`
+(`035.003-T`), and added compound learning
+`docs/compound/runtime-errors/cold-sharepoint-transcode-path-a-deadline-and-appdata-fallback-2026-11-17.md`.
+`compact-context` consolidated `stage-035-s-recap-audio-resilience-and-profile-fallback-memory.md`
+and `ship-035-s-recap-audio-resilience-and-profile-fallback-memory.md` into
+`docs/memory/compacted/2026-11-17-035-S-recap-audio-resilience-and-profile-fallback-compacted.md`
+(moving both originals to `docs/archive/memory/2026-11-17/`), and consolidated
+the plan into
+`docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-decided-plan.md`
+with the verbose original archived under `docs/archive/plans/2026-11-17/`.
+`compound-refresh` verified existing `docs/compound/` entries remain accurate
+(`keep`). `compaction_status` is `done`. Note on archived backlog references:
+`.backlogit/archive/035-F.md` and `.backlogit/archive/035.001-T`..`035.003-T`
+retain the pre-compaction plan path
+`docs/plans/2026-11-17-recap-audio-cold-transcode-resilience-and-appdata-profile-fallback-plan.md`,
+which is a historical pre-compaction path superseded by the archived plan under
+`docs/archive/plans/2026-11-17/` and the consolidated `...-decided-plan.md`.
+
+## Verification evidence
+
+| Validator | Environment and evidence | Result |
+|---|---|---|
+| Build, vet, fmt | `go build -o bin/go-teams.exe ./cmd/go-teams`, `go vet ./...`, `go vet -tags=integration ./...`, `GOOS=darwin GOARCH=amd64 go vet ./...`, `gofmt -l .` (0 files) | PASS |
+| Unit & E2E suite | `go test -race ./...` across all packages including `TestResolveExistingProfileDirExpansionAndFallback`, `TestRecapAudioColdTranscodeResilienceAndDeadlineRetry`, `TestRecapAudioColdTranscodeResilienceAndAppDataFallback`, and `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks` | PASS |
+| CI `windows-latest` & `ubuntu-latest` | `Detect code changes`, `Detect CLI-affecting changes`, and `Build, vet, lint & test (Windows)` on PR #84 (HEAD `c123099`) | PASS |
+| Live `-tags=integration` browser suite | `TestMeetingInputValidation` (`0.00s`), `TestMeetingJoin` (`28.08s`), `TestMeetingEnableCaptions` (`22.03s`), `TestMeetingCaptureAudio` (`122.82s`; `3637.76s` / `30.8 MB` source / `320.9 MB` PCM -> MP3 in `1m40.677s`), `TestMeetingLiveScheduledOvertimeAndCallEnd` (`26.31s`), `TestMeetingLiveRecapAISummaryEnrichment` (`40.69s`) against `.env.local.test` with `%APPDATA%\go-teams\profile` (`287.780s`, 0 skips) | PASS |
+| Live `-tags=integration` CLI suite | `TestLiveTenantScheduledJoinOvertimeAndCallEndShutdown` (`121.47s`; `.md` + `# AI Summary` + valid MPEG sync `.mp3`, `3637.76s` / `30.8 MB` source / `320.9 MB` PCM -> MP3 in `1m38.151s`) and `TestLiveTenantDelayedAISummaryQueueReplay` (`38.80s`) against `.env.local.test` with `%APPDATA%\go-teams\profile` (`219.434s`, 0 skips) | PASS |
+| Runtime verification probes | `cli-help` (`go run ./cmd/go-teams --help`), `scheduler-dry-run` (`go run ./cmd/go-teams schedule --help`), `TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`; `teams-auth-mfa` (`required_for_release: true`) satisfied by operator-authenticated `%APPDATA%\go-teams\profile` session exercised by operator-authorized live `-tags=integration` browser (`287.780s`) and CLI (`219.434s`) suites (`2026-11-18`, 0 skips, matching `031-S`/`033-S` precedent); optional `scheduler-liveness-log` (`required: false`) and `scheduled-meeting-join` (`required_for_release: false`) deferred to post-deploy observation window | PASS (`cli-help`, `scheduler-dry-run`, `teams-auth-mfa` via live `-tags=integration`); DEFERRED (`scheduler-liveness-log`, `scheduled-meeting-join`) |
+| Backlog & closure gate | `autoharness gate closure-evidence`, `backlogit sync`, and `backlogit doctor` | PASS |
+
+## Strict-safety action record
+
+| ProposedAction | ActionRisk | Approval and containment | ActionResult |
+|---|---|---|---|
+| `PA-035-1`: Scale production `deadlineAt` to `240s`, increase `runPathA` to `12` workers, add HTTP `408` + 5-attempt backoff (`250/500/1000/2000ms`), split `btnClicked`/`mediaPlayTriggered`, prioritize in-flight Path A deadline error, set `recapAudioEvalTimeout=10m` with single attempt-0 retry, and add `%APPDATA%` / `os.UserConfigDir()` fallback in `internal/browser/recap.go` | high | Pre-authorized under autopilot `DARK_MODE_ACTIVE` invocation of `035-S` plan `## Plan Hardening` (`ProposedAction` `PA-035-1`..`PA-035-3`); verified across 6 adversarial review rounds, 2 Copilot rounds, and `go test -race` | applied |
+| `PA-035-2`: Add unit tests in `internal/browser/recap_test.go` | low | Pre-authorized under autopilot `DARK_MODE_ACTIVE` (`035-S` plan `## Plan Hardening`); all tests pass with `-race` | applied |
+| `PA-035-3`: Update `docs/ARCHITECTURE.md` and `docs/USER_GUIDE.md` | low | Pre-authorized under autopilot `DARK_MODE_ACTIVE` (`035-S` plan `## Plan Hardening`); zero secret leaks verified | applied |
+| `PA-035-4`: Run live `-tags=integration` browser and CLI verification against `.env.local.test` | high | Explicitly authorized by operator post-merge invocation under Autopilot Mode (live external-tenant integration verification matching `031-S` `PA-031-4`); all live browser (`287.780s`) and CLI (`219.434s`) integration tests passed with 0 skips | applied |
+
+## Releasability evidence
+
+* **Invariants preserved**: Same-origin HTTPS transcode containment and recording identity verification enforced; `track === 'video'` never seeds audio template/timing fields; in-flight `pathAPromise` deadline precedence prevents 1–2 pre-pause MSE buffers from misreporting `'MSE stream incomplete before deadline'`; `triggerPlaybackIfReady()` guards against `m.play()` while `pathAActive === true`; warm, custom `--profile-dir`, and lexical repo-local profiles are not redirected (lexical repository-containment invariant preserved per `...-decided-plan.md`, with symlink/junction ancestor limitation explicitly tracked under `CDCE76CE`); zero new dependencies (`go.mod` unchanged).
+* **Deviations and residual risk**:
+  * **Cross-root `UserDataDir` discovery exception (owner: `softwaresalt`)**: `%APPDATA%` / `os.UserConfigDir()` fallback discovers persisted Teams sessions across per-user OS config roots (`APPDATA`, `os.UserConfigDir()`, `LOCALAPPDATA`) outside the workspace root (`isPathInsideRepoRoot` lexical repo-root exclusion with `os.UserHomeDir()` `.git` carve-out); symlink/junction ancestor resolution (`CDCE76CE` / `U1`, `MAJOR`/`P1` `LOW`-confidence `1/3` `advisory` in `docs/closure/2026-11-17-035-s-adversarial-review.md`) was routed `advisory` under `adversarial-review.agent.md` full-pool rules (`0` P0, `0` HIGH Consensus, `0` MEDIUM Majority/Plurality under P-014 `READY_WITH_FOLLOWUPS`) and is retained in stash `CDCE76CE` for Stage triage/reprioritization and operator residual-risk review.
+  * **Required authenticated-session checkpoint (`teams-auth-mfa`, owner: `softwaresalt`)**: Operator-pre-authenticated `%APPDATA%\go-teams\profile` session was exercised and verified on `2026-11-18` by the operator-authorized live `-tags=integration` browser (`287.780s`) and CLI (`219.434s`) suites against `.env.local.test` (`PASS`, 0 skips), satisfying `teams-auth-mfa` (`required_for_release: true`) per `031-S` / `033-S` closure precedent.
+  * **Post-deploy optional observation checkpoints (owner: `softwaresalt`)**: Optional `scheduler-liveness-log` (`required: false` probe) and `scheduled-meeting-join` (`required_for_release: false` manual checkpoint) are deferred to the 7-day post-deploy scheduled-meeting observation window.
+* **Pre-deploy audits and post-deploy checks**:
+  * **Pre-deploy audits**: `go mod` / dependencies unchanged (`go.mod` / `go.sum` untouched); no CLI flag or YAML schema migrations; rollback target verified (`b2538a2f7385b6e443d43771c02b6121da446a79^1` = `204ce87214da7e7aab1b5a20dbe089cd59437261`); secret scan (`TestTrackedFilesContainNoLivePasscodeOrTokenLeaks`), `go vet ./...`, `go vet -tags=integration ./...`, `GOOS=darwin GOARCH=amd64 go vet ./...`, `gofmt -l .`, and `go test -race ./...` passed.
+  * **Post-deploy checks**: Rebuild `bin/go-teams.exe` on `main`, run `go run ./cmd/go-teams --help` and `go run ./cmd/go-teams schedule --help`, and observe the first live scheduled-meeting cycle and cold Recap export (`>= 1` hour) for healthy MP3/transcript generation.
+* **Rollout and rollback**: Code, tests, docs, and closure artifacts on `main`. Known-good prior `main` first-parent revision (`b2538a2f7385b6e443d43771c02b6121da446a79^1`): `204ce87214da7e7aab1b5a20dbe089cd59437261`. Rollback trigger: any test regression, non-zero exit from CLI root or scheduler daemon, consecutive failed cron fires, unintended profile redirection, or CI check failure; rollback procedure: stop any running `go-teams schedule` daemon, revert merge commit (`git revert -m 1 b2538a2f7385b6e443d43771c02b6121da446a79`), rebuild/restore `bin/go-teams.exe` (`go build -o bin/go-teams.exe ./cmd/go-teams`), restart the scheduler if applicable, and verify recovery via `go test -race ./...` and `go run ./cmd/go-teams --help`.
+* **Monitoring and validation window (7 days / one full scheduled-meeting cycle, owner: `softwaresalt`)**:
+  * **Healthy signals**: (1) `gh run list --workflow=ci.yml` (`Detect code changes`, `Build, vet, lint & test (Windows)`), `gh run list --workflow=cli-reference-drift.yml` (`Detect CLI-affecting changes`), and `go test -race ./...` at 100% pass rate (baseline: 100%, alert threshold: `>= 1` failure); (2) CLI/scheduler daemon liveness (`cli-help`, `scheduler-dry-run`, and `scheduler-liveness-log` process logs; baseline: 0 unexpected exits, alert threshold: `>= 1` crash/non-zero exit); (3) cron fire success/failure counts (scheduler log + generated `.md` transcripts; baseline: 100% scheduled runs succeed, alert threshold: `>= 1` consecutive failed cron fire); (4) output-directory disk usage (host volume check on configured `output_folder` / `output_dir`; baseline: `< 80%` volume usage, alert threshold: `>= 85%` disk usage or write error).
+  * **Failure signals and rollback triggers**: Non-zero exit from CLI root or scheduler daemon, scheduler crash-loops or consecutive cron fires failing to produce transcripts, disk write failure in output directory, any test regression, or CI check failure.
+* **Readiness verdict**: `READY` (`closure_status: READY`, verified by `autoharness gate closure-evidence`). All automated release gates, local quality gates, unit/E2E suites, 6 feature adversarial review rounds culminating in P-014 `READY_WITH_FOLLOWUPS` at `c123099` (`0` P0, `0` HIGH/MEDIUM P1, `1` LOW Unique `P1` `advisory` `U1` tracked under `CDCE76CE`, plus `920CF700` and P-021 C2 `B98262C8` stashed for Stage triage), 2 Copilot review rounds on PR #84, GitHub Actions CI checks, cascade-close postconditions, and live-tenant `-tags=integration` browser (`287.780s`, 0 skips) and CLI (`219.434s`, 0 skips) suites against `.env.local.test` passed; optional `scheduler-liveness-log` and `scheduled-meeting-join` (`required_for_release: false`) remain deferred to post-deploy observation.
+
+## Dark Factory Execution Summary
+
+* **Resolved route**: `gemini-4-hydrogen` / `google` / `high` (`long_context` context tier)
+* **Gates passed**:
+  * `pipeline-topology` (`pre_claim`, `post_claim`, `lifecycle` feature + `lifecycle` closure) — `exit_code: 0`
+  * Local Review Readiness (`P-014`) — `READY_WITH_FOLLOWUPS` at HEAD `c123099888c88cabd65d0d23f059517ef4b4cda7` (`0` P0, `0` HIGH/MEDIUM P1, follow-ups `920CF700`, `CDCE76CE`, `B98262C8` stashed)
+  * Copilot Review Completion Gate (`P-018`) — `SATISFIED` (`exit_code: 0`, all PR #84 review threads replied and resolved)
+  * Merge Strategy (`P-009`) — merge commit `b2538a2f7385b6e443d43771c02b6121da446a79`
+  * Context Compaction (`P-020`) — `compaction_status: done`

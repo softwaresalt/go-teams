@@ -99,7 +99,11 @@ func TestGenerateRejectsArtifactSymlink(t *testing.T) {
 
 func bootstrapFixture(t *testing.T, artifact string) string {
 	t.Helper()
-	dir := t.TempDir()
+	// The runner's temp directory can be reached through a symlink.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temporary checkout: %v", err)
+	}
 	fixtureWrite(t, dir, ".bin/gsd-assets-v1.6.0.zip", "fixture")
 	fixtureWrite(t, dir, ".gsd/config.yaml", "config\r\n")
 	fixtureWrite(t, dir, "AGENTS.md", "agent\n")

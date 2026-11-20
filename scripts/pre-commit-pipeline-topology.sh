@@ -43,13 +43,19 @@ set -uo pipefail
 # Run from repo root so repo-root-relative gate invocation is valid.
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-if ! command -v gsd >/dev/null 2>&1; then
+case "$OSTYPE" in
+  msys*|cygwin*|win32*) gsd_local=./.bin/gsd.exe ;;
+  *) gsd_local=./.bin/gsd ;;
+esac
+if [[ -f "$gsd_local" && -x "$gsd_local" ]]; then
+  gsd_command=$gsd_local
+elif ! gsd_command="$(type -P gsd)"; then
   echo "WARNING: 'gsd' not found — skipping pipeline-topology gate." >&2
   exit 0
 fi
 
 echo "[Pipeline-Topology] gsd gate pipeline-topology --mode manual --phase ambient"
-if ! gsd gate pipeline-topology --mode manual --phase ambient; then
+if ! "$gsd_command" gate pipeline-topology --mode manual --phase ambient; then
   if [ "${GSD_TOPOLOGY_GATE_BLOCKING:-false}" = "true" ]; then
     echo "ERROR: pipeline-topology gate failed — commit blocked (P-001/P-016)." >&2
     exit 1

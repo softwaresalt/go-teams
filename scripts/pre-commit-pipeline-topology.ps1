@@ -43,13 +43,21 @@ $ErrorActionPreference = 'Continue'
 $RepoRoot = & git rev-parse --show-toplevel
 Set-Location $RepoRoot
 
-if (-not (Get-Command gsd -ErrorAction SilentlyContinue)) {
+$LocalGsd = Join-Path $RepoRoot '.bin/gsd'
+if ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') {
+    $LocalGsd += '.exe'
+}
+$Gsd = Get-Command -Name $LocalGsd -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $Gsd) {
+    $Gsd = Get-Command -Name gsd -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+if (-not $Gsd) {
     Write-Warning "'gsd' not found -- skipping pipeline-topology gate."
     exit 0
 }
 
 Write-Host "[Pipeline-Topology] gsd gate pipeline-topology --mode manual --phase ambient"
-gsd gate pipeline-topology --mode manual --phase ambient
+& $Gsd.Source gate pipeline-topology --mode manual --phase ambient
 if ($LASTEXITCODE -ne 0) {
     if ($env:GSD_TOPOLOGY_GATE_BLOCKING -eq 'true') {
         Write-Error "pipeline-topology gate failed -- commit blocked (P-001/P-016)."

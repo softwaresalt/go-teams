@@ -160,6 +160,9 @@ for the full precedence rules.
 
 ## Development
 
+For a new checkout that uses the GSD agent workflow, follow the
+[GSD bootstrap guide](scripts/gsd-bootstrap/README.md).
+
 ```bash
 go build ./...        # Build
 go test ./...         # Run unit tests

@@ -1,0 +1,1105 @@
+{
+  "bundle_sha256": "c1a5bba9e4576e1cdad76bd9bf72910b5e9b0639d93e58d7742de4fbc22e2029",
+  "profile": {
+    "schema_version": "1.1.0",
+    "languages": {
+      "primary": "Go",
+      "version": "1.26",
+      "secondary": []
+    },
+    "frameworks": {
+      "list": [
+        "chromedp",
+        "cobra",
+        "robfig/cron/v3",
+        "testify",
+        "shine-mp3"
+      ],
+      "mcp_sdk": null,
+      "mcp_transport": null
+    },
+    "primary_stack_pack": "cli-tool",
+    "stack_packs": [
+      "cli-tool"
+    ],
+    "build": {
+      "tool": "go",
+      "command": "go build ./...",
+      "check_command": "go vet ./..."
+    },
+    "test": {
+      "runner": "go test",
+      "command": "go test ./...",
+      "directory": "co-located *_test.go files (Go convention)",
+      "integration_command": "go test -tags=integration ./..."
+    },
+    "lint": {
+      "tool": "golangci-lint",
+      "command": "golangci-lint run",
+      "config": ".golangci.yml"
+    },
+    "format": {
+      "tool": "gofmt",
+      "command": "gofmt -l .",
+      "check_command": "test -z \"$(gofmt -l .)\"",
+      "fix_command": "gofmt -w ."
+    },
+    "ci": {
+      "platform": "GitHub Actions",
+      "pipeline_steps": [
+        "go mod download",
+        "go build ./...",
+        "go vet ./...",
+        "go vet -tags=integration ./...",
+        "GOOS=darwin GOARCH=amd64 go vet ./...",
+        "golangci-lint run (golangci-lint-action)",
+        "go test -v ./internal/browser -run ^TestChromeMeetingEndToEnd$",
+        "go test -race -coverprofile=coverage.out ./...",
+        "go tool cover -func=coverage.out"
+      ],
+      "quality_gates": [
+        "go vet ./...",
+        "golangci-lint run",
+        "test -z \"$(gofmt -l .)\"",
+        "go test ./..."
+      ],
+      "path_filter_mode": "fail_closed_changes_job",
+      "docs_only_paths": [
+        "**/*.md",
+        "docs/**",
+        ".backlogit/**",
+        ".gsd/**"
+      ]
+    },
+    "local_gating": {
+      "pre_push_enabled": true,
+      "pre_push_gates": [
+        "format",
+        "lint",
+        "test",
+        "build"
+      ]
+    },
+    "repo": {
+      "owner": "softwaresalt",
+      "name": "go-teams"
+    },
+    "structure": {
+      "source_layout": "cmd/go-teams/, internal/{audio,browser,capture,cli,config,scheduler,teams,transcript}/",
+      "test_layout": "co-located *_test.go files",
+      "doc_layout": "docs/design-docs/, docs/product-specs/"
+    },
+    "runtime_surfaces": {
+      "cli": true,
+      "web_ui": false,
+      "public_api": false,
+      "background_jobs": true,
+      "browser_tooling": [
+        "chromedp"
+      ],
+      "deployment_manifests": []
+    },
+    "runtime_validation": {
+      "validator_manifest": {
+        "surfaces": [
+          {
+            "surface": "cli",
+            "adapter_hint": "command",
+            "probe_hints": [
+              {
+                "id": "cli-help",
+                "kind": "command",
+                "target": "go-teams root command",
+                "command": "go run ./cmd/go-teams --help",
+                "expected_signal": "usage text lists auth, join, and schedule subcommands",
+                "required": true,
+                "evidence_types": [
+                  "stdout",
+                  "exit-code"
+                ],
+                "notes": "cmd/go-teams is scaffolded; this probe is executable today."
+              },
+              {
+                "id": "cli-build",
+                "kind": "command",
+                "target": "module build",
+                "command": "go build ./...",
+                "expected_signal": "exit code 0",
+                "required": true,
+                "evidence_types": [
+                  "exit-code",
+                  "stdout"
+                ]
+              }
+            ],
+            "manual_checkpoints": [
+              {
+                "id": "teams-auth-mfa",
+                "label": "Microsoft Teams interactive login and MFA",
+                "reason": "Teams authentication cannot be automated; a human must complete login/MFA so the UserDataDir session is persisted.",
+                "required_for_release": true,
+                "evidence_types": [
+                  "operator-note",
+                  "screenshot"
+                ],
+                "fallback": "Record BLOCKED runtime evidence when no operator is available to complete the auth flow."
+              }
+            ]
+          },
+          {
+            "surface": "background-job",
+            "adapter_hint": "job",
+            "probe_hints": [
+              {
+                "id": "scheduler-dry-run",
+                "kind": "command",
+                "target": "go-teams schedule command surface",
+                "command": "go run ./cmd/go-teams schedule --help",
+                "expected_signal": "schedule usage text renders and exits 0 without starting a browser",
+                "required": false,
+                "evidence_types": [
+                  "stdout",
+                  "exit-code"
+                ],
+                "notes": "The schedule command takes no flags (cobra.NoArgs); --help is the only non-blocking probe. Replace with a real --dry-run probe if one is added."
+              },
+              {
+                "id": "scheduler-liveness-log",
+                "kind": "log-check",
+                "target": "scheduler process log",
+                "expected_signal": "daemon startup line followed by a scheduled-fire line",
+                "required": false,
+                "evidence_types": [
+                  "log-line",
+                  "artifact-link"
+                ]
+              }
+            ],
+            "manual_checkpoints": [
+              {
+                "id": "scheduled-meeting-join",
+                "label": "End-to-end scheduled meeting join",
+                "reason": "A real Teams meeting must exist and be joined on schedule to validate the daemon path.",
+                "required_for_release": false,
+                "evidence_types": [
+                  "operator-note",
+                  "screen-recording"
+                ],
+                "fallback": "Defer to a post-deploy observation window when no meeting is available."
+              }
+            ]
+          }
+        ]
+      },
+      "validation_expectations": {
+        "required": true,
+        "surfaces_expected": [
+          "cli",
+          "background-job"
+        ],
+        "minimum_verdict": "PASS_WITH_FOLLOW_UP",
+        "preserve_invariants": [
+          "Persisted UserDataDir session state stays inside the configured workspace root.",
+          "No credentials, cookies, or tokens are written to committed files or logs.",
+          "Transcript and audio artifacts are written only to the configured output directory."
+        ],
+        "release_blockers": [
+          "CLI binary fails to build or the root command does not start.",
+          "Authentication flow writes secrets outside the configured session directory.",
+          "Scheduler daemon exits non-zero on startup."
+        ]
+      },
+      "releasability": {
+        "required": true,
+        "status_when_satisfied": "READY_WITH_CONDITIONS",
+        "required_evidence": [
+          {
+            "kind": "healthy-signal",
+            "required": true,
+            "description": "go build ./... and go test ./... succeed."
+          },
+          {
+            "kind": "failure-signal",
+            "required": true,
+            "description": "Non-zero exit from the CLI root command or the scheduler daemon."
+          },
+          {
+            "kind": "monitoring-plan",
+            "required": true,
+            "description": "Daemon liveness, cron fire success/failure counts, and output-directory disk usage."
+          },
+          {
+            "kind": "rollback-trigger",
+            "required": true,
+            "description": "Scheduler daemon crash-loops or consecutive cron fires fail to produce a transcript."
+          },
+          {
+            "kind": "rollback-procedure",
+            "required": true,
+            "description": "Stop the schedule daemon and revert to the previously released binary."
+          },
+          {
+            "kind": "owner",
+            "required": true,
+            "description": "Operator responsible for the post-deploy observation window."
+          },
+          {
+            "kind": "validation-window",
+            "required": true,
+            "description": "One full scheduled-meeting cycle after release."
+          },
+          {
+            "kind": "follow-up",
+            "required": false,
+            "description": "Outstanding manual checkpoints deferred past release."
+          }
+        ]
+      }
+    },
+    "conventions": {
+      "code_style": {},
+      "git": {
+        "default_branch": "main",
+        "remote": "https://github.com/softwaresalt/go-teams.git"
+      },
+      "documentation": {
+        "architecture_doc": "docs/product-specs/Go-TeamsTranscriptCLI-Architecture.md"
+      }
+    },
+    "harness_recommendations": {
+      "preset": "full",
+      "capability_packs": [
+        "agent-engram",
+        "backlogit",
+        "kbdb"
+      ],
+      "install_layers": [
+        "foundation",
+        "instructions",
+        "workflow",
+        "review",
+        "runtime",
+        "backlog",
+        "knowledge",
+        "overlays"
+      ]
+    },
+    "backlog_tool": {
+      "detected": true,
+      "tool_name": "backlogit",
+      "directory": ".backlogit",
+      "tool_type": "both",
+      "config_path": ".backlogit/config.yaml",
+      "registry_path": ".backlogit/registry.yaml",
+      "status_values": [
+        "queued",
+        "active",
+        "blocked",
+        "review",
+        "done",
+        "accepted",
+        "rejected",
+        "archived"
+      ],
+      "features": {
+        "sql_query": true,
+        "milestones": false,
+        "documents": false,
+        "telemetry": true,
+        "memory": true,
+        "checkpoints": true,
+        "comments": true,
+        "dependencies": true,
+        "shipments": true,
+        "stash": true,
+        "semantic_links": true,
+        "deliberation": true
+      },
+      "suffix_map": {
+        "feature": "F",
+        "chore": "C",
+        "task": "T",
+        "spike": "SP",
+        "deliberation": "DL",
+        "bug": "B",
+        "epic": "E",
+        "subtask": "ST",
+        "shipment": "S"
+      }
+    }
+  },
+  "manifest": {
+    "schema_version": "1.1.0",
+    "gsd_version": "1.6.0",
+    "install_preset": "full",
+    "primary_stack_pack": "cli-tool",
+    "stack_packs": [
+      "cli-tool"
+    ],
+    "install_layers": [
+      "foundation",
+      "instructions",
+      "workflow",
+      "review",
+      "runtime",
+      "backlog",
+      "knowledge",
+      "overlays"
+    ],
+    "capability_packs": [
+      "agent-engram",
+      "backlogit",
+      "kbdb"
+    ],
+    "capability_pack_overlays": [
+      {
+        "pack": "agent-engram",
+        "overlay_targets": [
+          "foundation-docs",
+          "agent-engram.instructions.md",
+          "pipeline-agents",
+          "analysis-heavy-workflows"
+        ],
+        "verification_checks": [
+          "agent-engram.instructions.md installed at .github/instructions/",
+          "_stage.agent.md contains Engram guidance",
+          "_ship.agent.md contains Engram guidance",
+          "capability-pack coordinator is installed"
+        ]
+      },
+      {
+        "pack": "backlogit",
+        "overlay_targets": [
+          "backlog-integration.instructions.md",
+          "backlogit.instructions.md",
+          "pipeline-agents",
+          "shipment-reconcile-skill"
+        ],
+        "verification_checks": [
+          "backlogit instructions installed",
+          "backlog registry installed",
+          "shipment-reconcile skill installed"
+        ]
+      },
+      {
+        "pack": "kbdb",
+        "overlay_targets": [
+          "foundation-docs",
+          "kbdb.instructions.md",
+          "pipeline-agents",
+          "research-skills"
+        ],
+        "verification_checks": [
+          "kbdb.instructions.md installed at .github/instructions/",
+          "_stage.agent.md contains KBDB_UNAVAILABLE",
+          "_ship.agent.md contains KBDB_UNAVAILABLE"
+        ]
+      }
+    ],
+    "primitives_installed": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "artifacts": [
+      {
+        "path": "AGENTS.md",
+        "primitive": 9,
+        "template": "foundation/AGENTS.md.tmpl"
+      },
+      {
+        "path": ".github/copilot-instructions.md",
+        "primitive": 6,
+        "template": "foundation/copilot-instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/constitution.instructions.md",
+        "primitive": 5,
+        "template": "foundation/constitution.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/go.instructions.md",
+        "primitive": 6,
+        "template": "instructions/technology-go.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/commit-message.instructions.md",
+        "primitive": 6,
+        "template": "instructions/commit-message.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/markdown.instructions.md",
+        "primitive": 6,
+        "template": "instructions/markdown.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/writing-style.instructions.md",
+        "primitive": 6,
+        "template": "instructions/writing-style.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/coding-discipline.instructions.md",
+        "primitive": 6,
+        "template": "instructions/coding-discipline.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/git-merge.instructions.md",
+        "primitive": 6,
+        "template": "instructions/git-merge.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/pull-request.instructions.md",
+        "primitive": 6,
+        "template": "instructions/pull-request.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/prompt-builder.instructions.md",
+        "primitive": 6,
+        "template": "instructions/prompt-builder.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/circuit-breaker.instructions.md",
+        "primitive": 5,
+        "template": "instructions/circuit-breaker.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/concurrency.instructions.md",
+        "primitive": 5,
+        "template": "instructions/concurrency.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/architecture-doc.instructions.md",
+        "primitive": 9,
+        "template": "instructions/architecture-doc.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/context-efficiency.instructions.md",
+        "primitive": 1,
+        "template": "instructions/context-efficiency.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/output-timestamps.instructions.md",
+        "primitive": 7,
+        "template": "instructions/output-timestamps.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/github-pr-automation.instructions.md",
+        "primitive": 10,
+        "template": "instructions/github-pr-automation.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/backlog-integration.instructions.md",
+        "primitive": 8,
+        "template": "instructions/backlog-integration.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/role-enforcement.instructions.md",
+        "primitive": 5,
+        "template": "instructions/role-enforcement.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/agent-engram.instructions.md",
+        "primitive": 6,
+        "template": "instructions/agent-engram.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/kbdb.instructions.md",
+        "primitive": 6,
+        "template": "instructions/kbdb.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/backlogit.instructions.md",
+        "primitive": 6,
+        "template": "instructions/backlogit.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/backlogit-sql-schema.instructions.md",
+        "primitive": 6,
+        "template": "instructions/backlogit-sql-schema.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/backlogit-yaml-header-tooling.instructions.md",
+        "primitive": 6,
+        "template": "instructions/backlogit-yaml-header-tooling.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/browser-verification.instructions.md",
+        "primitive": 6,
+        "template": "instructions/browser-verification.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/continuous-learning.instructions.md",
+        "primitive": 6,
+        "template": "instructions/continuous-learning.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/strict-safety.instructions.md",
+        "primitive": 5,
+        "template": "instructions/strict-safety.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/release-observability.instructions.md",
+        "primitive": 10,
+        "template": "instructions/release-observability.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/adversarial-review.instructions.md",
+        "primitive": 7,
+        "template": "instructions/adversarial-review.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/policies/workflow-policies.md",
+        "primitive": 8,
+        "template": "policies/workflow-policies.md.tmpl"
+      },
+      {
+        "path": ".github/prompts/feature-flow.prompt.md",
+        "primitive": 4,
+        "template": "prompts/feature-flow.prompt.md.tmpl"
+      },
+      {
+        "path": ".github/prompts/feature-flow-parallel.prompt.md",
+        "primitive": 4,
+        "template": "prompts/feature-flow-parallel.prompt.md.tmpl"
+      },
+      {
+        "path": ".github/prompts/feature-flow-dark.prompt.md",
+        "primitive": 4,
+        "template": "prompts/feature-flow-dark.prompt.md.tmpl"
+      },
+      {
+        "path": ".github/prompts/stage-grouping-analysis.prompt.md",
+        "primitive": 4,
+        "template": "prompts/stage-grouping-analysis.prompt.md.tmpl"
+      },
+      {
+        "path": ".github/agents/_orchestrator.agent.md",
+        "primitive": 4,
+        "template": "agents/_orchestrator.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/_stage.agent.md",
+        "primitive": 4,
+        "template": "agents/_stage.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/_ship.agent.md",
+        "primitive": 4,
+        "template": "global agent definition"
+      },
+      {
+        "path": ".github/agents/subagents/go-engineer.agent.md",
+        "primitive": 4,
+        "template": "agents/language-engineer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/prompt-builder.agent.md",
+        "primitive": 4,
+        "template": "agents/prompt-builder.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/security-sentinel.agent.md",
+        "primitive": 5,
+        "template": "agents/security-sentinel.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/adversarial-review.agent.md",
+        "primitive": 7,
+        "template": "agents/adversarial-review.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/learnings-researcher.agent.md",
+        "primitive": 1,
+        "template": "agents/research/learnings-researcher.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/architecture-strategist.agent.md",
+        "primitive": 7,
+        "template": "agents/review/architecture-strategist.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/constitution-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/constitution-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/correctness-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/correctness-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/maintainability-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/maintainability-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/scope-boundary-auditor.agent.md",
+        "primitive": 7,
+        "template": "agents/review/scope-boundary-auditor.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/go-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/technology-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/concurrency-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/concurrency-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/security-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/security-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/security-lens-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/security-lens-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/skills/build-feature/SKILL.md",
+        "primitive": 4,
+        "template": "skills/build-feature/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/fix-ci/SKILL.md",
+        "primitive": 4,
+        "template": "skills/fix-ci/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/impl-plan/SKILL.md",
+        "primitive": 4,
+        "template": "skills/impl-plan/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/deliberate/SKILL.md",
+        "primitive": 4,
+        "template": "skills/deliberate/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/spike/SKILL.md",
+        "primitive": 4,
+        "template": "skills/spike/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/plan-harden/SKILL.md",
+        "primitive": 4,
+        "template": "skills/plan-harden/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/compact-context/SKILL.md",
+        "primitive": 1,
+        "template": "skills/compact-context/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/compound/SKILL.md",
+        "primitive": 1,
+        "template": "skills/compound/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/compound-refresh/SKILL.md",
+        "primitive": 1,
+        "template": "skills/compound-refresh/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/harness-architect/SKILL.md",
+        "primitive": 4,
+        "template": "skills/harness-architect/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/harvest/SKILL.md",
+        "primitive": 4,
+        "template": "skills/harvest/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/pr-lifecycle/SKILL.md",
+        "primitive": 4,
+        "template": "skills/pr-lifecycle/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/safety-modes/SKILL.md",
+        "primitive": 5,
+        "template": "skills/safety-modes/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/file-lock/SKILL.md",
+        "primitive": 5,
+        "template": "skills/file-lock/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/skill-search/SKILL.md",
+        "primitive": 6,
+        "template": "skills/skill-search/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/security-audit/SKILL.md",
+        "primitive": 5,
+        "template": "skills/security-audit/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/runtime-verification/SKILL.md",
+        "primitive": 10,
+        "template": "skills/runtime-verification/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/operational-closure/SKILL.md",
+        "primitive": 10,
+        "template": "skills/operational-closure/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/observe/SKILL.md",
+        "primitive": 1,
+        "template": "skills/observe/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/learn/SKILL.md",
+        "primitive": 1,
+        "template": "skills/learn/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/evolve/SKILL.md",
+        "primitive": 1,
+        "template": "skills/evolve/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/browser-automation/SKILL.md",
+        "primitive": 10,
+        "template": "skills/browser-automation/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/iterative-experiment/SKILL.md",
+        "primitive": 4,
+        "template": "skills/iterative-experiment/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/harness-doctor/SKILL.md",
+        "primitive": 1,
+        "template": "skills/harness-doctor/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/plan-review/SKILL.md",
+        "primitive": 7,
+        "template": "skills/plan-review/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/review/SKILL.md",
+        "primitive": 7,
+        "template": "skills/review/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/doc-review/SKILL.md",
+        "primitive": 7,
+        "template": "skills/doc-review/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/shipment-reconcile/SKILL.md",
+        "primitive": 4,
+        "template": "skills/shipment-reconcile/SKILL.md.tmpl"
+      },
+      {
+        "path": "scripts/acquire_lock.ps1",
+        "primitive": 5,
+        "template": "skills/file-lock/scripts/acquire_lock.ps1"
+      },
+      {
+        "path": "scripts/acquire_lock.sh",
+        "primitive": 5,
+        "template": "skills/file-lock/scripts/acquire_lock.sh"
+      },
+      {
+        "path": "scripts/release_lock.ps1",
+        "primitive": 5,
+        "template": "skills/file-lock/scripts/release_lock.ps1"
+      },
+      {
+        "path": "scripts/release_lock.sh",
+        "primitive": 5,
+        "template": "skills/file-lock/scripts/release_lock.sh"
+      },
+      {
+        "path": "scripts/search.ps1",
+        "primitive": 6,
+        "template": "skills/skill-search/scripts/search.ps1"
+      },
+      {
+        "path": "scripts/search.sh",
+        "primitive": 6,
+        "template": "skills/skill-search/scripts/search.sh"
+      },
+      {
+        "path": "start.ps1",
+        "primitive": 6,
+        "template": "scripts/start.ps1.tmpl"
+      },
+      {
+        "path": "start.sh",
+        "primitive": 6,
+        "template": "scripts/start.sh.tmpl"
+      },
+      {
+        "path": ".gsd/backlog-registry.yaml",
+        "primitive": 8,
+        "template": "backlog/registries/backlogit.registry.yaml"
+      },
+      {
+        "path": ".github/instructions/capability-pack-enforcement.instructions.md",
+        "primitive": 6,
+        "template": "instructions/capability-pack-enforcement.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/escalation-protocol.instructions.md",
+        "primitive": 3,
+        "template": "instructions/escalation-protocol.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/copilot-code-review.instructions.md",
+        "primitive": 7,
+        "template": "instructions/copilot-code-review.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/ci-security.instructions.md",
+        "primitive": 6,
+        "template": "instructions/ci-security.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/instructions/workflows.instructions.md",
+        "primitive": 6,
+        "template": "instructions/workflows.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/template-integrity-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/template-integrity-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/schema-cli-docs-coupling-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/schema-cli-docs-coupling-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/skills/brainstorm/SKILL.md",
+        "primitive": 4,
+        "template": "skills/brainstorm/SKILL.md.tmpl"
+      },
+      {
+        "path": "scripts/pre-push-quality-gates.ps1",
+        "primitive": 5,
+        "template": "scripts/pre-push-quality-gates.ps1.tmpl"
+      },
+      {
+        "path": "scripts/pre-push-quality-gates.sh",
+        "primitive": 5,
+        "template": "scripts/pre-push-quality-gates.sh.tmpl"
+      },
+      {
+        "path": "scripts/pre-commit-pipeline-topology.ps1",
+        "primitive": 5,
+        "template": "scripts/pre-commit-pipeline-topology.ps1.tmpl"
+      },
+      {
+        "path": "scripts/pre-commit-pipeline-topology.sh",
+        "primitive": 5,
+        "template": "scripts/pre-commit-pipeline-topology.sh.tmpl"
+      },
+      {
+        "path": "scripts/ci-topology-check.sh",
+        "primitive": 5,
+        "template": "ci/ci-topology-check.sh.tmpl"
+      },
+      {
+        "path": ".gsd/workspace-profile.yaml",
+        "primitive": 1,
+        "template": "workspace-discovery output"
+      },
+      {
+        "path": ".gsd/config.yaml",
+        "primitive": 1,
+        "template": "harness-config.yaml.tmpl"
+      },
+      {
+        "path": ".github/agents/auto-mergeinstall.agent.md",
+        "primitive": 4,
+        "template": "global agent definition"
+      },
+      {
+        "path": ".github/agents/auto-tune.agent.md",
+        "primitive": 4,
+        "template": "global agent definition"
+      },
+      {
+        "path": ".github/skills/install-harness/SKILL.md",
+        "primitive": 4,
+        "template": "global skill definition"
+      },
+      {
+        "path": ".github/skills/tune-harness/SKILL.md",
+        "primitive": 4,
+        "template": "global skill definition"
+      },
+      {
+        "path": ".github/skills/workspace-discovery/SKILL.md",
+        "primitive": 1,
+        "template": "global skill definition"
+      },
+      {
+        "path": ".github/skills/verify-harness/SKILL.md",
+        "primitive": 7,
+        "template": "global skill definition"
+      },
+      {
+        "path": ".markdownlint.json",
+        "primitive": 5,
+        "template": "scripts/.markdownlint.json.tmpl"
+      },
+      {
+        "path": ".github/prompts/install-harness.prompt.md",
+        "primitive": 6,
+        "template": "global prompt definition"
+      },
+      {
+        "path": ".github/prompts/tune-harness.prompt.md",
+        "primitive": 6,
+        "template": "global prompt definition"
+      },
+      {
+        "path": ".github/instructions/shipment-documentation-audit.instructions.md",
+        "primitive": 10,
+        "template": "instructions/shipment-documentation-audit.instructions.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/agent-native-parity-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/agent-native-parity-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/agents/subagents/evidence-consistency-reviewer.agent.md",
+        "primitive": 7,
+        "template": "agents/review/evidence-consistency-reviewer.agent.md.tmpl"
+      },
+      {
+        "path": ".github/skills/grill-me/SKILL.md",
+        "primitive": 4,
+        "template": "skills/grill-me/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/skills/gsd-show-dag-queue/SKILL.md",
+        "primitive": 4,
+        "template": "skills/gsd-show-dag-queue/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/prompts/gsd-show-dag-queue.prompt.md",
+        "primitive": 6,
+        "template": "prompts/gsd-show-dag-queue.prompt.md.tmpl"
+      },
+      {
+        "path": ".github/skills/gsd-dark-mode/SKILL.md",
+        "primitive": 4,
+        "template": "skills/gsd-dark-mode/SKILL.md.tmpl"
+      },
+      {
+        "path": ".github/prompts/gsd-dark-mode.prompt.md",
+        "primitive": 6,
+        "template": "prompts/gsd-dark-mode.prompt.md.tmpl"
+      }
+    ],
+    "variables_used": {
+      "ADDITIONAL_COMMANDS": "gofmt -w .                  # Format fix\ngo vet ./...                # Static check\ngo test -tags=integration ./...   # Integration tests",
+      "ADDITIONAL_STACK_ROWS": "| Browser automation | chromedp | Pure-Go CDP client \u2014 no external driver downloads |\n| CLI framework   | spf13/cobra | Command routing: `auth`, `join`, `schedule` |\n| Scheduler       | robfig/cron/v3 | Cron-based daemon mode |\n| Audio encoding  | braheezy/shine-mp3 | Pure-Go MP3 encoder |\n| Assertions      | stretchr/testify | Unit and integration test assertions |",
+      "AGENTIC_CONFIG_GLOB": ".github/**`, `.copilot/config.json`, `.copilot/settings.json`, `.copilot/installed-plugins/**`, `.mcp.json`, `AGENTS.md",
+      "ALT_DOC_REVIEW_FAMILY": "",
+      "ALT_DOC_REVIEW_PROVIDER": "",
+      "ALT_REVIEW_FAMILY": "",
+      "ALT_REVIEW_PROVIDER": "",
+      "ANTI_PATTERNS": "* Bare `panic()` in library code \u2014 reserve for truly unrecoverable states in `main()` initialization only\n* `any` without justification \u2014 use a specific type or generic constraint when one suffices\n* Global mutable state \u2014 pass dependencies explicitly through function parameters or struct fields\n* `fmt.Println` for logging \u2014 use `log/slog`\n* `os.Exit` outside `main()` \u2014 return errors to callers\n* Discarded errors without a justifying comment\n* `init()` for complex logic \u2014 use explicit initialization called from `main()`\n* Naked goroutines without cancellation or lifecycle management",
+      "BACKLOG_DIRECTORY": ".backlogit",
+      "BACKLOG_TOOL_NAME": "backlogit",
+      "BUILD_CHECK_COMMAND": "go vet ./...",
+      "BUILD_COMMAND": "go build ./...",
+      "BUILD_TOOL": "go",
+      "CI_DEFAULT_BRANCH": "main",
+      "CI_NOTES": "GitHub Actions runs go build, go vet (including -tags=integration), golangci-lint, and go test -race with coverage. Formatting is NOT checked in CI \u2014 gofmt is enforced only by the local pre-push gate. Release and CLI-reference-drift workflows run separately.",
+      "CI_PLATFORM": "GitHub Actions",
+      "CI_WORKFLOW_GLOB": "**/.github/workflows/*.yml",
+      "COMMIT_SCOPES": "cli, browser, auth, transcript, audio, scheduler, config",
+      "CONCURRENCY_PATTERNS": "goroutines, `sync.WaitGroup`, `sync.Mutex`/`RWMutex`, channels, `context.Context` cancellation, `errgroup`, `select` loops, `atomic` operations",
+      "COPILOT_EXE_PATH": "copilot",
+      "DEFAULT_BRANCH": "main",
+      "DOCS_ROOT": "docs",
+      "DOCS_SECURITY": "docs/security",
+      "DOCUMENTATION_CONVENTIONS": "Godoc comments on every exported type, function, and package, starting with the identifier name.",
+      "DOC_COMMENT_STYLE": "// Identifier ... godoc comment",
+      "ERROR_HANDLING_CONVENTIONS": "Errors are returned, never panicked, from library code. Wrap with context using `fmt.Errorf(\"...: %w\", err)`. Sentinel errors use `errors.Is`/`errors.As` comparisons.",
+      "ERROR_HANDLING_POLICY": "Every returned error MUST be checked or explicitly discarded with `_ =` plus a comment explaining why",
+      "ERROR_PATTERN": "explicit `if err != nil` with `fmt.Errorf(\"...: %w\", err)` wrapping",
+      "EXAMPLE_SCOPE": "cli",
+      "FILE_EXT": "go",
+      "FORMATTER": "gofmt",
+      "FORMAT_CHECK_COMMAND": "test -z \"$(gofmt -l .)\"",
+      "FORMAT_COMMAND": "gofmt -l .",
+      "FORMAT_FIX_COMMAND": "gofmt -w .",
+      "FORMAT_TOOL": "gofmt",
+      "HARNESS_ENFORCED_SUMMARY": "* Linting and static analysis \u2014 `golangci-lint run` and `go vet ./...` (including `-tags=integration`) are hard CI gates; `gofmt` formatting is enforced by the local pre-push gate only, so still report formatting problems that cause real defects.\n* Commit, branch, and merge hygiene \u2014 conventional-commit scopes, merge-commit-only (P-009), and PR readiness are enforced by `commit-message`, `git-merge`, `pull-request`, and `github-pr-automation` instructions.\n* Test-first red-green gates \u2014 P-002 and P-004 plus the `harness-architect` skill require a compiling-but-failing harness before implementation, verified in CI by `go test -race ./...`.\n* Backlog bookkeeping \u2014 work-item IDs, status transitions, and traceability are managed through the backlogit registry at `.gsd/backlog-registry.yaml`.\n* Role-boundary compliance \u2014 the two-agent Stage/Ship model and `role-enforcement.instructions.md` gate which agent may mutate which artifact class.",
+      "HARNESS_MANIFEST_PATH": ".gsd/harness-manifest.yaml",
+      "LANGUAGE_ERROR_HANDLING_CHECKS": "* Every returned error is checked or explicitly discarded with `_ =` and a comment\n* Errors wrapped with `fmt.Errorf(\"...: %w\", err)` to preserve the chain\n* Sentinel errors compared with `errors.Is`, not `==`\n* No swallowed errors in defer/cleanup paths without logging",
+      "LANGUAGE_FILE_GLOB": "**/*.go",
+      "LANGUAGE_IDIOM_CHECKS": "* Use short, descriptive variable names scoped to their lifetime; avoid Hungarian notation\n* Return early on error conditions instead of nesting the happy path\n* Accept interfaces, return concrete types\n* Use composition over embedding-heavy inheritance-style hierarchies\n* Prefer explicit interface satisfaction with a compile-time assertion (`var _ Interface = (*Type)(nil)`) when the contract matters",
+      "LANGUAGE_NOTES": "(Go 1.26; standard library first, minimal third-party dependencies)",
+      "LANGUAGE_PERFORMANCE_CHECKS": "* Avoid unnecessary allocations in hot paths (loops, DOM/CDP polling, audio encoding)\n* Reuse buffers where profiling shows allocation pressure\n* Avoid excessive interface boxing for values passed at high frequency\n* Prefer streaming/incremental processing for audio and DOM mutation observation over buffering entire streams in memory",
+      "LANGUAGE_SAFETY_CHECKS": "* No `unsafe` package usage without documented justification\n* No unchecked type assertions (`x.(T)` without the `, ok` form) outside test code\n* No goroutine leaks \u2014 every goroutine has a cancellation path via `context.Context`\n* No data races \u2014 shared state protected by sync primitives or channels\n* No panics in library code \u2014 only in `main()` for truly unrecoverable states",
+      "LANGUAGE_VERSION": "1.26",
+      "LANGUAGE_VERSION_DETAIL": "Go 1.26 (module github.com/softwaresalt/go-teams)",
+      "LINTER": "golangci-lint",
+      "LINT_COMMAND": "golangci-lint run",
+      "LINT_POLICY": "`golangci-lint run` MUST pass with zero issues; all findings are hard errors",
+      "LINT_TOOL": "golangci-lint",
+      "MAX_WAIT": "600",
+      "NAMING_CONVENTIONS": "PascalCase (MixedCaps) for exported identifiers, camelCase for unexported identifiers; package names are short, lowercase, and free of underscores.",
+      "POLL_INTERVAL": "30",
+      "PRIMARY_LANGUAGE": "Go",
+      "PRIMARY_LANGUAGE_LOWER": "go",
+      "PROJECT_DESCRIPTION": "standalone Go CLI for autonomous Microsoft Teams live-transcription and audio capture via headless browser automation (chromedp)",
+      "PROJECT_NAME": "go-teams",
+      "PROJECT_STRUCTURE": "go-teams/\n\u251c\u2500\u2500 cmd/\n\u2502   \u2514\u2500\u2500 go-teams/        # main package (Cobra root command)\n\u251c\u2500\u2500 internal/\n\u2502   \u251c\u2500\u2500 audio/           # pure-Go MP3 encoding, audio capture\n\u2502   \u251c\u2500\u2500 browser/         # chromedp allocation, stealth flags, FSM\n\u2502   \u251c\u2500\u2500 capture/         # capture orchestration\n\u2502   \u251c\u2500\u2500 cli/             # command wiring and flag parsing\n\u2502   \u251c\u2500\u2500 config/          # configuration loading and validation\n\u2502   \u251c\u2500\u2500 scheduler/       # cron-based daemon mode\n\u2502   \u251c\u2500\u2500 teams/           # Teams meeting join and auth flows\n\u2502   \u2514\u2500\u2500 transcript/      # DOM caption interception, dedup, Markdown writer\n\u251c\u2500\u2500 docs/                # durable knowledge (design-docs, product-specs, plans, ...)\n\u251c\u2500\u2500 scripts/             # harness helper scripts\n\u251c\u2500\u2500 .backlogit/          # backlog workflow state\n\u251c\u2500\u2500 .github/             # agent harness\n\u2514\u2500\u2500 go.mod",
+      "QUALITY_GATE_1": "go vet ./...",
+      "QUALITY_GATE_1_NAME": "check",
+      "QUALITY_GATE_2": "golangci-lint run",
+      "QUALITY_GATE_2_NAME": "lint",
+      "QUALITY_GATE_3": "test -z \"$(gofmt -l .)\"",
+      "QUALITY_GATE_3_NAME": "fmt",
+      "QUALITY_GATE_4": "go test ./...",
+      "QUALITY_GATE_4_NAME": "test",
+      "REPOSITORY_OPERATING_MODEL": "go-teams is a single standalone Go CLI binary (Cobra command routing) that drives a headless Chromium browser via chromedp to join Microsoft Teams meetings, capture live captions and audio, and persist transcripts and recordings locally. Work flows through the Stage -> Ship release-unit pipeline with backlogit-managed work items.",
+      "REPO_NAME": "go-teams",
+      "REPO_OWNER": "softwaresalt",
+      "SECURITY_CONFIG_RULES": "GitHub Copilot CLI agentic config rules for a Go workspace (permissive tool allow-lists in .copilot/settings.json, unvalidated instruction inputs under .github/, untrusted MCP servers in .mcp.json, hardcoded credentials, exposed env defaults in .env.local, missing CI security gates)",
+      "SECURITY_OWASP_PATTERNS": "Go OWASP patterns: fmt.Sprintf interpolation into SQL or shell strings; exec.Command and exec.CommandContext with user-controlled arguments; text/template rendering of untrusted values; encoding/gob and gopkg.in/yaml.v3 decoding of untrusted input; os.WriteFile and os.MkdirAll outside the workspace root; unvalidated filepath.Join path traversal; and chromedp.Evaluate with interpolated page data",
+      "SECURITY_REVIEW_PATTERNS": "internal/cli/auth.go, internal/cli/root.go, internal/teams/**, internal/browser/**, internal/config/**, **/session*.go, **/token*.go; content keywords: login, token, password, credential, session, cookie, secret, key, UserDataDir, permission, role, exec.Command",
+      "SECURITY_SCAN_PATTERNS": "Go injection, auth, and exposure patterns: exec.Command argument construction; chromedp.Evaluate and chromedp.ActionFunc script interpolation; credential and cookie handling in internal/cli/auth.go, internal/teams, and internal/browser; UserDataDir session-persistence writes in internal/browser/allocator.go; log/slog calls that could emit tokens or transcript PII; and filepath.Join path-traversal boundaries",
+      "SOURCE_DIR": "internal/",
+      "SOURCE_GLOB": "**/*.go",
+      "TEST_COMMAND": "go test ./...",
+      "TEST_DIR": "co-located *_test.go files",
+      "TEST_RUNNER": "go test",
+      "TEST_STRUCTURE": "Unit tests co-located as `*_test.go` beside implementation files; integration tests gated behind the `integration` build tag.",
+      "TEST_TIER_DESCRIPTION": "Unit: `go test ./...` with table-driven tests co-located as `*_test.go`; Integration: `go test -tags=integration ./...` gated behind the `integration` build tag (Teams meeting join, chromedp session flows).",
+      "TEST_TOOL": "go",
+      "TYPECHECK_COMMAND": "",
+      "TYPECHECK_TOOL": "",
+      "UNIMPLEMENTED_MARKER": "`panic(\"not implemented: ...\")`",
+      "UNSAFE_POLICY": "`unsafe` package forbidden without documented, security-reviewed justification",
+      "GSD_VERSION": "1.6.0",
+      "CONTINUOUS_LEARNING_DIR": ".gsd/continuous-learning",
+      "KBDB_SOURCES_PATH": ".kbdb/config/sources.yaml",
+      "KBDB_BINARY_PATH": ".bin/kbdb.exe",
+      "FEATURE_SHIPMENTS": "true"
+    }
+  }
+}

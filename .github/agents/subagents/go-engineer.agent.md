@@ -4,9 +4,10 @@ description: "Expert Go implementation agent — applies language idioms, safety
 maturity: stable
 tools: vscode, execute, read, edit, search
 max_subagent_tier: 2
-reasoning_effort: "xhigh"
+reasoning_effort: "high"
 model_provider: "anthropic"
-model_family: "claude-sonnet-5"
+model_family: "claude-sonnet-5.5"
+context_tier: "long_context"
 subagent_depth: 0
 ---
 

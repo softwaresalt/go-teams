@@ -1,4 +1,5 @@
 ---
+name: fix-ci
 description: "Detect CI pipeline failures and review comments, reproduce and fix locally, push and poll until clean"
 ---
 
@@ -10,7 +11,12 @@ Detect CI failures and code review comments on the current branch's PR, reproduc
 
 * Git repository with a remote tracked branch and an open PR
 * Access to CI pipeline status via `gh` CLI or equivalent tool
-* Local tools required by this skill must be available in PATH, including the configured quality gates `go vet ./...`–`go test ./...`; if formatting fixes are applied during remediation, `gofmt -w .` must also be available
+* Local tools required by this skill must be available in PATH
+* The configured quality gate `go vet ./...` must be runnable
+* The configured quality gate `golangci-lint run` must be runnable
+* The configured quality gate `test -z "$(gofmt -l .)"` must be runnable
+* The configured quality gate `go test ./...` must be runnable
+* If formatting fixes are applied during remediation, `gofmt -w .` must also be available
 * Backlog tool configured when defect logging is enabled (circuit breaker halt path)
 
 ## Quick Start
@@ -42,16 +48,13 @@ Invoke when CI checks fail on a PR, or when automated review comments need to be
 
 ## Required Protocol
 
-When the `agent-intercom` capability pack is installed, follow
-`.github/instructions/agent-intercom.instructions.md`: establish heartbeat / ping visibility before
-the first reproduction loop, broadcast failing-check and fixed-check milestones, and use the
-intercom clarification / approval path if a repair would require destructive action or explicit
-operator judgment.
-
 When the `agent-engram` capability pack is installed, follow
 `.github/instructions/agent-engram.instructions.md`: verify the engram surface is available before
 relying on indexed search, and prefer code-graph or impact-analysis lookup while diagnosing the CI
 failure set.
+
+When a repair would require destructive action or explicit operator judgment, follow the workspace's
+native approval path and state the decision required in the session output.
 
 ### Step 1: Identify the PR
 
@@ -121,7 +124,8 @@ comment lifecycle.
 
 Run the failing CI steps locally in order:
 
-1. `test -z "$(gofmt -l .)"` → if fails, run `gofmt -w .`
+1. `test -z "$(gofmt -l .)"` → if fails, fix the formatting violations
+   * Auto-fix after `test -z "$(gofmt -l .)"` fails: `gofmt -w .`
 2. `golangci-lint run` → fix violations
 3. `go test ./...` → fix failing tests
 
@@ -205,7 +209,7 @@ CAPTURE INVARIANT and its LATE-SURFACING THREAD rule, both authored in
 134.004-T and carried by the installed Ship agent's own "P-021 Scope
 Classification and Defer-Capture Procedure" section (`.github/agents/_ship.agent.md`)
 — the concrete carrier an installed workspace can actually resolve, since
-`134.004-T` is an internal autoharness development task ID that is not
+`134.004-T` is an internal gsd development task ID that is not
 installed into target workspaces. Newly available identifiers are recorded in
 the PR/closure residual-risk record, not written back into the entry;
 reconciling the entry itself is Stage's C6 responsibility. The prior-run
@@ -468,34 +472,21 @@ order:
    full output.
 4. Only capture the full raw output as a last resort.
 
-## Intercom Events
+## Session-Output Reports
 
-When the `agent-intercom` capability pack is installed, broadcast the
-following events at the specified trigger points:
+Report these operator-visible outcomes in the session output; routine progress
+narration is not required:
 
-| Event | Trigger | Broadcast format |
-|---|---|---|
-| `start` | Skill invoked | `[FIX-CI] Starting: PR #{pr_number}` |
-| `check-found` | CI checks identified | `[FIX-CI] Checks failing: {check_names}` |
-| `copilot-detected` | Copilot threads found | `[FIX-CI] Copilot threads: {count} reply-required` |
-| `reproducing` | Beginning local reproduction | `[FIX-CI] Reproducing: {check_name}` |
-| `fix-applied` | Fix committed for a check | `[FIX-CI] Fix applied: {check_name} (attempt {n})` |
-| `gate-pass` | A quality gate passes | `[FIX-CI] Gate pass: {gate_name}` |
-| `gate-fail` | A quality gate fails | `[FIX-CI] Gate fail: {gate_name}` |
-| `regression` | An earlier gate regresses | `[FIX-CI] Regression: {gate_name} regressed after {later_gate_name} fix` |
-| `cascade-restart` | Gate loop restarted from first failure | `[FIX-CI] Cascade restart from: {gate_name}` |
-| `reply-sent` | Reply posted to a review thread | `[FIX-CI] Reply sent: thread {thread_id} ({disposition})` |
-| `reply-gate-pass` | Reply gate passed (all threads replied) | `[FIX-CI] Reply gate: PASS ({count} threads)` |
-| `push` | Fix commit pushed to branch | `[FIX-CI] Push: iteration {n}` |
-| `poll-start` | CI polling cycle begins | `[FIX-CI] Polling CI (interval: {poll_interval}s, max: {max_wait}s)` |
-| `poll-pass` | CI reaches green state | `[FIX-CI] CI green: all checks passed` |
-| `poll-fail` | CI check fails after push | `[FIX-CI] CI fail: {check_name} (iteration {n})` |
-| `defect-logged` | Defect item created on halt | `[FIX-CI] Defect logged: {item_id} for {check_name}` |
-| `halt` | Circuit breaker triggered | `[FIX-CI] Halt: {reason} after {n} iterations` |
-| `complete` | Skill exits successfully | `[FIX-CI] Complete: PR #{pr_number} CI green` |
+* the reply gate verdict (`Reply gate: PASS ({count} threads)` or the blocking
+  threads when it fails);
+* a quality gate regression and the resulting cascade restart point;
+* the CI result after each push (`CI green: all checks passed` or the failing
+  check and iteration);
+* a circuit-breaker halt with its reason, the iteration count and any defect
+  item IDs logged.
 
 ## Model Routing
 
 This skill operates at **Tier 2 (Standard)** — CI failure diagnosis and fix application.
 
-Generated by autoharness | Template: fix-ci/SKILL.md.tmpl
+Generated by gsd | Template: fix-ci/SKILL.md.tmpl

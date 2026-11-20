@@ -125,10 +125,9 @@ operations:
       summary: "summary"
 
   create_checkpoint:
-    mcp_tool: "backlogit_create_checkpoint"
-    cli_command: "backlogit checkpoint create --state-dump {{state_dump}}"
+    cli_command: "gsd checkpoint create --state-dump-file {{state_dump_file}}"
     params:
-      state_dump: "state_dump"
+      state_dump_file: "state_dump_file"
 
   list_checkpoints:
     mcp_tool: "backlogit_list_checkpoints"
@@ -260,7 +259,7 @@ operations:
 
   stash:
     mcp_tool: "backlogit_stash"
-    cli_command: "backlogit stash add --text {{text}}"
+    cli_command: "backlogit stash add -- {{text}}"
     params:
       text: "text"
       kind: "kind"
@@ -330,7 +329,7 @@ operations:
 
   add_link:
     mcp_tool: "backlogit_add_link"
-    cli_command: "backlogit link add {{source_id}} {{target_id}} --type {{link_type}}"
+    cli_command: "backlogit link add {{source_id}} {{target_id}} {{link_type}}"
     params:
       source_id: "source_id"
       target_id: "target_id"
@@ -338,7 +337,7 @@ operations:
 
   remove_link:
     mcp_tool: "backlogit_remove_link"
-    cli_command: "backlogit link remove {{source_id}} {{target_id}} --type {{link_type}}"
+    cli_command: "backlogit link remove {{source_id}} {{target_id}} {{link_type}}"
     params:
       source_id: "source_id"
       target_id: "target_id"
@@ -470,3 +469,5 @@ features:
   discovery: true
   lifecycle_hygiene: true
   sizing: true
+  # Opt in only when the installed backlogit stamps the claim marker (154-S producer, scheduler-baseline-marker/v1); see P-002.8.
+  scheduler_baseline_claim: false

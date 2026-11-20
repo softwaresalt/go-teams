@@ -26,6 +26,21 @@ advertises them:
 Use the workspace's registered backlogit operation names or aliases. Do not invent a parallel task
 tracking system when backlogit is available.
 
+## Surface Choice Protocol
+
+Each registered backlogit operation may declare an MCP surface (`mcp_tool`), a CLI surface
+(`cli_command`), or both. Every declared surface is an equal supported surface for that operation
+(P-012): use either declared surface that works without trying the other first, report
+`TOOL_OK: {operation} via {mcp|cli}`, report `TOOL_DEGRADED` naming the failed and selected surfaces
+when the selected surface fails and another declared surface works, and halt with
+`TOOL_UNAVAILABLE: {operation}` when no declared surface works. Never substitute an undeclared
+command or a filesystem or cache edit. Pass CLI values as separate argument elements, and check
+the first write's result before retrying a non-idempotent mutation on another surface. Hook
+polling and acknowledgement follow the same choice, but acknowledge only the highest concrete
+event sequence processed, never a derived signal. `log_telemetry` is MCP-only. `dispose_shipment`
+(`backlogit_dispose_shipment` / `backlogit shipment dispose`) is not registered: it is deferred
+until backlogit 194-F ships and is Stage-only when it does (backlogit condition G-B).
+
 ## Query-First Protocol
 
 When inspecting backlog state:
@@ -66,11 +81,16 @@ Protocol above.
   candidate. This matches the Ship agent's own readiness rule that treats unmet
   `dependencies` as blocking eligibility through `dependencies`, not through a
   shipment `blocked` status.
+* **Queue-view readiness note (188-S)**: the backlogit HEAD `queue view` releases a
+  shipment `blocks` edge only when the predecessor is `shipped`, so it hides blocked
+  shipments earlier than backlogit 1.11. The Orchestrator already treats the queue listing as
+  a first filter with `pre_claim` as the sole authority, so no queue-selection wording changes.
 * **Reconstruct the full ordered sequence (scope / audit / resume)**: because
   every dependency-gated successor stays `status: queued` from creation and none
-  are hidden behind a separate `blocked` status, a single `queue view --type
-  shipment --status queued` (or an unfiltered shipment listing) already surfaces
-  the complete candidate set. Traverse the `item_deps` blocks-edges across that
+  are hidden behind a separate `blocked` status, an unfiltered shipment listing
+  (not `queue view`, which can hide dependency-blocked successors) surfaces
+  the complete candidate set; reserve `queue view` for eligibility selection.
+  Traverse the `item_deps` blocks-edges across that
   set to rebuild the ordered sequence and its restart cursor, then evaluate which
   queued successors are currently eligible by checking whether all blocking
   predecessors have reached `shipped`. This is the ordered scope P-017 records as
@@ -111,15 +131,18 @@ When hook event polling operations are supported:
 2. Treat returned hook events as higher-priority signals than raw queue scans.
 3. Acknowledge only the highest processed concrete event sequence; never acknowledge derived signals.
 
-## Intercom Coherence Rule
+## Operator Choice Presentation Rule
 
-When the `backlogit` and `agent-intercom` capability packs are both enabled and
-an agent is presenting queue, stash, or triage choices remotely:
+When an agent presents queue, stash, backlog, or triage choices to the
+operator, make the session-output message self-contained, because the operator
+may read it asynchronously:
 
-1. Include item IDs, priority, kind or type, and a one-line summary in the
-   broadcast.
+1. Include each candidate's item ID, priority, kind or type, and a one-line
+   summary.
 2. Include the recommended ordering and the exact choice being requested.
-3. Prefer self-contained broadcasts over "see chat above" summaries.
+3. State explicitly that operator selection or confirmation is awaited, and
+   wait for it before proceeding.
+4. Prefer self-contained messages over "see chat above" summaries.
 
 ## Continuity Protocol
 
@@ -140,10 +163,13 @@ A backlogit structured checkpoint payload MUST:
 1. declare `"schema_version": 1` as a top-level field — without it backlogit
    skips V1 validation and auto-population entirely and writes the payload
    through unvalidated;
-2. be written through the official create operation — MCP
-   `backlogit_create_checkpoint` (`state_dump`) or CLI
-   `backlogit checkpoint create --state-dump` — never by writing a file into
-   the checkpoints directory directly;
+2. be written only through the guarded adapter `gsd checkpoint create`
+   (`--state-dump-file <path>` or `--state-dump-json <json>`, mutually
+   exclusive), which validates the closed V1 namespace and a specific
+   `resume_hint` strictly pre-write and then performs the official create
+   operation itself — a producer never calls the raw create operation directly
+   (neither the MCP tool nor the backlogit CLI form), and never writes a file
+   into the checkpoints directory directly;
 3. carry `agent` (`stage` or `ship`), `session_id`, `phase`, and a
    `resume_hint` specific enough to support a later recovery decision;
 4. nest all domain data (feature/shipment/stash IDs, artifact paths, branch
@@ -166,6 +192,46 @@ A backlogit structured checkpoint payload MUST:
   }
 }
 ```
+
+### Historical Checkpoint Classification Policy
+
+This policy is the vocabulary for classifying checkpoint records that already
+exist. It adds no prohibition of its own: it classifies and reports, and it never
+rewrites a historical record. Producer enforcement lives in rule 2 of the
+Checkpoint Payload Contract above and in the guarded adapter
+`gsd checkpoint create`; the executable form of this policy is
+`gsd checkpoint scan --json`.
+
+**Outcome set (total over every record):**
+
+| Outcome | Severity | Meaning |
+|---|---|---|
+| `CHECKPOINT_LEGACY_HINTLESS_RESOLVED` | reported, non-blocking | A record in a TERMINAL status carrying no usable `resume_hint`. Excluded from the recovery candidate set and enumerated by filename, so the exemption is visible rather than silent. |
+| `CHECKPOINT_ACTIVE_HINTLESS` | BLOCKING | A record in a NON-TERMINAL status with a missing, empty, or whitespace-only `resume_hint`. Fails closed to operator handoff. |
+| `CHECKPOINT_RECORD_MALFORMED` | BLOCKING | Any record that cannot be classified structurally. Fails closed to operator handoff. |
+
+**Status partition (total across every accepted status).** The accepted status
+enum is `queued`, `active`, `shipped`, `abandoned`, and `resolved`. NON-TERMINAL
+is `{active, queued}`. TERMINAL is `{shipped, abandoned, resolved}`. `abandoned`
+is named explicitly and is terminal: a record for deliberately stopped work never
+enters the blocking bucket and never halts startup.
+
+**Malformed classes (enumerated, not inferred).** Each of the following is
+`CHECKPOINT_RECORD_MALFORMED` and BLOCKS: an unparseable or truncated document;
+duplicate keys; a non-object root; a missing `status`; a wrong-typed `status`; an
+unrecognized `status` value outside the accepted enum; a `schema_version` this
+implementation does not understand (a FUTURE version blocks rather than
+degrades); a required field present with the wrong type; and a record that has no
+`schema_version` while in a NON-TERMINAL status. A terminal record with no
+`schema_version` is reported in the legacy bucket (`LEGACY_NO_SCHEMA_VERSION`)
+and is non-blocking. For historical records a JSON `null` in an optional field is
+treated as absent, not as a wrong type.
+
+**Totality.** No record is ever unclassified and no record falls through to a
+silent pass. Every record resolves to exactly one of `VALID`,
+`LEGACY_NO_SCHEMA_VERSION` (the reported legacy bucket, including
+`CHECKPOINT_LEGACY_HINTLESS_RESOLVED`), or `QUARANTINED` (blocking:
+`CHECKPOINT_ACTIVE_HINTLESS` or `CHECKPOINT_RECORD_MALFORMED`).
 
 ## Traceability Protocol
 
@@ -230,20 +296,25 @@ Orchestrator's owner-exclusive routing in its own template). It reuses the exist
 backlogit checkpoint API and the existing context-efficiency / P-020 compaction substrate —
 it does not introduce a new checkpoint-schema field or a new runtime engine.
 
-**Applicability — engram-pack-conditioned, never an engram-reachability blocker**: this
-prune-on-restore step uses `agent-engram` as an optional context source when the
-`agent-engram` capability pack is installed and reachable, while `backlogit`'s own
-`state_dump` (and `docs/memory/`) is the authoritative checkpoint substrate. When
-`agent-engram` is NOT installed, or when `agent-engram` is installed in config but
-unreachable at the moment of restore (`ENGRAM_DEGRADED` / `TOOL_DEGRADED: agent-engram`),
-prune-on-restore summarizes the restored `state_dump` (and any relevant `docs/memory/`
-checkpoint) directly and proceeds from restore to resume without halting on `engram`.
+**Applicability — engram-pack-conditioned, not a backlogit-only blocker**: this
+prune-on-restore step applies only when the `agent-engram` capability pack is
+installed/active in this workspace (there may be bound context state to prune). When
+`agent-engram` is NOT installed, prune-on-restore is a supported, non-degraded no-op:
+skip directly from restore to resume (restore → resume, no prune/gate step) — a
+backlogit-only installation is never forced to halt at pruning, because a package with
+no engram pack has no engram-bound state to summarize in the first place. This static
+configuration fact (`agent-engram` not installed) is distinct from the runtime-degradation
+cases in point 4 below: `backlogit`'s `state_dump` (and `docs/memory/`) is the
+authoritative checkpoint substrate and `agent-engram` is an optional context source, so
+whenever `agent-engram` is unreachable at restore time (whether at startup or
+mid-session), the owning agent logs `ENGRAM_DEGRADED` / `TOOL_DEGRADED: agent-engram`
+and performs bounded checkpoint-only summarization.
 
 1. **Bounded read-select-summarize on restore**: the owner sequence is
    restore → prune/gate → resume, never restore → resume → prune. After the operator
    explicitly confirms and the checkpoint's `state_dump` is loaded (restore), but BEFORE
-   execution resumes, read the restored `state_dump` (and any reachable bound engram state),
-   then produce a bounded summary of that state rather than replaying the full
+   execution resumes, read the restored `state_dump` and any bound engram state, then
+   produce a bounded summary of that state rather than replaying the full
    action-observation history verbatim. Prune-on-restore drops ONLY superseded
    action-observation history — turns and tool traces that have already been synthesized
    into the recorded state and are no longer needed to continue the work. Only after this
@@ -260,16 +331,22 @@ checkpoint) directly and proceeds from restore to resume without halting on `eng
    restore-time application of the same context-efficiency discipline used elsewhere in the
    harness (session memory checkpoints, `compact-context`, P-020 compaction). It does not
    invent a separate pruning engine, schema, or storage surface.
-4. **Degraded fallback — `agent-engram` unreachable vs. `backlogit` unreachable at restore**:
-   because the checkpoint `state_dump` lives in `backlogit` (not `engram`) and normal
-   execution already treats an unreachable `agent-engram` daemon as a non-blocking degradation
-   (`TOOL_DEGRADED: agent-engram`), an unreachable `agent-engram` substrate at restore time
-   MUST NOT block checkpoint recovery: log `ENGRAM_DEGRADED` (or `TOOL_DEGRADED: agent-engram`),
-   perform the bounded read-select-summarize step over the restored `backlogit` `state_dump`
-   and `docs/memory/` checkpoint directly (preserving the Prune allowlist in point 2), and
-   proceed to resume. Only when **`backlogit` itself** (the checkpoint substrate) is
-   unreachable or the checkpoint `state_dump` is unreadable/malformed does the crash-resumption
-   protocol fail closed to operator handoff.
+4. **Graceful `agent-engram` degradation at restore (`backlogit` authoritative)**:
+   `backlogit`'s `state_dump` (and `docs/memory/`) is the authoritative checkpoint
+   substrate and `agent-engram` is an optional context source. Whenever `agent-engram`
+   is unreachable at restore time — whether already `ENGRAM_DEGRADED` at startup OR
+   becoming unreachable mid-session after an earlier `ENGRAM_OK: workspace bound` — log
+   `ENGRAM_DEGRADED: skipping engram prune on restore; summarizing checkpoint state_dump only`
+   (or `TOOL_DEGRADED: agent-engram`), apply bounded read-select-summarize directly over
+   the restored `backlogit` `state_dump` and `docs/memory/` while preserving the Prune
+   allowlist (active cursor, unresolved-checkpoint pointer, and recorded gate verdicts),
+   and proceed to resume. Do not attempt to prune unavailable Engram state or replay the
+   full action-observation history, and do not fail closed merely because `agent-engram`
+   is unreachable. Fail-closed operator handoff is reserved strictly for when `backlogit`
+   itself or the checkpoint `state_dump` is unreachable, unreadable, or malformed:
+   without a readable, valid, explicitly selected checkpoint there is no restore or resume.
+   These cases preserve P-012 and are distinct from the supported backlogit-only no-prune
+   path when `agent-engram` is absent.
 5. **No unresolved placeholders**: any workspace-specific customization point in this section
    resolves fully at install time — installed output must never retain an unresolved template
    variable placeholder — and the protocol stays technology-agnostic (no provider or binary
@@ -285,4 +362,4 @@ When lifecycle and maintenance operations are supported:
 4. **Use `cleanup_checkpoints` to prune stale checkpoint files, but ONLY after every active checkpoint has reached ACTUAL resolution or an explicit separate archival/abandonment decision — a fail-closed operator handoff is NEITHER and does NOT satisfy this gate.** `cleanup_checkpoints` (retention-based) archives checkpoints that are either resolved OR merely older than the retention cutoff — including still-`active` records. A fail-closed operator handoff, by design, performs NO resolve and deliberately leaves the checkpoint `active`/unresolved so the recovery candidate is preserved for the next session; treating handoff as sufficient disposition would let `cleanup_checkpoints` archive that exact checkpoint immediately afterward purely for being old, erasing the unresolved state the handoff existed to protect. Require, for every checkpoint returned by the owner-scoped ZERO-CANDIDATE / EXPLICIT-OPERATOR-SELECTION enumeration, ONE of: (a) `status: resolved` via `resolve_checkpoint` after a confirmed successful resume, or (b) a separate, explicit, named operator decision to archive or abandon that specific checkpoint (distinct from, and never implied by, a fail-closed handoff) — BEFORE invoking `cleanup_checkpoints` against that same checkpoint population. A checkpoint left in the `active`/unresolved state by a fail-closed handoff MUST remain excluded from `cleanup_checkpoints` eligibility regardless of its age until one of these two explicit dispositions occurs. Override `retention_days` only when the default is inappropriate.
 5. Treat hygiene findings as first-class maintenance signals — address orphans and duplicates promptly rather than allowing them to accumulate.
 
-Generated by autoharness | Template: backlogit.instructions.md.tmpl
+Generated by gsd | Template: backlogit.instructions.md.tmpl

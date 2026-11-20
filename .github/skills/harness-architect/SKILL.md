@@ -1,7 +1,7 @@
 ---
 name: harness-architect
 description: "Scaffolds compilable but failing test harnesses for feature and chore tasks"
-argument-hint: "feature=001-{SUFFIX_FEATURE} tasks=001.001-{SUFFIX_TASK},001.002-{SUFFIX_TASK}"
+argument-hint: "feature=001-{SUFFIX_FEATURE} tasks=001.001-{SUFFIX_TASK}"
 input:
   properties:
     feature:
@@ -9,14 +9,15 @@ input:
       description: "Feature or chore ID to scaffold harnesses for"
     tasks:
       type: string
-      description: "Comma-separated task IDs to scaffold (optional, defaults to all ready tasks)"
+      description: "Exactly one current task ID, supplied by the caller (the actor never selects or claims backlog work)"
   required:
     - feature
+    - tasks
 ---
 
 # Harness Architect Skill
 
-Scaffold strict test harnesses for a feature's or chore's ready work items.
+Scaffold a strict test harness for the current task of a feature or chore.
 The output must compile cleanly, fail for the intended not-yet-implemented
 behavior, and leave clear harness commands for downstream build execution.
 
@@ -26,44 +27,32 @@ Use this skill when a release unit needs executable test boundaries before
 implementation starts. The skill prepares the red phase and stops there. It
 does not implement production logic.
 
-## Agent-Intercom Communication
-
-When the `agent-intercom` capability pack is installed, call `ping` at
-session start. If reachable, broadcast at every step. If unreachable,
-warn the operator that visibility is degraded and continue locally.
-
-| Event | Level | Message prefix |
-|---|---|---|
-| Session start | info | `[HARNESS] Starting: feature={input.feature}` |
-| Tasks loaded | info | `[HARNESS] Ready tasks: {task_count}` |
-| Codebase analyzed | info | `[HARNESS] Context gathered: {module_count} modules` |
-| Harness generated | info | `[HARNESS] Generated: {test_file} ({scenario_count} scenarios)` |
-| Compilation check | info | `[HARNESS] Compilation: {result}` |
-| Red phase check | info | `[HARNESS] Red phase: {result}` |
-| Label applied | success | `[HARNESS] harness-ready: {task_id}` |
-| Complete | success | `[HARNESS] Complete: {task_count} tasks harnessed` |
-
 ## Inputs
 
 * `${input:feature}`: (Required) Feature or chore ID such as `001-F`
-* `${input:tasks}`: (Optional) Comma-separated task IDs to scaffold.
-  When omitted, use all executable (`queued` or `active`) tasks under the feature.
+* `${input:tasks}`: (Required) Exactly one current task ID under the
+  feature, supplied by the caller. See Step 1.
 
 ## Workflow
 
-### Step 1: Claim the target task set
+### Step 1: Select the current task
 
-1. Load the feature or chore and its descendant tasks (`queued` or `active`) through backlog
-   query or queue operations.
-2. If `${input:tasks}` is present, restrict the scope to that explicit
-   task set.
-3. Exclude tasks whose status is `blocked`, `done`, or `archived`. Do **not** exclude a `queued` or `active` task merely because it has an intra-feature / intra-shipment `blocks` dependency on another task in the same batch: instead, sort the batch in topological dependency order so upstream structural stubs are created first, allowing downstream test harnesses in the same batch to compile against those stubs in the red phase. (Dependencies between tasks in the same feature govern the subsequent `build-feature` implementation order, not up-front harness generation.)
-4. Preserve the work-item-to-task mapping so each harness can be traced
-   back to the correct backlog item.
+The actor operates on exactly one current task supplied by the caller
+(`${input:tasks}`). The actor never claims backlog work: it claims no
+shipment or task and changes no work-item status. Claiming stays with
+the caller.
+
+1. If `${input:tasks}` names no task, or more than one task, halt and
+   report. The actor never defaults to a ready-task set.
+2. Load the current task through the backlog tool's read operation and
+   confirm that it belongs to `${input:feature}`. If it does not, halt
+   and report.
+3. Preserve the work-item-to-task mapping so the harness can be traced
+   back to the current task.
 
 ### Step 2: Read task intent
 
-1. Read each selected task's title, description, acceptance criteria,
+1. Read the current task's title, description, acceptance criteria,
    and file references.
 2. Pull in feature-level acceptance criteria when task text depends on
    broader feature behavior.
@@ -76,9 +65,43 @@ When the `agent-engram` capability pack is installed, prefer indexed
 symbol lookup and code-graph tools over broad grep when surveying
 existing modules, test patterns, and import paths.
 
+### Step 2a: Classify the route
+
+Before choosing a posture, classify the current task against the P-002 docs-only
+route rules (deliberation 042-DL):
+
+1. **Qualification**: the task declares explicit owned paths; every owned path
+   is a regular prose `.md` file under the configured docs root (normalized: no
+   traversal, drive, backslash, absolute path, symlink or reparse point); no
+   owned path is on the deny list (`.github/`, `.gsd/`, the backlog
+   root, `templates/`, `schemas/`, `scripts/`, `src/`, `tests/`, or a policy,
+   config, schema, template, script, build or test artifact), which wins over
+   the docs root; and mixed scope disqualifies the whole task. Missing or
+   ambiguous ownership does not qualify the task and is never permission to use
+   the docs label. The route also requires backend support: the backlog tool
+   registry must declare `features.shipments: true` with a backlogit-style
+   shipment manifest (the completion checker reads the live shipment member
+   list); otherwise the task takes the code route unchanged.
+2. **Verification record**: validate the durable verification record on the
+   task. Each executable gate is listed separately from each manual gate; an
+   executable gate has an exact non-empty literal command, working directory,
+   exact pass criteria and a result field; a manual gate names source and target
+   paths, exact pass/fail criteria and required evidence; at least one
+   executable gate exists and it is the Markdown lint command over the owned
+   paths. A missing, empty, ambiguous or unreadable record halts and reports.
+3. **Route label**: when the task qualifies and the record is valid, the task
+   declares `harness-surface:none`; apply only the `harness-verification-gated`
+   label to the current task, using the backlog tool's update operation, and
+   skip Steps 3 to 6. Create no stub, test or RED evidence for it. Never apply
+   `harness-ready` to a docs-route task. The two labels are mutually exclusive
+   (never both). Never apply both labels; if the task already carries
+   `harness-ready`, halt and report.
+4. A task that does not qualify takes the code route unchanged: continue with
+   Step 3.
+
 ### Step 3: Determine execution posture
 
-For each task, select the appropriate harness strategy:
+For the current task, select the appropriate harness strategy:
 
 | Posture | When to use | Harness pattern |
 |---|---|---|
@@ -87,17 +110,23 @@ For each task, select the appropriate harness strategy:
 | **migration-first** | Moving code between modules | Write tests at the destination, verify source behavior |
 | **spike** | Exploratory with uncertain approach | Write minimal integration test, implement spike, expand tests |
 
+In a characterization-first posture, the characterization tests are
+recorded outside the expected-RED roster: they pin current behavior, may
+pass, and are listed apart from the roster in the Step 6 evidence record
+(P-004). Tests for new or changed behavior remain roster tests, except
+structural tests that reach no stub, which stay outside the roster
+(Marker Convention, Step 5.2).
+
 ### Step 4: Generate failing harness skeletons
 
 1. Create test files that express the task intent as compilable tests.
 2. Prefer table-driven or parameterized tests when the task describes
    multiple scenarios.
-3. Create matching production stubs with error-returning or zero-value bodies (e.g., `return fmt.Errorf("not implemented: ...")`, never `panic()` per Go safety rules)
+3. Create matching production stubs with `panic("not implemented: ...")` bodies
    so the module compiles while the tests still fail for the intended
    reason.
 4. Keep signatures, types, and module names aligned with the current
    codebase.
-5. **Docs-only or config-only verification boundary**: When a task modifies only documentation, markdown, or static configuration examples with no production Go code symbols to stub, prefer a failing content/contract assertion test (`go test`) that checks for the new documented sections/keys so the red-to-green loop applies directly; when no Go test file is in the task's allowed file set, record `Red Phase: N/A (docs/config-only verification boundary — Ship Step 4.2 must apply all acceptance-criteria file edits and verify a non-empty diff before running harness_cmd)`.
 
 ### File placement rules
 
@@ -124,39 +153,156 @@ with a non-compiling harness.
 
 #### Step 5.2: Red phase check
 
-For code and test tasks, run the task-scoped `go test` command (`harness_cmd`) for each scaffolded task. ALL newly scaffolded harness tests MUST fail with
-the expected failure marker (not-implemented error or failing test assertion). For docs-only or config-only tasks with no Go code/test surface, verify the recorded verification boundary (`go vet ./...`) passes and record `Red Phase: N/A (docs/config-only verification boundary)`.
+Run `go test ./...` for the harness tests, invoking exactly the
+resolved test command with no runner substitution. EVERY generated
+harness test MUST be discovered AND MUST fail with its own expected failure marker
+(`panic("not implemented: ...")`); evaluate each test individually rather
+than relying on an aggregate non-zero exit code.
 
-If any code/test harness passes (false positive) or fails with an unexpected error
-(compilation vs runtime), fix the harness.
+Here "every generated harness test" means every test in the current
+task's expected-RED roster, as P-004 defines it:
 
-### Step 6: Apply harness-ready label
+* **Roster**: The current task's expected-RED roster is the current
+  task's generated harness tests, excluding characterization tests.
+  Characterization tests are recorded separately, outside the roster,
+  and may pass. Structural tests that reach no stub are likewise outside
+  the roster (Marker Convention below). A task declaring
+  `harness-surface:none` has no roster and no RED obligation.
+  `harness-surface:none` is allowed only for a task whose file budget
+  contains no production code module (`src/` in Python workspaces, `cmd/`
+  or `internal/` in Go workspaces, or the target workspace's configured
+  internal/); if the current task
+  declares it but its file budget contains one, halt and report without
+  applying `harness-ready`. A code-route `harness-surface:none` task (one
+  touching only non-docs harness artifacts such as templates, installed
+  mirrors, registries, or the harness manifest) stays on the code route and
+  receives `harness-ready` after compilation and structural verification,
+  without a RED roster. A docs-route task (Step 2a) also declares
+  `harness-surface:none`; it never reaches this step.
+* **RED (R2)**: RED for a roster test in a Python workspace is that test
+  reported as `ERROR` in the canonical command's output with its own unique
+  `NotImplementedError` marker. RED in a Go workspace follows the Go RED
+  convention in the Marker Convention below. Attribution is roster-relative
+  (R2): each roster test is checked against the named `ERROR` set (or, in
+  Go, the named failing-test set) by its own marker. A roster test absent
+  from that named set, or named with a different marker, is refused. In both
+  languages the marker or failure must originate from a production
+  RED-phase stub; a test body that raises or panics its own marker directly,
+  without exercising the production stub, is refused.
 
-After both checks pass (P-004 gate satisfied):
+**Marker Convention** (P-004, stated verbatim from the governing plan,
+where FI-9 is the RED-evidence rule P-004 states and a Proof G case ID is
+that plan's test case identifier):
 
-1. Update each task with `harness-ready` label using the backlog tool's
-   update operation.
-2. Add an implementation note with the task-scoped `harness_cmd` (so `build-feature` and intermediate task verification run that task's test target while downstream tasks' red harnesses remain pending, before the unfiltered full-suite `go test ./...` runs on the final task).
-3. Record the harness manifest: `Compilation: PASS`,
-   `Red Phase: CONFIRMED` (or `Red Phase: N/A (docs/config-only verification boundary)`).
+Each task's `Marker` value is a **prefix**. Every roster test `t` has its
+own marker `<prefix>:<t>`, where `<t>` is its Proof G case ID or test
+method name. It reaches a RED-phase stub that raises exactly
+`NotImplementedError("<prefix>:<t>")`. The stub is either per behavior, or
+derives the suffix deterministically from the test's distinct request.
+The harness asserts the roster's markers are pairwise distinct, and the RED
+record maps each roster test to its marker. Two roster tests sharing one
+marker is a cross-test marker, which FI-9 refuses. Structural tests that
+reach no stub (API, docstring, schema parity, pinned hash, alias, audit)
+are recorded outside the roster, like characterization tests.
+
+**Go RED convention**: in Go workspaces (`go test`), each roster test `t`
+reaches a production RED-phase stub. An unrecovered stub panic aborts the
+Go package test binary, so later roster tests could not produce the evidence
+required by the canonical whole-suite run; a stub must never be left to
+abort the package. Either the stub returns an unimplemented sentinel or zero
+value, so that the roster test fails on its specification assertion with a
+marker-bearing failure message, or the stub calls `panic("<prefix>:<t>")`
+and the roster test recovers that expected stub panic (`defer`/`recover`)
+and reports it as a marker-bearing `t.Fatalf`, so that later roster tests
+still run. Collect the RED evidence through the canonical whole-suite
+command; a scoped `go test -run '^TestName$'` run is at most a diagnostic,
+never the evidence. Record the `<prefix>:<t>` marker per roster test
+in the RED evidence record.
+
+The following outcomes are NEVER valid red-phase evidence for a roster
+test and MUST be treated as harness defects requiring a fix before
+proceeding:
+
+* **Zero-discovery**: the test command reports zero tests collected —
+  test discovery failed to find the harness at all.
+* **Wrong-reason failure**: a roster test fails for a reason other than
+  its own expected failure marker (a different exception type or
+  message).
+* **Marker-bearing `AssertionError` (Python)**: a Python roster test
+  reported as a failure whose `AssertionError` carries its marker is
+  refused; Python RED requires the test's own `NotImplementedError` marker
+  reported as `ERROR`. This refusal does not apply to Go, where a named
+  `FAIL` carrying its own marker from a production RED-phase stub is RED
+  under the Go RED convention.
+* **Cross-test marker**: two roster tests sharing one marker, or a
+  roster test credited with another test's marker, is refused.
+* **Collection/import/syntax failure**: the run aborts during
+  collection due to an import error, syntax error, or module-load
+  failure — this is not the same signal as a running test raising the
+  expected marker.
+* **Skip or expected-failure (xfail)**: a roster test reported as
+  skipped or marked expected-to-fail counts as no observation, not as red
+  evidence.
+* **Pass or unexpectedSuccess**: a roster test that passes outright, or is
+  reported as an `unexpectedSuccess` (an `expectedFailure`-decorated
+  test that unexpectedly succeeded), is a false positive -- the
+  harness does not yet exercise the not-yet-implemented behavior.
+
+If any roster test exhibits one of these outcomes, fix the harness until
+every roster test is discovered and is red with its own marker: in a Python
+workspace reported as `ERROR` with its own `NotImplementedError` marker; in a
+Go workspace reported as a named `FAIL` carrying its own marker from a
+production RED-phase stub under the Go RED convention. Passing characterization tests are not harness defects.
+
+### Step 6: Apply harness-ready label to the current task
+
+`harness-ready` applies to the current task only. After both checks
+pass for the current task (P-004 gate satisfied):
+
+1. Apply the `harness-ready` label to the current task only, using the
+   backlog tool's update operation. Never label another task, the
+   parent feature, or a shipment.
+2. Add an implementation note with the harness command.
+3. Record the per-task harness-ready evidence record: the task ID, the
+   exact command run, its native exit code, each roster test's outcome
+   and marker, and the characterization tests, listed apart from the
+   roster together with any structural tests that reach no stub.
+4. Record the harness manifest: `Compilation: PASS`,
+   `Red Phase: CONFIRMED`.
+
+On the docs route (Step 2a) this step does not apply: the task receives
+`harness-verification-gated` instead, and no harness manifest or RED record is
+written for it.
 
 ## Completion Criteria
 
-The skill is complete only when the selected tasks have:
+Code route (`harness-ready`):
 
-* harness files in the correct modules (or a recorded verification boundary for docs/config-only tasks)
-* structural stubs with intentional not-implemented behavior for all code/test tasks
+The skill is complete only when the current task has:
+
+* harness files in the correct modules
+* structural stubs with intentional not-implemented behavior
 * a successful `go vet ./...` result after scaffolding
-* all code/test harness tests failing with the expected marker
-* clear mapping from backlog task to its task-scoped `harness_cmd`
+* every roster test red with its own marker (Python: reported as `ERROR`
+  with its own `NotImplementedError` marker; Go: a named `FAIL` carrying its
+  own stub-originated marker under the Go RED convention), and its
+  characterization tests listed apart from the roster
+* clear mapping from backlog task to harness command
+
+Docs route (Step 2a): the skill is complete when the current task has a valid
+qualification record and a valid verification record, `harness-surface:none`, and
+the exclusive `harness-verification-gated` label. The harness files, structural
+stubs, compilation result and roster RED evidence above do not apply.
 
 ## Guardrails
 
 * Do not implement production logic — stubs only.
 * Do not skip compilation verification.
-* Do not apply the harness-ready label until compilation and the red
-  phase check (or documented docs/config-only verification boundary) pass.
+* Do not apply the harness-ready label until both compilation and red
+  phase checks pass.
 * Keep test scenarios traceable to acceptance criteria.
+* On the docs route create no stub, test or RED evidence, and never apply both
+  route labels.
 
 ## Model Routing
 

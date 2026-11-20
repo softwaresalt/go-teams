@@ -11,7 +11,9 @@ diff.txt
 
 # Directories
 bin/
+.bin/
 logs/
+tools/
 transcripts/
 .vscode/
 .copilot/
@@ -47,7 +49,7 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Advisory file locks (autoharness concurrency protocol)
+# Advisory file locks (GSD concurrency protocol)
 .*.lock
 **/.*.lock
 
@@ -71,7 +73,26 @@ backlogit.db
 # Runtime state (per-consumer checkpoints, not committed)
 .backlogit/runtime/
 .backlogit/.locks/
-.autoharness/staging/
-.autoharness/backups/
 prompt.md
 *.code-workspace
+
+# gsd-runtime-ignore
+.gsd/gsd
+.gsd/gsd.exe
+.gsd/*.exe
+.gsd/*.old
+.gsd/*.bak
+.gsd/*.zip
+.gsd/SHA256SUMS
+.gsd/runtime-manifest.json
+.gsd/activation-intent.json
+.gsd/staging/
+.gsd/runtime/
+.kbdb/
+.gsd/backups/
+.gsd/gates/
+.gsd/metrics/
+.gsd/worktree-baseline.json
+.gsd/harness-manifest.yaml
+.gsd/workspace-profile.yaml
+.bin/

@@ -33,7 +33,7 @@ lifecycle:
         enabled: auto
         terminal_statuses:
             - done
-        autoharness_binary: autoharness
+        autoharness_binary: gsd
         base_ref: auto
         timeout_seconds: 600
         force_cli_only: true

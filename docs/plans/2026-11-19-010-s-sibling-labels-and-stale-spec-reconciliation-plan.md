@@ -259,16 +259,33 @@ leaving active stash `AD451E00` and dirty `.backlogit/stash.jsonl` untouched.
        `#closed-captions-button`** menu variant (where
        `#LanguageSpeechMenuControl-id` is absent) and verifying finalized
        non-empty speaker + text delivery.
-  * *Inline Verification Commands*: `gofmt -l internal/browser/captions_test.go
+    4. Execute opt-in targeted live `TestMeetingEnableCaptions`
+       (`GO_TEAMS_INTEGRATION=1` `go test -json "-tags=integration"
+       "-run=^TestMeetingEnableCaptions$" ./internal/browser/...`) when an
+       authorized live Teams meeting, lobby admission, and live speech stimulus
+       setup are available: because `go test` exits `0` on `t.Skip`, require a
+       test-level event for `"Test":"TestMeetingEnableCaptions"` with
+       `"Action":"pass"` (not `"Action":"skip"` and not package aggregate exit
+       `0` alone); record `"Action":"skip"` or unavailable prerequisites as
+       explicit redacted `BLOCKED` validator evidence naming the exact missing
+       prerequisite, while any executed `"Action":"fail"` remains a failure, and
+       keep synthetic E2E and tagged no-run compile verification distinct.
+  * *Inline Verification Commands*: Always-on synthetic + tagged-compile gates
+    (`gofmt -l internal/browser/captions_test.go
     internal/browser/meeting_e2e_test.go
-    internal/browser/meeting_integration_test.go` (empty), `go vet ./...`, `go
-    vet "-tags=integration" ./internal/browser/...`, `golangci-lint run`,
+    internal/browser/meeting_integration_test.go` empty, `go vet ./...`, `go vet
+    "-tags=integration" ./internal/browser/...`, `golangci-lint run`,
     `golangci-lint run "--build-tags=integration" ./internal/browser/...`, `go
     test -race ./internal/browser/...`, and `go test "-tags=integration"
-    "-run=^$" ./internal/browser/...` exit `0`.
+    "-run=^$" ./internal/browser/...`) all exit `0`; plus opt-in live `go test
+    -json "-tags=integration" "-run=^TestMeetingEnableCaptions$"
+    ./internal/browser/...` requiring named test `"Action":"pass"` when live
+    meeting/speech setup is available (`"Action":"skip"` / unavailable
+    prerequisites recorded as redacted `BLOCKED`; executed `"Action":"fail"`
+    stays failure).
 * **Depends on:** `010.003-T` (`blocks`).
 
-### U5 (`010.005-T`, reconciled in place) — Add PCM-before-encode observer tap, Goertzel stimulus check, and resolve `audio.go` `VERIFY LIVE`
+### U5 (`010.005-T`, reconciled in place) — Add PCM-before-encode observer tap, Goertzel stimulus check, and conditionally resolve `audio.go` `VERIFY LIVE`
 
 * **Domain:** production Go + unit/integration tests (`internal/browser/`).
 * **Posture:** `test-first` / `characterization-first` on the `P-002`/`P-004`
@@ -298,26 +315,43 @@ leaving active stash `AD451E00` and dirty `.backlogit/stash.jsonl` untouched.
        `shine-mp3` `1152`-sample frame alignment / `encoderTailSlack` `-race`
        `checkptr` safety.
     2. Add a deterministic single-frequency Goertzel / tone-discrimination helper
-       and resolve the remaining `VERIFY LIVE` comment in
-       `internal/browser/audio.go:53-55`, backed by pure-Go (never `t.Skip`ped)
+       in `internal/browser/audio.go`, backed by pure-Go (never `t.Skip`ped)
        unit tests in `internal/browser/audio_test.go` (distinguishing known
        stimulus tone PCM from silence, noise, and uncorrelated synthetic
        frequencies, plus testing thread-safe `SetAudioPCMObserver` delivery with
-       `slices.Clone` isolation).
+       `slices.Clone` isolation). Remove/resolve the `// VERIFY LIVE` warning in
+       `internal/browser/audio.go:53-55` **ONLY AFTER** `GO_TEAMS_INTEGRATION=1`
+       `go test -json "-tags=integration" "-run=^TestMeetingCaptureAudio$"
+       ./internal/browser/...` executes the non-`RecapMeeting` live-call path
+       (never a `RecapMeeting` early return or `t.Skip`) and emits test-level
+       `"Test":"TestMeetingCaptureAudio"` `"Action":"pass"` confirming actual
+       `getDisplayMedia` auto-approval / `--auto-select-desktop-capture-source`
+       capture + Goertzel stimulus detection; if `"Action":"skip"` occurs or
+       live prerequisites are unavailable, retain the unresolved `// VERIFY LIVE`
+       note in `internal/browser/audio.go` and record explicit redacted `BLOCKED`
+       validator evidence naming the exact missing prerequisite, while any
+       executed `"Action":"fail"` remains a failure.
     3. Wire the `AudioPCMObserver` type assertion + stimulus check into the
        non-`RecapMeeting` live-call path of `TestMeetingCaptureAudio` in
        `internal/browser/meeting_integration_test.go` (`lines 108-147`) **while
        preserving the `030-S`/`031-S` `RecapMeeting` branch (`lines 119-130`)
-       intact** (and following `D5` `Blocked-path handling` if no live audio
-       stimulus meeting is active when AFK).
-  * *Verification Commands*: `gofmt -l internal/browser/audio.go
-    internal/browser/meeting_chrome.go internal/browser/audio_test.go
-    internal/browser/meeting_integration_test.go` (empty), `go vet ./...`, `go
-    vet "-tags=integration" ./internal/browser/...`, `golangci-lint run`,
-    `golangci-lint run "--build-tags=integration" ./internal/browser/...`, `go
-    test -race ./internal/browser/... ./internal/audio/...`, `go test -race
-    ./...`, and `go test "-tags=integration" "-run=^$" ./internal/browser/...`
-    all exit `0`.
+       intact**, using `-json` test-level `"Action":"pass"` on the non-`RecapMeeting`
+       stimulus path as the live oracle (`t.Skip` / unavailable prerequisites ->
+       redacted `BLOCKED`; executed `"Action":"fail"` -> failure).
+  * *Verification Commands*: Always-on synthetic + tagged-compile gates (`gofmt
+    -l internal/browser/audio.go internal/browser/meeting_chrome.go
+    internal/browser/audio_test.go internal/browser/meeting_integration_test.go`
+    empty, `go vet ./...`, `go vet "-tags=integration" ./internal/browser/...`,
+    `golangci-lint run`, `golangci-lint run "--build-tags=integration"
+    ./internal/browser/...`, `go test -race ./internal/browser/...
+    ./internal/audio/...`, `go test -race ./...`, and `go test
+    "-tags=integration" "-run=^$" ./internal/browser/...`) all exit `0`
+    independently of live availability; plus opt-in live `go test -json
+    "-tags=integration" "-run=^TestMeetingCaptureAudio$" ./internal/browser/...`
+    requiring named test `"Action":"pass"` on the non-`RecapMeeting` stimulus
+    path when live setup is available (`"Action":"skip"` / unavailable
+    prerequisites recorded as redacted `BLOCKED` with `audio.go` `VERIFY LIVE`
+    retained; executed `"Action":"fail"` stays failure).
 * **Depends on:** `010.003-T` (`blocks`).
 
 ### U6 (`010.006-T`, reconciled in place) — Write live-harness reproducibility runbook and closure evidence (`P-002` docs-only route)

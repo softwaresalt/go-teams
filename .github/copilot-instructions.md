@@ -106,6 +106,7 @@ tokens proportional to file size.
 * For long sessions, save memory checkpoints after completing each phase or major task group.
 * Content to capture: task IDs completed, files modified, decisions and rationale, failed approaches, open questions, and next steps.
 * File convention: `docs/memory/{YYYY-MM-DD}/{descriptive-slug}-memory.md`
+* Memory date folders (`docs/memory/{YYYY-MM-DD}/`) use the UTC date, and all recorded dates and times are UTC (`Z`); see `.github/instructions/output-timestamps.instructions.md`.
 * After writing memory, invoke the **compact-context** skill to consolidate stale checkpoints and finalize decided-plans. This is a mandatory workflow step, not advisory.
 * If context has grown from loading multiple skill definitions mid-session, consider invoking **compact-context** proactively before hitting hard thresholds.
 
@@ -118,17 +119,6 @@ tokens proportional to file size.
 | **Skill Discovery** | `scripts/search.ps1` / `scripts/search.sh` | Finding capabilities by keyword (Primitive 6) |
 
 ## Optional Capability Packs
-
-### agent-intercom
-
-When the workspace enabled the `agent-intercom` capability pack:
-
-* verify the intercom server / tool surface is reachable before depending on remote approval or operator steering
-* call heartbeat / ping at session start and keep it alive during long-running work
-* broadcast major workflow transitions so the operator can observe planning, build, review, verification, and closure progress
-* route destructive terminal commands and destructive file operations through the intercom approval workflow
-* use transmit / standby flows when blocked on operator clarification or when intentionally pausing for instructions
-* if the intercom service is unreachable, warn that remote visibility is degraded and avoid pretending approval or operator awareness exists
 
 ### agent-engram
 
@@ -152,9 +142,24 @@ When the workspace enabled the `backlogit` capability pack:
 * append significant task comments and associate commits with task IDs for execution traceability when those operations are available
 * if backlog content was edited outside the normal mutation flow, refresh the backlogit index before relying on query results
 
+### kbdb
+
+When the workspace enabled the `kbdb` capability pack:
+
+* follow `.github/instructions/kbdb.instructions.md`
+* verify the kbdb server / MCP surface is reachable and sources are indexed before depending on indexed documentation retrieval
+* prefer `search_local_docs`, `search_semantic`, and `research_topic` for conceptual, API-oriented, or documentation questions before broad web search or raw file scans
+* use `traverse_doc_links` to follow related documentation and `list_sources` to confirm indexed coverage
+* if the server is unavailable or sources are not indexed, fall back to grep, glob, or direct file reading and note reduced confidence
+* treat `.kbdb/` generated artifacts as tool-managed state rather than files to hand-edit casually
+
+## Core Workflow Protocols
+
+These protocols are part of the core harness and are always active; they are not capability packs. Each applies when its surface condition is met.
+
 ### browser-verification
 
-When the workspace enabled the `browser-verification` capability pack:
+When verifying browser-visible UI flows (core protocol):
 
 * verify the target server or preview environment is reachable before launching browser work
 * choose headed vs headless mode intentionally and record the reason
@@ -164,9 +169,9 @@ When the workspace enabled the `browser-verification` capability pack:
 
 ### continuous-learning
 
-When the workspace enabled the `continuous-learning` capability pack:
+When recurring practice is observed across sessions (core protocol):
 
-* store observation state under `.autoharness/continuous-learning/`
+* store observation state under `.gsd/continuous-learning/`
 * keep hook capture optional and environment-specific; manual capture is still valid
 * use `observe` to capture recurring workflow signals, `learn` to infer instincts, and `evolve` to promote mature patterns into `learned-*` artifacts
 * do not harden a rule into a learned instruction or skill until it has enough corroborating observations to justify the promotion
@@ -174,7 +179,7 @@ When the workspace enabled the `continuous-learning` capability pack:
 
 ### strict-safety
 
-When the workspace enabled the `strict-safety` capability pack:
+For elevated-risk or destructive work (core protocol):
 
 * follow `.github/instructions/strict-safety.instructions.md`
 * express risky work as `ProposedAction` entries with `ActionRisk` and `ActionResult`
@@ -183,7 +188,7 @@ When the workspace enabled the `strict-safety` capability pack:
 
 ### release-observability
 
-When the workspace enabled the `release-observability` capability pack:
+For runtime-affecting or deployment-sensitive release units (core protocol):
 
 * follow `.github/instructions/release-observability.instructions.md`
 * produce monitoring plans with SLIs, dashboards, baselines, and alert thresholds before merge
@@ -194,7 +199,7 @@ When the workspace enabled the `release-observability` capability pack:
 
 ### adversarial-review
 
-When the workspace enabled the `adversarial-review` capability pack:
+When a review surfaces 3+ P0/P1 findings or touches security-sensitive work (core protocol):
 
 * follow `.github/instructions/adversarial-review.instructions.md`
 * escalate from standard review when 3+ P0/P1 findings appear or the work is security-sensitive
@@ -203,28 +208,9 @@ When the workspace enabled the `adversarial-review` capability pack:
 * treat HIGH-confidence P0/P1 findings as gate-blocking
 * feed remediation queue entries into backlog
 
-### graphtor-docs
-
-When the workspace enabled the `graphtor-docs` capability pack:
-
-* follow `.github/instructions/graphtor-docs.instructions.md`
-* verify the graphtor-docs server / MCP surface is reachable and sources are indexed before depending on indexed documentation retrieval
-* prefer `search_local_docs`, `search_semantic`, and `research_topic` for conceptual, API-oriented, or documentation questions before broad web search or raw file scans
-* use `traverse_doc_links` to follow related documentation and `list_sources` to confirm indexed coverage
-* if the server is unavailable or sources are not indexed, fall back to grep, glob, or direct file reading and note reduced confidence
-* treat `.graphtor/` generated artifacts as tool-managed state rather than files to hand-edit casually
-
 ## Remote Operator Integration
 
-### agent-intercom
-
-When `agent-intercom` is available:
-
-* Call `ping` at the start of any multi-step session to confirm liveness.
-* Broadcast progress at meaningful phase transitions — do not broadcast every trivial step.
-* Route approval for destructive actions through the intercom approval workflow before executing.
-* If intercom becomes unreachable mid-task, warn that operator visibility is degraded and continue only with safe, non-destructive work.
-
+<!-- pack-scope:agent-engram:begin -->
 ### agent-engram
 
 When `agent-engram` is available:
@@ -232,6 +218,7 @@ When `agent-engram` is available:
 * Verify workspace binding before relying on indexed results.
 * If the workspace is not bound or indexed, run `sync_workspace` or the workspace's equivalent freshness operation before searching.
 * Fall back to grep, glob, or direct file reads only when indexed results are unavailable or insufficient.
+<!-- pack-scope:agent-engram:end -->
 
 ## Backlog Workflow Expectations
 
@@ -242,7 +229,18 @@ When a backlog tool is active in the workspace:
 * refresh the backlog index or query cache after out-of-band edits before trusting query results
 * avoid inventing parallel markdown trackers outside the configured backlog tool surface
 
-Generated by autoharness | Template: copilot-instructions.md.tmpl
+## Workspace-Local `.bin/` Tools and `.gsd/` Runtime Compatibility
+
+Provision GSD and every enabled external tool under the repository-root
+`.bin/` directory (`.bin/gsd` or `.bin/gsd.exe`, the `gsd-assets*.zip` bundle,
+and executables such as backlogit, Engram, kbdb, and Bun). Invoke them by an
+explicit workspace-relative path. Current GSD compatibility commands may also
+mirror a runtime and `runtime-manifest.json` under `.gsd/`; treat that mirror as
+runtime compatibility state, never as the preferred tool installation location
+or as permission to use a shared user-home engine. The bundle is read directly
+without unpacking `templates/` or `schemas/` into the repository.
+
+Generated by gsd | Template: copilot-instructions.md.tmpl
 
 <!-- engram:start -->
 ## Engram Agent Memory — GitHub Copilot Integration

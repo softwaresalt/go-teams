@@ -56,7 +56,7 @@ jobs:
               - '!**/*.md'
               - '!docs/**'
               - '!.backlogit/**'
-              - '!.autoharness/**'
+              - '!.gsd/**'
       - name: Secret hygiene check (tracked files)
         # Runs unconditionally (never gated on steps.filter.outputs.code) so
         # docs/backlog-only changes are still scanned. Scans every git-tracked

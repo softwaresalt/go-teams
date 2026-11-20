@@ -9,7 +9,7 @@
 # *.md is pinned to LF because the harness manifest records a SHA-256 of each
 # installed artifact's on-disk bytes. Leaving Markdown on `text=auto` makes
 # those checksums platform-dependent: they would be computed over CRLF on
-# Windows and never reproduce on a Linux/CI checkout, so `autoharness
+# Windows and never reproduce on a Linux/CI checkout, so `gsd
 # verify-workspace` would report spurious drift for every agent artifact.
 #
 # Committed blobs are already LF, so these rules change the working tree only —

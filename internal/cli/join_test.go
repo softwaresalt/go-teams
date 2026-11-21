@@ -153,6 +153,125 @@ func TestOverwriteFlagAndConfigPrecedenceAndQueueInheritance(t *testing.T) {
 	})
 }
 
+func TestCaptureFlagsAndQueueForwardNoAISummary(t *testing.T) {
+	t.Run("apply-flag-true", func(t *testing.T) {
+		var f captureFlags
+		cmd := &cobra.Command{Use: "join"}
+		bindCaptureFlags(cmd, &f)
+		require.NoError(t, cmd.Flags().Parse([]string{"--no-ai-summary"}))
+
+		cfg := config.Config{AISummaryDelay: "30m"}
+		applyCaptureFlags(cmd, &cfg, f)
+		assert.True(t, cfg.NoAISummary)
+		assert.Equal(t, "0s", cfg.AISummaryDelay)
+	})
+
+	t.Run("apply-flag-false", func(t *testing.T) {
+		var f captureFlags
+		cmd := &cobra.Command{Use: "join"}
+		bindCaptureFlags(cmd, &f)
+		require.NoError(t, cmd.Flags().Parse([]string{"--no-ai-summary=false"}))
+
+		cfg := config.Config{AISummaryDelay: "30m", NoAISummary: true}
+		applyCaptureFlags(cmd, &cfg, f)
+		assert.False(t, cfg.NoAISummary)
+		assert.Equal(t, "30m", cfg.AISummaryDelay)
+	})
+
+	t.Run("apply-delay-zero", func(t *testing.T) {
+		var f captureFlags
+		cmd := &cobra.Command{Use: "join"}
+		bindCaptureFlags(cmd, &f)
+		require.NoError(t, cmd.Flags().Parse([]string{"--ai-summary-delay=0s"}))
+
+		cfg := config.Config{AISummaryDelay: "30m"}
+		applyCaptureFlags(cmd, &cfg, f)
+		assert.False(t, cfg.NoAISummary)
+		assert.Equal(t, "0s", cfg.AISummaryDelay)
+	})
+
+	t.Run("config-delay-zero-is-not-explicit-disable-characterization", func(t *testing.T) {
+		var f captureFlags
+		cmd := &cobra.Command{Use: "join"}
+		bindCaptureFlags(cmd, &f)
+		cfg := config.Config{AISummaryDelay: "0s"}
+
+		applyCaptureFlags(cmd, &cfg, f)
+		assert.False(t, cfg.NoAISummary)
+		assert.Equal(t, "0s", cfg.AISummaryDelay)
+	})
+
+	t.Run("nil-command-preserves-config-and-does-not-forward-flags", func(t *testing.T) {
+		cfg := config.Config{AISummaryDelay: "30m", NoAISummary: true}
+
+		assert.NotPanics(t, func() {
+			applyCaptureFlags(nil, &cfg, captureFlags{})
+		})
+		assert.True(t, cfg.NoAISummary)
+		assert.Equal(t, "30m", cfg.AISummaryDelay)
+		assert.Empty(t, inheritedQueueFlags(nil, "", captureFlags{}))
+	})
+
+	for _, tc := range []struct {
+		name         string
+		flag         string
+		perLineFlag  string
+		want         string
+		wantResolved bool
+	}{
+		{
+			name:         "queue-flag-true",
+			flag:         "--no-ai-summary",
+			perLineFlag:  "--no-ai-summary=false",
+			want:         "--no-ai-summary",
+			wantResolved: false,
+		},
+		{
+			name:         "queue-flag-false",
+			flag:         "--no-ai-summary=false",
+			perLineFlag:  "--no-ai-summary",
+			want:         "--no-ai-summary=false",
+			wantResolved: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var f captureFlags
+			cmd := &cobra.Command{Use: "join"}
+			bindCaptureFlags(cmd, &f)
+			require.NoError(t, cmd.Flags().Parse([]string{tc.flag}))
+
+			inherited := inheritedQueueFlags(cmd, "", f)
+			assert.Equal(t, []string{tc.want}, inherited)
+
+			var lineFlags captureFlags
+			lineCmd := &cobra.Command{Use: "join"}
+			bindCaptureFlags(lineCmd, &lineFlags)
+			require.NoError(t, lineCmd.Flags().Parse(append(inherited, tc.perLineFlag)))
+			cfg := config.Config{}
+			applyCaptureFlags(lineCmd, &cfg, lineFlags)
+			assert.Equal(t, tc.wantResolved, cfg.NoAISummary)
+		})
+	}
+
+	t.Run("shared-help", func(t *testing.T) {
+		help := captureHelpBody()
+		assert.Contains(t, help,
+			"--no-ai-summary    Disable AI Summary capture for both Meeting Recaps and delayed post-call enrichment.",
+		)
+	})
+
+	t.Run("flag-help", func(t *testing.T) {
+		var f captureFlags
+		cmd := &cobra.Command{Use: "join"}
+		bindCaptureFlags(cmd, &f)
+		usage := cmd.Flags().Lookup("no-ai-summary").Usage
+		assert.Equal(t,
+			"disable AI Summary capture for both Meeting Recaps and delayed post-call enrichment",
+			usage,
+		)
+	})
+}
+
 type fakeCLIOverwriteMeeting struct{}
 
 func (fakeCLIOverwriteMeeting) Join(context.Context) error { return nil }

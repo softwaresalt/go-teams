@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1426,19 +1427,7 @@ let maxRecapAudioSourceBytes = 0;
 }
 
 func TestWave2ARecapAudioEarlyMountPlayAndBlockedSkip(t *testing.T) {
-	const playbackMarker = "036.001-T:early-mount-playback"
-	const blockedMarker = "036.001-T:blocked-non-blob-skip"
-
-	redMarkers := []string{playbackMarker, blockedMarker}
-	seenMarkers := make(map[string]struct{}, len(redMarkers))
-	for _, marker := range redMarkers {
-		if _, exists := seenMarkers[marker]; exists {
-			t.Fatalf("RED marker is not pairwise unique: %s", marker)
-		}
-		seenMarkers[marker] = struct{}{}
-	}
-
-	runProbe := func(t *testing.T, probeJS, redMarker string) {
+	runProbe := func(t *testing.T, probeJS string) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -1448,9 +1437,6 @@ func TestWave2ARecapAudioEarlyMountPlayAndBlockedSkip(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			return
-		}
-		if redMarker != "" && !strings.Contains(string(out), redMarker) {
-			t.Fatalf("probe failed for a reason other than its production RED marker %q: %v\n%s", redMarker, err, out)
 		}
 		t.Fatalf("recap audio probe failed: %v\n%s", err, out)
 	}
@@ -1544,7 +1530,9 @@ globalThis.document = {
     failure = e;
   }
   const message = String((failure && failure.message) || failure || '');
-  if (message.includes('036.001-T:early-mount-playback')) throw failure;
+  if (!message.includes('isDownloadBlocked=true')) {
+    throw new Error('expected blocked-download termination after playback probes, got: ' + message);
+  }
   if (JSON.stringify(clickTimes) !== JSON.stringify([baseNow, baseNow + 1000, baseNow + 2000])) {
     throw new Error('expected Play video clicks at 0/1000/2000ms, got ' + JSON.stringify(clickTimes));
   }
@@ -1563,7 +1551,7 @@ globalThis.document = {
   process.exitCode = 1;
 });
 `
-		runProbe(t, probeJS, playbackMarker)
+		runProbe(t, probeJS)
 	})
 
 	t.Run("path-a-failure-does-not-replay-current-video", func(t *testing.T) {
@@ -1666,7 +1654,7 @@ globalThis.document = {
   process.exitCode = 1;
 });
 `
-		runProbe(t, probeJS, "")
+		runProbe(t, probeJS)
 	})
 
 	t.Run("unverified-player-does-not-click-play-or-fetch", func(t *testing.T) {
@@ -1751,7 +1739,7 @@ globalThis.document = {
   process.exitCode = 1;
 });
 `
-		runProbe(t, probeJS, "")
+		runProbe(t, probeJS)
 	})
 
 	t.Run("late-arriving-file-info-unlocks-periodic-playback", func(t *testing.T) {
@@ -1840,7 +1828,7 @@ globalThis.document = {
   process.exitCode = 1;
 });
 `
-		runProbe(t, probeJS, "")
+		runProbe(t, probeJS)
 	})
 
 	t.Run("blocked-non-blob-candidates-skip-fetch", func(t *testing.T) {
@@ -1893,7 +1881,6 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
     failure = e;
   }
   const message = String((failure && failure.message) || failure || '');
-  if (message.includes('036.001-T:blocked-non-blob-skip')) throw failure;
   if (!message.includes('isDownloadBlocked=true')) {
     throw new Error('expected blocked-download error after identity and duration guards, got: ' + message);
   }
@@ -1906,7 +1893,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
   process.exitCode = 1;
 });
 `
-		runProbe(t, probeJS, blockedMarker)
+		runProbe(t, probeJS)
 	})
 
 	t.Run("blocked-conflicting-candidate-identity-still-rejected", func(t *testing.T) {
@@ -1953,7 +1940,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
   process.exitCode = 1;
 });
 `
-		runProbe(t, probeJS, "")
+		runProbe(t, probeJS)
 	})
 }
 
@@ -5186,6 +5173,397 @@ process.stdout.write(eval(fs.readFileSync(0, 'utf8')));
 		mVroom := extractFromTarget(t, vroomJSON)
 		assert.Equal(t, "01VALIDDRIVEITEMID", mVroom.recapItemID, "VroomItemId must populate m.recapItemID")
 	})
+}
+
+func TestWave2AIdentitySinglePassAndCopilotGuard(t *testing.T) {
+	identityCases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "relative-literal-percent20", value: "Recordings/foo%20bar.mp4?web=1", want: "foo%20bar.mp4"},
+		{name: "server-relative-literal-percent-space", value: "/Recordings/100% Sync.mp4?web=1", want: "100% sync.mp4"},
+		{name: "server-relative-literal-hash", value: "/Recordings/Q4 #1.mp4?web=1", want: "q4 #1.mp4"},
+		{name: "scheme-bearing-single-decode", value: "https://example.invalid/Recordings/foo%20bar.mp4?web=1", want: "foo bar.mp4"},
+		{name: "scheme-bearing-single-pass-literal-percent20", value: "https://example.invalid/Recordings/foo%2520bar.mp4?web=1", want: "foo%20bar.mp4"},
+		{name: "protocol-relative-single-decode", value: "//example.invalid/Recordings/foo%20bar.mp4?web=1", want: "foo bar.mp4"},
+		{name: "protocol-relative-single-pass-literal-percent20", value: "//example.invalid/Recordings/foo%2520bar.mp4?web=1", want: "foo%20bar.mp4"},
+		{name: "scheme-bearing-encoded-slash", value: "https://example.invalid/Recordings%2FSync.mp4?web=1", want: "sync.mp4"},
+		{name: "scheme-bearing-encoded-dot", value: "https://example.invalid/Recordings/Sync%2Emp4?web=1", want: "sync.mp4"},
+		{name: "scheme-bearing-double-encoded-delimiters", value: "https://example.invalid/Recordings%252FSync%252Emp4?web=1", want: ""},
+		{name: "trailing-slash", value: "/Recordings/Sync.mp4/?web=1", want: ""},
+		{name: "scheme-bearing-trailing-slash", value: "https://example.invalid/Recordings/Sync.mp4/?web=1", want: ""},
+		{name: "scheme-bearing-encoded-trailing-slash", value: "https://example.invalid/Recordings/Sync.mp4%2F?web=1", want: ""},
+		{name: "trailing-whitespace", value: "/Recordings/Sync.mp4   ", want: "sync.mp4"},
+	}
+	for _, queryKey := range []struct {
+		name string
+		key  string
+	}{
+		{name: "fileUrl", key: "FILEURL"},
+		{name: "id", key: "ID"},
+	} {
+		for _, tc := range identityCases {
+			caseID := "identity-" + queryKey.name + "-" + tc.name
+			t.Run(caseID, func(t *testing.T) {
+				rawURL := "https://contoso.sharepoint.com/stream.aspx?goTeamsWave2AHarnessCase=" +
+					url.QueryEscape(caseID) + "&" + queryKey.key + "=" + url.QueryEscape(tc.value)
+				assert.Equal(t, tc.want, ExtractMeetingIdentity(rawURL).RecordingName)
+				expectedName := tc.want
+				if expectedName == "" {
+					expectedName = "sync.mp4"
+				}
+				runWave2AIdentityJSProbe(t, rawURL, map[string]string{"RecordingName": expectedName}, tc.want != "", false)
+			})
+
+		}
+	}
+
+	t.Run("direct-media-paths", func(t *testing.T) {
+		tests := []struct {
+			name string
+			raw  string
+			want string
+		}{
+			{name: "encoded delimiters", raw: "https://example.invalid/media%2FSync%2Emp4?sig=1", want: "sync.mp4"},
+			{name: "double encoded delimiters", raw: "https://example.invalid/media%252FSync%252Emp4?sig=1", want: ""},
+			{name: "trailing slash", raw: "https://example.invalid/media/Sync%2Emp4%2F?sig=1", want: ""},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.want, recapAudioIdentity(tc.raw).RecordingName)
+				runWave2AIdentityJSProbe(
+					t,
+					tc.raw,
+					map[string]string{"RecordingName": "sync.mp4"},
+					tc.want != "",
+					false,
+				)
+			})
+		}
+	})
+
+	t.Run("identity-drive-item-case-insensitive", func(t *testing.T) {
+		const caseID = "identity-drive-item-case-insensitive"
+		rawURL := "https://contoso.sharepoint.com/stream.aspx?goTeamsWave2AHarnessCase=" +
+			url.QueryEscape(caseID) + "&DrIvEiTeMiD=01DRIVEITEM"
+		assert.Equal(t, "01driveitem", ExtractMeetingIdentity(rawURL).DriveItemID)
+		runWave2AIdentityJSProbe(t, rawURL, map[string]string{"DriveItemID": "01driveitem"}, true, false)
+	})
+
+	t.Run("identity-duplicate-recording-parameters", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			query      string
+			wantName   string
+			wantReject bool
+		}{
+			{name: "same value across case variants", query: "fileUrl=%2FRecordings%2FSync.mp4&FILEURL=%2FRecordings%2FSync.mp4", wantName: "sync.mp4"},
+			{name: "conflicting case variants", query: "fileUrl=%2FRecordings%2FSync.mp4&FILEURL=%2FRecordings%2FOther.mp4", wantReject: true},
+			{name: "id cannot mask conflicting fileUrl variants", query: "fileUrl=%2FRecordings%2FSync.mp4&FILEURL=%2FRecordings%2FOther.mp4&id=%2FRecordings%2FSync.mp4", wantReject: true},
+			{name: "conflicting fileUrl and id", query: "fileUrl=%2FRecordings%2FSync.mp4&id=%2FRecordings%2FOther.mp4", wantReject: true},
+			{name: "same value across parameter names", query: "id=%2FRecordings%2FSync.mp4&fileUrl=%2FRecordings%2FSync.mp4", wantName: "sync.mp4"},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				rawURL := "https://contoso.sharepoint.com/stream.aspx?" + tc.query
+				assert.Equal(t, tc.wantName, ExtractMeetingIdentity(rawURL).RecordingName)
+				runWave2AIdentityJSProbe(t, rawURL, map[string]string{"RecordingName": "sync.mp4"}, !tc.wantReject, tc.wantReject)
+			})
+		}
+	})
+
+	copyCases := []struct {
+		name   string
+		caseID string
+		probe  string
+	}{
+		{
+			name:   "copilot-uncontained-copy",
+			caseID: "copilot-uncontained-copy",
+			probe: `
+const validMsg = { dataset: {}, querySelector: () => ({ innerText: 'Fresh contained summary.' }) };
+const validBtn = { closest: sel => sel === '.fai-CopilotMessage' ? validMsg : null };
+const uncontainedBtn = { closest: () => null };
+globalThis.document = {
+  documentElement: { dataset: { goTeamsWave2AHarnessCase: 'copilot-uncontained-copy', goTeamsStreamRecapTriggered: 'true' } },
+  querySelector: sel => sel === 'button[aria-label="Close Copilot"]' ? {} : null,
+  querySelectorAll: sel => sel.includes('.fai-CopilotMessage__actions') ? [validBtn, uncontainedBtn] : [],
+  addEventListener: () => {},
+  removeEventListener: () => {}
+};
+const summary = await eval(copyJS);
+if (summary !== 'Fresh contained summary.') throw new Error('expected contained Copy button, got: ' + JSON.stringify(summary));
+`,
+		},
+		{
+			name:   "copilot-user-bubble-copy",
+			caseID: "copilot-user-bubble-copy",
+			probe: `
+const validMsg = { dataset: {}, querySelector: () => ({ innerText: 'Fresh assistant summary.' }) };
+const userMsg = { dataset: {}, querySelector: () => ({ innerText: 'User prompt bubble.' }) };
+const validBtn = { closest: sel => sel === '.fai-CopilotMessage' ? validMsg : null };
+const userBtn = {
+  closest: sel => {
+    if (sel === '.fai-CopilotMessage') return userMsg;
+    if (sel.includes('ChatMyMessage')) return {};
+    return null;
+  }
+};
+globalThis.document = {
+  documentElement: { dataset: { goTeamsWave2AHarnessCase: 'copilot-user-bubble-copy', goTeamsStreamRecapTriggered: 'true' } },
+  querySelector: sel => sel === 'button[aria-label="Close Copilot"]' ? {} : null,
+  querySelectorAll: sel => sel.includes('.fai-CopilotMessage__actions') ? [validBtn, userBtn] : [],
+  addEventListener: () => {},
+  removeEventListener: () => {}
+};
+const summary = await eval(copyJS);
+if (summary !== 'Fresh assistant summary.') throw new Error('expected assistant summary instead of user bubble, got: ' + JSON.stringify(summary));
+`,
+		},
+		{
+			name:   "copilot-transcript-recap-prompt",
+			caseID: "copilot-transcript-recap-prompt",
+			probe: `
+let transcriptClicks = 0;
+let promptClicks = 0;
+const transcriptPrompt = {
+  dataset: {},
+  innerText: 'Recap the meeting',
+  closest: sel => sel.includes('ms-List') || sel.includes('transcript') ? {} : null,
+  click: () => { transcriptClicks++; }
+};
+const validPrompt = {
+  dataset: {},
+  innerText: 'Recap the meeting',
+  closest: () => null,
+  click: () => { promptClicks++; }
+};
+globalThis.document = {
+  documentElement: { dataset: { goTeamsWave2AHarnessCase: 'copilot-transcript-recap-prompt' } },
+  querySelector: sel => sel === 'button[aria-label="Close Copilot"]' ? {} : null,
+  querySelectorAll: sel => sel.includes('PromptStarter') ? [transcriptPrompt, validPrompt] : [],
+  addEventListener: () => {},
+  removeEventListener: () => {}
+};
+const summary = await eval(copyJS);
+if (summary !== '' || transcriptClicks !== 0 || promptClicks !== 1) {
+  throw new Error('expected transcript prompt ignored: ' + JSON.stringify({ summary, transcriptClicks, promptClicks }));
+}
+`,
+		},
+		{
+			name:   "copilot-preexisting-until-fresh",
+			caseID: "copilot-preexisting-until-fresh",
+			probe: `
+let fresh = false;
+let promptClicks = 0;
+const preexistingMsg = { dataset: {}, querySelector: () => ({ innerText: 'Stale summary.' }) };
+const freshMsg = { dataset: {}, querySelector: () => ({ innerText: 'Fresh post-click summary.' }) };
+const preexistingBtn = { closest: sel => sel === '.fai-CopilotMessage' ? preexistingMsg : null };
+const freshBtn = { closest: sel => sel === '.fai-CopilotMessage' ? freshMsg : null };
+const prompt = { dataset: {}, innerText: 'Recap the meeting', closest: () => null, click: () => { promptClicks++; } };
+const root = { dataset: { goTeamsWave2AHarnessCase: 'copilot-preexisting-until-fresh' } };
+globalThis.document = {
+  documentElement: root,
+  querySelector: sel => sel === 'button[aria-label="Close Copilot"]' ? {} : null,
+  querySelectorAll: sel => {
+    if (sel.includes('PromptStarter')) return [prompt];
+    if (sel === '.fai-CopilotMessage') return fresh ? [preexistingMsg, freshMsg] : [preexistingMsg];
+    if (sel.includes('.fai-CopilotMessage__actions')) return fresh ? [preexistingBtn, freshBtn] : [preexistingBtn];
+    return [];
+  },
+  addEventListener: () => {},
+  removeEventListener: () => {}
+};
+if (await eval(copyJS) !== '') throw new Error('expected empty result while triggering recap');
+if (preexistingMsg.dataset.goTeamsPreexisting !== 'true') throw new Error('preexisting Copilot message was not marked');
+if (await eval(copyJS) !== '') throw new Error('expected stale summary suppressed before fresh message renders');
+fresh = true;
+const summary = await eval(copyJS);
+if (summary !== 'Fresh post-click summary.' || promptClicks !== 1) {
+  throw new Error('expected fresh post-click summary: ' + JSON.stringify({ summary, promptClicks }));
+}
+`,
+		},
+	}
+	for _, tc := range copyCases {
+		t.Run(tc.name, func(t *testing.T) {
+			runWave2ACopyAISummaryJSProbe(t, tc.caseID, tc.probe)
+		})
+	}
+}
+
+func TestWave2ACanonicalStreamTargetMatchCharacterization(t *testing.T) {
+	t.Run("canonical-stream-target-match", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			meetingURL string
+			pageURL    string
+			want       bool
+		}{
+			{
+				name:       "uppercase ID",
+				meetingURL: "https://contoso.sharepoint.com/stream.aspx?ID=opaque-1",
+				pageURL:    "https://contoso.sharepoint.com/stream.aspx?id=opaque-1",
+				want:       true,
+			},
+			{
+				name:       "lowercase uniqueId",
+				meetingURL: "https://contoso.sharepoint.com/streamembed.aspx?uniqueId=ABC-1",
+				pageURL:    "https://contoso.sharepoint.com/streamembed.aspx?UNIQUEID=abc-1",
+				want:       true,
+			},
+			{
+				name:       "mixed DriveId and DRIVEID",
+				meetingURL: "https://contoso.sharepoint.com/stream.aspx?DriveId=DRIVE-1",
+				pageURL:    "https://contoso.sharepoint.com/stream.aspx?DRIVEID=drive-1",
+				want:       true,
+			},
+			{
+				name:       "ambiguous duplicate case variants",
+				meetingURL: "https://contoso.sharepoint.com/stream.aspx?uniqueId=a&UniqueId=b",
+				pageURL:    "https://contoso.sharepoint.com/stream.aspx?uniqueId=a",
+				want:       false,
+			},
+			{
+				name:       "missing page target parameter",
+				meetingURL: "https://contoso.sharepoint.com/stream.aspx?driveId=drive-1",
+				pageURL:    "https://contoso.sharepoint.com/stream.aspx?ga=1",
+				want:       false,
+			},
+			{
+				name:       "both missing canonical target parameters",
+				meetingURL: "https://contoso.sharepoint.com/stream.aspx?ga=1",
+				pageURL:    "https://contoso.sharepoint.com/stream.aspx?referrer=web",
+				want:       true,
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.want, canonicalStreamTargetMatch(tc.meetingURL, tc.pageURL))
+			})
+		}
+	})
+
+	t.Run("recap-item-id", func(t *testing.T) {
+		const driveItemID = "01VALIDDRIVEITEMID"
+		assert.True(t, recapItemIDRe.MatchString(driveItemID))
+		assert.False(t, recapItemIDRe.MatchString("invalid/drive/item"))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := exec.LookPath("node")
+		require.NoError(t, err, "node is required for recapItemID characterization")
+		probeJS := `
+const fs = require('fs');
+globalThis.window = globalThis;
+globalThis.location = { href: 'https://contoso-my.sharepoint.com/_layouts/15/xplatplugins.aspx' };
+globalThis.g_fileInfo = JSON.parse(process.env.FILE_INFO);
+const listEl = { __reactFiber$test: { memoizedProps: { items: [
+  { speakerDisplayName: 'Alice', timestamp: 'PT0M5S', text: 'Hello', type: 'Text' }
+] } } };
+globalThis.document = { querySelector: sel => sel === '.ms-List' ? listEl : null, querySelectorAll: () => [] };
+process.stdout.write(eval(fs.readFileSync(0, 'utf8')));
+`
+		for _, tc := range []struct {
+			name        string
+			fileInfo    string
+			wantItem    string
+			wantDriveID string
+		}{
+			{name: "generic id does not become drive item id", fileInfo: `{"id":"generic-id","docId":"doc-id"}`, wantItem: "generic-id", wantDriveID: ""},
+			{name: "VroomItemId becomes drive item id", fileInfo: `{"id":"generic-id","VroomItemId":"01VALIDDRIVEITEMID"}`, wantItem: "01VALIDDRIVEITEMID", wantDriveID: "01VALIDDRIVEITEMID"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+				cmd.Env = append(os.Environ(), "FILE_INFO="+tc.fileInfo)
+				cmd.Stdin = strings.NewReader(extractRecapTranscriptJS)
+				output, runErr := cmd.CombinedOutput()
+				require.NoError(t, runErr, "recapItemID characterization probe failed: %s", output)
+				var payload rawRecapPayload
+				require.NoError(t, json.Unmarshal(output, &payload))
+				assert.Equal(t, tc.wantItem, payload.ItemID)
+				assert.Equal(t, tc.wantDriveID, payload.DriveItemID)
+			})
+		}
+	})
+}
+
+func runWave2AIdentityJSProbe(t *testing.T, rawURL string, expectedIdentity map[string]string, wantMatched, wantRejected bool) {
+	t.Helper()
+	_, err := exec.LookPath("node")
+	require.NoError(t, err, "node is required for JavaScript identity parity")
+	start := strings.Index(extractRecapAudioJS, "function matchField")
+	end := strings.Index(extractRecapAudioJS, "const playBtnSelector")
+	require.GreaterOrEqual(t, start, 0)
+	require.Greater(t, end, start)
+	identityJS := extractRecapAudioJS[start:end]
+	expectedJSON, err := json.Marshal(expectedIdentity)
+	require.NoError(t, err)
+	rawURLJSON, err := json.Marshal(rawURL)
+	require.NoError(t, err)
+	probeJS := `
+const expected = ` + string(expectedJSON) + `;
+` + identityJS + `
+const state = { matched: false };
+checkIdentityAgainst(` + string(rawURLJSON) + `, 'https://contoso.sharepoint.com/', state);
+process.stdout.write(JSON.stringify({ matched: state.matched }));
+`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+	output, err := cmd.CombinedOutput()
+	if wantRejected {
+		require.Error(t, err, "JavaScript identity rejection probe unexpectedly succeeded: %s", output)
+		assert.Contains(t, string(output), "recap audio recording identity mismatch")
+		return
+	}
+	require.NoError(t, err, "JavaScript identity parity probe failed: %s", output)
+	var result struct {
+		Matched bool `json:"matched"`
+	}
+	require.NoError(t, json.Unmarshal(output, &result))
+	assert.Equal(t, wantMatched, result.Matched, "JavaScript identity match for %s", rawURL)
+}
+
+func runWave2ACopyAISummaryJSProbe(t *testing.T, caseID, scenario string) {
+	t.Helper()
+	_, err := exec.LookPath("node")
+	require.NoError(t, err, "node is required for Copilot guard probes")
+	probeJS := `
+const fs = require('fs');
+const copyJS = fs.readFileSync(0, 'utf8');
+const origSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+  return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+};
+let testCompleted = false;
+process.on('beforeExit', () => {
+  if (!testCompleted) process.exit(1);
+});
+globalThis.window = globalThis;
+globalThis.location = {
+  href: 'https://contoso.sharepoint.com/personal/u/_layouts/15/stream.aspx?id=recording',
+  pathname: '/personal/u/_layouts/15/stream.aspx',
+  hostname: 'contoso.sharepoint.com'
+};
+globalThis.navigator = {};
+(async () => {
+` + scenario + `
+  testCompleted = true;
+})().catch(e => {
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exitCode = 1;
+});
+`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+	cmd.Stdin = strings.NewReader(copyAISummaryJS)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "Copilot guard %s failed: %s", caseID, output)
 }
 
 func TestSharePointStreamAspxAudioTranscriptAISummaryAndIdentity(t *testing.T) {

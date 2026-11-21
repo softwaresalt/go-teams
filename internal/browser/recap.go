@@ -87,6 +87,9 @@ const extractRecapAudioJS = `(async () => {
 			return String(s || '');
 		}
 	}
+	function decodeURLPathDelimiters(s) {
+		return String(s || '').replace(/%2f/ig, '/').replace(/%2e/ig, '.');
+	}
 	function checkIdentityAgainst(raw, baseUrl, state) {
 		if (!raw) return;
 		let u;
@@ -95,30 +98,32 @@ const extractRecapAudioJS = `(async () => {
 		const hashQuery = u.hash.indexOf('?');
 		if (hashQuery >= 0) queries.push(new URLSearchParams(u.hash.slice(hashQuery + 1)));
 		for (const params of queries) {
-			for (const [key, field] of [['threadId','ThreadID'], ['driveItemId','DriveItemID'], ['driveId','DriveID'], ['callId','CallID'], ['iCalUid','ICalUID']]) {
-				for (const value of params.getAll(key)) matchField(field, value, field !== 'DriveID', state);
-			}
-			for (const paramKey of ['fileUrl', 'id']) {
-				for (const value of params.getAll(paramKey)) {
-					if (paramKey === 'id' && !/\.(mp4|mkv|webm|mov|m4a)(?:$|[?#])/i.test(String(value || ''))) continue;
-					let filePath = '';
-					let alreadyDecoded = false;
-					if (paramKey === 'id' && !/^https?:\/\//i.test(value)) {
-						filePath = String(value || '');
-						alreadyDecoded = true;
-					} else {
-						try {
-							filePath = new URL(value, baseUrl).pathname;
-						} catch (_) {
-							if (paramKey === 'fileUrl') throw new Error('recap audio recording identity mismatch');
-							continue;
-						}
+			for (const [rawKey, rawValue] of params.entries()) {
+				const paramKey = String(rawKey || '').toLowerCase();
+				const rawVal = String(rawValue || '').trim();
+				if (!rawVal) continue;
+				for (const [key, field] of [['threadid','ThreadID'], ['driveitemid','DriveItemID'], ['driveid','DriveID'], ['callid','CallID'], ['icaluid','ICalUID']]) {
+					if (paramKey === key) matchField(field, rawVal, field !== 'DriveID', state);
+				}
+				if (paramKey !== 'fileurl' && paramKey !== 'id') continue;
+				let filePath = '';
+				let alreadyDecoded = false;
+				if (!/^[a-z][a-z0-9+.-]*:/i.test(rawVal) && !rawVal.startsWith('//') && !rawVal.startsWith(':')) {
+					const qIdx = rawVal.indexOf('?');
+					filePath = qIdx >= 0 ? rawVal.slice(0, qIdx) : rawVal;
+					alreadyDecoded = true;
+				} else {
+					try {
+						filePath = decodeURLPathDelimiters(new URL(rawVal, baseUrl).pathname);
+					} catch (_) {
+						if (paramKey === 'fileurl') throw new Error('recap audio recording identity mismatch');
+						continue;
 					}
-					if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
-						const rawName = filePath.split('/').pop();
-						const recName = alreadyDecoded ? rawName : safeDecodeURIComponent(rawName);
-						matchField('RecordingName', recName, true, state);
-					}
+				}
+				if (!filePath.endsWith('/') && !filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
+					const rawName = filePath.split('/').pop();
+					const recName = alreadyDecoded ? rawName : safeDecodeURIComponent(rawName);
+					matchField('RecordingName', recName, true, state);
 				}
 			}
 		}
@@ -127,7 +132,10 @@ const extractRecapAudioJS = `(async () => {
 		if (token) matchField('MeetingToken', token[0], true, state);
 		const meet = decoded.match(/\/meet\/([a-z0-9_-]+)/i);
 		if (meet) matchField('MeetID', meet[1], true, state);
-		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', safeDecodeURIComponent(u.pathname.split('/').pop()), true, state);
+		const directPath = decodeURLPathDelimiters(u.pathname);
+		if (!directPath.endsWith('/') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(directPath)) {
+			matchField('RecordingName', safeDecodeURIComponent(directPath.split('/').pop()), true, state);
+		}
 	}
 	const playBtnSelector = 'button[aria-label="Play video"], button[title="Play video"], button[data-automationid="playButton"], button[aria-label="Play"], [role="menuitem"][aria-label="Play"], .vjs-big-play-button, [role="button"][aria-label="Play video"]';
 	function validateFrameContext(win, doc) {
@@ -2435,10 +2443,11 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 }
 
 var (
-	isoDurationRe  = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$`)
-	colonTimeRe    = regexp.MustCompile(`^(?:(\d+):)?(\d{1,2}):(\d{2})$`)
-	meetingTokenRe = regexp.MustCompile(`(?i)meeting_[A-Za-z0-9_-]+`)
-	meetSegmentRe  = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
+	isoDurationRe       = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$`)
+	colonTimeRe         = regexp.MustCompile(`^(?:(\d+):)?(\d{1,2}):(\d{2})$`)
+	meetingTokenRe      = regexp.MustCompile(`(?i)meeting_[A-Za-z0-9_-]+`)
+	meetSegmentRe       = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
+	recapSchemePrefixRe = regexp.MustCompile(`(?i)^[A-Za-z][A-Za-z0-9+.-]*:`)
 )
 
 // MeetingIdentity holds the unique meeting and recording identifiers parsed
@@ -2467,11 +2476,12 @@ func ExtractMeetingIdentity(rawURL string) MeetingIdentity {
 	}
 	u, err := url.Parse(trimmed)
 	if err == nil {
-		applyQueryIdentity(&id, u.Query())
+		recordingNameConflict := false
+		applyQueryIdentity(&id, u.Query(), &recordingNameConflict)
 		if u.Fragment != "" {
 			if idx := strings.Index(u.Fragment, "?"); idx >= 0 {
 				if fragVals, fErr := url.ParseQuery(u.Fragment[idx+1:]); fErr == nil {
-					applyQueryIdentity(&id, fragVals)
+					applyQueryIdentity(&id, fragVals, &recordingNameConflict)
 				}
 			}
 		}
@@ -2493,41 +2503,72 @@ func ExtractMeetingIdentity(rawURL string) MeetingIdentity {
 	return id
 }
 
-func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
-	if v := strings.TrimSpace(vals.Get("threadId")); v != "" && id.ThreadID == "" {
+func applyQueryIdentity(id *MeetingIdentity, vals url.Values, recordingNameConflict *bool) {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "threadId", false); present && !ambiguous && id.ThreadID == "" {
 		id.ThreadID = strings.ToLower(v)
 		if tok := meetingTokenRe.FindString(v); tok != "" && id.MeetingToken == "" {
 			id.MeetingToken = strings.ToLower(tok)
 		}
 	}
-	if v := strings.TrimSpace(vals.Get("driveItemId")); v != "" && id.DriveItemID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "driveItemId", false); present && !ambiguous && id.DriveItemID == "" {
 		id.DriveItemID = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(vals.Get("driveId")); v != "" && id.DriveID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "driveId", false); present && !ambiguous && id.DriveID == "" {
 		id.DriveID = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(vals.Get("callId")); v != "" && id.CallID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "callId", false); present && !ambiguous && id.CallID == "" {
 		id.CallID = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(vals.Get("iCalUid")); v != "" && id.ICalUID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "iCalUid", false); present && !ambiguous && id.ICalUID == "" {
 		id.ICalUID = strings.ToLower(v)
 	}
 	for _, key := range []string{"fileUrl", "id"} {
-		if v := strings.TrimSpace(vals.Get(key)); v != "" && id.RecordingName == "" {
-			var p string
-			if key == "id" && !strings.Contains(v, "://") {
-				p = v
-			} else if fu, err := url.Parse(v); err == nil {
-				p = fu.Path
+		for queryKey, values := range vals {
+			if !strings.EqualFold(queryKey, key) {
+				continue
 			}
-			if p != "" && !strings.Contains(p, "/:") {
-				base := path.Base(p)
-				ext := strings.ToLower(path.Ext(base))
-				if base != "." && base != "/" && (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" || ext == ".m4a") {
-					id.RecordingName = strings.ToLower(base)
+			for _, value := range values {
+				recordingName := recapRecordingName(strings.TrimSpace(value))
+				if recordingName == "" {
+					continue
+				}
+				if id.RecordingName == "" && !*recordingNameConflict {
+					id.RecordingName = recordingName
+					continue
+				}
+				if id.RecordingName != recordingName {
+					id.RecordingName = ""
+					*recordingNameConflict = true
 				}
 			}
 		}
+	}
+}
+
+func recapRecordingName(value string) string {
+	var p string
+	if !recapSchemePrefixRe.MatchString(value) && !strings.HasPrefix(value, "//") && !strings.HasPrefix(value, ":") {
+		if qIdx := strings.IndexByte(value, '?'); qIdx >= 0 {
+			p = value[:qIdx]
+		} else {
+			p = value
+		}
+	} else if parsed, err := url.Parse(value); err == nil {
+		p = parsed.Path
+	}
+	if p == "" || strings.HasSuffix(p, "/") || strings.Contains(p, "/:") {
+		return ""
+	}
+	base := path.Base(p)
+	ext := strings.ToLower(path.Ext(base))
+	if base == "." || base == "/" {
+		return ""
+	}
+	switch ext {
+	case ".mp4", ".mkv", ".webm", ".mov", ".m4a":
+		return strings.ToLower(base)
+	default:
+		return ""
 	}
 }
 
@@ -2561,7 +2602,7 @@ func recapAudioIdentity(rawURL string) MeetingIdentity {
 		return id
 	}
 	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || u.Path == "" || strings.Contains(u.Path, "/:") {
+	if err != nil || u.Path == "" || strings.HasSuffix(u.Path, "/") || strings.Contains(u.Path, "/:") {
 		return id
 	}
 	base := path.Base(u.Path)
@@ -2685,7 +2726,10 @@ const copyAISummaryJS = `(async () => {
 			const recapTriggered = Boolean(rootEl && rootEl.dataset && rootEl.dataset.goTeamsStreamRecapTriggered === 'true');
 			if (!recapTriggered) {
 				const candidates = Array.from(document.querySelectorAll('button, [role="button"], [class*="PromptStarter"], [class*="zeroPrompt"]') || []);
-				const recapBtn = candidates.find(el => String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting');
+				const recapBtn = candidates.find(el =>
+					String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting' &&
+					!(el && el.closest && el.closest('.ms-List, [data-tid*="transcript" i]'))
+				);
 				if (recapBtn && typeof recapBtn.click === 'function' && !(recapBtn.dataset && recapBtn.dataset.goTeamsRecapClicked === 'true')) {
 					if (recapBtn.dataset) recapBtn.dataset.goTeamsRecapClicked = 'true';
 					if (rootEl && rootEl.dataset) rootEl.dataset.goTeamsStreamRecapTriggered = 'true';
@@ -2699,7 +2743,9 @@ const copyAISummaryJS = `(async () => {
 			const spCopyBtns = Array.from(document.querySelectorAll('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]') || []);
 			const freshCopyBtns = spCopyBtns.filter(btn => {
 				const msg = btn && btn.closest ? btn.closest('.fai-CopilotMessage') : null;
-				return !(msg && msg.dataset && msg.dataset.goTeamsPreexisting === 'true');
+				return Boolean(msg) &&
+					!(msg.dataset && msg.dataset.goTeamsPreexisting === 'true') &&
+					!(btn && btn.closest && btn.closest('.fui-ChatMyMessage, .fui-ChatMyMessage__body, [class*="ChatMyMessage"]'));
 			});
 			const spCopyBtn = freshCopyBtns.length ? freshCopyBtns[freshCopyBtns.length - 1] : null;
 			if (spCopyBtn) {

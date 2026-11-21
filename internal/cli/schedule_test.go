@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,6 +17,77 @@ import (
 	"github.com/softwaresalt/go-teams/internal/config"
 	"github.com/softwaresalt/go-teams/internal/scheduler"
 )
+
+func TestScheduleNoAISummaryAndPerMeetingDelayPrecedence(t *testing.T) {
+	t.Run("explicit-no-ai-summary-true", func(t *testing.T) {
+		var f scheduleFlags
+		cmd := &cobra.Command{Use: "schedule"}
+		bindScheduleFlags(cmd, &f)
+		require.NoError(t, cmd.Flags().Parse([]string{"--no-ai-summary"}))
+		cfg := config.Config{AISummaryDelay: "30m"}
+
+		applyScheduleFlags(cmd, &cfg, f)
+		assert.True(t, cfg.NoAISummary)
+		assert.Equal(t, "0s", cfg.AISummaryDelay)
+	})
+
+	t.Run("explicit-no-ai-summary-false", func(t *testing.T) {
+		var f scheduleFlags
+		cmd := &cobra.Command{Use: "schedule"}
+		bindScheduleFlags(cmd, &f)
+		require.NoError(t, cmd.Flags().Parse([]string{"--no-ai-summary=false"}))
+		cfg := config.Config{AISummaryDelay: "30m", NoAISummary: true}
+
+		applyScheduleFlags(cmd, &cfg, f)
+		assert.False(t, cfg.NoAISummary)
+		assert.Equal(t, "30m", cfg.AISummaryDelay)
+	})
+
+	t.Run("positive-per-meeting-delay", func(t *testing.T) {
+		delay := 5 * time.Minute
+		base := config.Config{AISummaryDelay: "0s", NoAISummary: true}
+
+		got := buildScheduleEntryConfig(base, scheduler.Entry{
+			Mode:           config.CaptureModePastRecap,
+			AISummaryDelay: &delay,
+		})
+		assert.False(t, got.NoAISummary)
+		assert.Equal(t, "5m0s", got.AISummaryDelay)
+	})
+
+	for _, tc := range []struct {
+		name  string
+		delay time.Duration
+	}{
+		{name: "zero-delay-preserves-inherited-disable", delay: 0},
+		{name: "negative-delay-preserves-inherited-disable", delay: -time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := config.Config{
+				CaptureMode:    config.CaptureModePastRecap,
+				NoAISummary:    true,
+				AISummaryDelay: "0s",
+			}
+
+			got := buildScheduleEntryConfig(base, scheduler.Entry{
+				Mode:           config.CaptureModePastRecap,
+				AISummaryDelay: &tc.delay,
+			})
+			assert.True(t, got.NoAISummary)
+			assert.Equal(t, tc.delay.String(), got.AISummaryDelay)
+		})
+	}
+
+	t.Run("schedule-help", func(t *testing.T) {
+		var f scheduleFlags
+		cmd := &cobra.Command{Use: "schedule"}
+
+		bindScheduleFlags(cmd, &f)
+		flag := cmd.Flags().Lookup("no-ai-summary")
+		require.NotNil(t, flag)
+		assert.Equal(t, "disable AI Summary capture for both Meeting Recaps and post-call enrichment", flag.Usage)
+	})
+}
 
 func TestScheduleJobRunsCapture(t *testing.T) {
 	var meetingCalls int32

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -99,6 +100,72 @@ func TestSaveIsAtomic(t *testing.T) {
 	for _, e := range entries {
 		assert.NotContains(t, e.Name(), ".config-", "temp file should not remain")
 	}
+}
+
+func TestConfigNoAISummaryRuntimeOnly(t *testing.T) {
+	for _, key := range []string{"no_ai_summary", "noaisummary"} {
+		t.Run("load spoofed "+key, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			data := []byte(key + ": true\n")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+
+			cfg, err := Load(path)
+			require.NoError(t, err)
+			assert.False(t, cfg.NoAISummary)
+		})
+	}
+
+	for _, mode := range []string{
+		CaptureModePastRecap,
+		CaptureModeAuto,
+		CaptureModeLiveWithSummary,
+		CaptureModeEphemeralLive,
+	} {
+		t.Run("load "+mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			data := []byte("capture_mode: " + mode + "\nai_summary_delay: \"0s\"\n")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+
+			cfg, err := Load(path)
+			require.NoError(t, err)
+			assert.False(t, cfg.NoAISummary)
+		})
+	}
+
+	t.Run("marshal omits runtime flag", func(t *testing.T) {
+		cfg := Config{
+			OutputDir:   "out",
+			ProfileDir:  "prof",
+			BotName:     "bot",
+			NoAISummary: true,
+		}
+		data, err := yaml.Marshal(cfg)
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "no_ai_summary")
+		assert.NotContains(t, string(data), "noaisummary")
+
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, Save(path, cfg))
+		saved, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.NotContains(t, string(saved), "no_ai_summary")
+		assert.NotContains(t, string(saved), "noaisummary")
+	})
+
+	t.Run("save load round-trip drops runtime flag", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		cfg := Config{
+			OutputDir:   "out",
+			ProfileDir:  "prof",
+			BotName:     "bot",
+			NoAISummary: true,
+		}
+
+		require.NoError(t, Save(path, cfg))
+		got, err := Load(path)
+		require.NoError(t, err)
+		assert.False(t, got.NoAISummary)
+	})
 }
 
 func TestSaveRejectsInvalid(t *testing.T) {

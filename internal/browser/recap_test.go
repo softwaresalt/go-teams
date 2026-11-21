@@ -935,6 +935,538 @@ globalThis.AudioContext = class {
 	}
 }
 
+func TestWave2ARecapAudioEarlyMountPlayAndBlockedSkip(t *testing.T) {
+	const playbackMarker = "036.001-T:early-mount-playback"
+	const blockedMarker = "036.001-T:blocked-non-blob-skip"
+
+	redMarkers := []string{playbackMarker, blockedMarker}
+	seenMarkers := make(map[string]struct{}, len(redMarkers))
+	for _, marker := range redMarkers {
+		if _, exists := seenMarkers[marker]; exists {
+			t.Fatalf("RED marker is not pairwise unique: %s", marker)
+		}
+		seenMarkers[marker] = struct{}{}
+	}
+
+	runProbe := func(t *testing.T, probeJS, redMarker string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return
+		}
+		if redMarker != "" && !strings.Contains(string(out), redMarker) {
+			t.Fatalf("probe failed for a reason other than its production RED marker %q: %v\n%s", redMarker, err, out)
+		}
+		t.Fatalf("recap audio probe failed: %v\n%s", err, out)
+	}
+
+	t.Run("periodic-playback-and-replacement-video", func(t *testing.T) {
+		probeJS := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1048576, maxRecapAudioDurationSec = 120, maxRecapAudioPCMBytes = 10485760;
+const recapAudioCaptureDeadlineMs = 3050;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+const baseNow = 1000000;
+let fakeNow = baseNow;
+const origSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+  return origSetTimeout(() => {
+    fakeNow += Math.max(0, Number(ms) || 0);
+    fn(...args);
+  }, 0);
+};
+Date.now = () => fakeNow;
+
+let testCompleted = false;
+process.on('beforeExit', () => {
+  if (!testCompleted) {
+    console.error('test exited before async playback probe completed');
+    process.exit(1);
+  }
+});
+
+const clickTimes = [];
+let firstPlayCount = 0;
+let replacementPlayCount = 0;
+function makeVideo(label, incrementPlay) {
+  return {
+    label,
+    muted: false,
+    volume: 1,
+    playbackRate: 1,
+    paused: true,
+    duration: 10,
+    currentTime: 0,
+    ended: false,
+    play: async () => { incrementPlay(); },
+    pause: () => {},
+    getAttribute: () => null,
+    querySelector: () => null
+  };
+}
+const firstVideo = makeVideo('first', () => { firstPlayCount++; });
+const replacementVideo = makeVideo('replacement', () => { replacementPlayCount++; });
+const playBtn = {
+  click: () => {
+    clickTimes.push(fakeNow);
+    if (clickTimes.length === 3) {
+      const transcodeURL =
+        'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode' +
+        '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=50000000&driveItemId=recording-a';
+      globalThis.fetch(transcodeURL).catch(() => {});
+    }
+  }
+};
+
+globalThis.fetch = async () => { throw new TypeError('playback probe intentionally has no transcode network'); };
+globalThis.location = {
+  href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a',
+  origin: 'https://contoso-my.sharepoint.com'
+};
+globalThis.window = globalThis;
+globalThis.g_fileInfo = { VroomItemId: 'recording-a', duration: 10 };
+globalThis.document = {
+  querySelector: (selector) => {
+    if (selector.includes('Play video')) return playBtn;
+    if (selector === 'audio, video' || selector === 'video') {
+      const elapsed = fakeNow - baseNow;
+      if (elapsed >= 2500) return firstVideo;
+      if (elapsed >= 1500) return replacementVideo;
+      if (elapsed >= 1000) return firstVideo;
+      return null;
+    }
+    return null;
+  },
+  querySelectorAll: () => []
+};
+
+(async () => {
+  let failure = null;
+  try {
+    await eval(fs.readFileSync(0, 'utf8'));
+  } catch (e) {
+    failure = e;
+  }
+  const message = String((failure && failure.message) || failure || '');
+  if (message.includes('036.001-T:early-mount-playback')) throw failure;
+  if (JSON.stringify(clickTimes) !== JSON.stringify([baseNow, baseNow + 1000, baseNow + 2000])) {
+    throw new Error('expected Play video clicks at 0/1000/2000ms, got ' + JSON.stringify(clickTimes));
+  }
+  if (firstPlayCount !== 1 || replacementPlayCount !== 1) {
+    throw new Error('expected one play call per mounted video, got first=' + firstPlayCount +
+      ' replacement=' + replacementPlayCount);
+  }
+  for (const video of [firstVideo, replacementVideo]) {
+    if (!video.muted || video.volume !== 0 || video.playbackRate !== 16) {
+      throw new Error('expected muted 16x media, got ' + JSON.stringify(video));
+    }
+  }
+  testCompleted = true;
+})().catch(e => {
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS, playbackMarker)
+	})
+
+	t.Run("path-a-failure-does-not-replay-current-video", func(t *testing.T) {
+		probeJS := `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioSourceBytes = 1024, maxRecapAudioDurationSec = 60, maxRecapAudioPCMBytes = 10485760;
+const recapAudioCaptureDeadlineMs = 2000, recapAudioFetchMaxAttempts = 1;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+const initURL = base + '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=500000000&driveItemId=recording-a';
+let fakeNow = 1000000;
+const origSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+  return origSetTimeout(() => {
+    fakeNow += Math.max(0, Number(ms) || 0);
+    fn(...args);
+  }, 0);
+};
+Date.now = () => fakeNow;
+
+let testCompleted = false;
+process.on('beforeExit', () => {
+  if (!testCompleted) {
+    console.error('test exited before async Path A failure probe completed');
+    process.exit(1);
+  }
+});
+
+let fetchCalls = 0;
+let clickCount = 0;
+let playCount = 0;
+const video = {
+  src: 'blob:https://contoso-my.sharepoint.com/1',
+  currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
+  duration: 10,
+  currentTime: 0,
+  ended: false,
+  paused: true,
+  play: async () => { playCount++; video.paused = false; },
+  pause: () => { video.paused = true; },
+  getAttribute: () => null
+};
+const playBtn = {
+  click: () => {
+    clickCount++;
+    globalThis.fetch(initURL).catch(() => {});
+  }
+};
+
+globalThis.crypto = webcrypto;
+globalThis.fetch = async () => {
+  fetchCalls++;
+  if (fetchCalls === 1) {
+    await new Promise(resolve => setTimeout(resolve, 1250));
+  }
+  return { ok: false, status: 403, headers: { get: () => null } };
+};
+globalThis.location = {
+  href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a',
+  origin: 'https://contoso-my.sharepoint.com'
+};
+globalThis.window = globalThis;
+globalThis.g_fileInfo = {
+  VroomItemId: 'recording-a',
+  duration: 10,
+  EncKey: {
+    Key: Buffer.from(new Uint8Array(16).fill(1)).toString('base64'),
+    IV: Buffer.from(new Uint8Array(16).fill(2)).toString('base64')
+  }
+};
+globalThis.document = {
+  querySelector: selector => selector.includes('Play video')
+    ? playBtn
+    : ((selector === 'audio, video' || selector === 'video') ? video : null),
+  querySelectorAll: () => []
+};
+
+(async () => {
+  let failure = null;
+  try {
+    await eval(fs.readFileSync(0, 'utf8'));
+  } catch (e) {
+    failure = e;
+  }
+  if (fetchCalls < 2) {
+    throw new Error('expected button request and Path A init request, got ' + fetchCalls +
+      '; extraction failure: ' + String((failure && failure.message) || failure || 'none'));
+  }
+  if (clickCount !== 1) {
+    throw new Error('expected Path A-active capture to stop button clicks across the 1s click window, got ' + clickCount);
+  }
+  if (playCount !== 1) {
+    throw new Error('expected current video play() exactly once after Path A failure, got ' + playCount);
+  }
+  testCompleted = true;
+})().catch(e => {
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS, "")
+	})
+
+	t.Run("unverified-player-does-not-click-play-or-fetch", func(t *testing.T) {
+		probeJS := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1024, maxRecapAudioDurationSec = 60, maxRecapAudioPCMBytes = 10485760;
+const recapAudioCaptureDeadlineMs = 75;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+let fakeNow = 1000000;
+const origSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+  return origSetTimeout(() => {
+    fakeNow += Math.max(0, Number(ms) || 0);
+    fn(...args);
+  }, 0);
+};
+Date.now = () => fakeNow;
+
+let fetchCalls = 0;
+let clickCalls = 0;
+let playCalls = 0;
+let testCompleted = false;
+process.on('beforeExit', () => {
+  if (!testCompleted) {
+    console.error('test exited before async identity-gated playback probe completed');
+    process.exit(1);
+  }
+});
+
+const video = {
+  duration: 10,
+  currentTime: 0,
+  ended: false,
+  paused: true,
+  muted: false,
+  volume: 1,
+  playbackRate: 1,
+  play: async () => { playCalls++; },
+  pause: () => {},
+  getAttribute: () => null,
+  querySelector: () => null
+};
+const playBtn = {
+  click: () => {
+    clickCalls++;
+    globalThis.fetch(
+      'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/unverified/oneDrive.transcode' +
+      '?part=initsegment&track=audio&quality=audcopy&wsd=50000000&ppd=50000000'
+    ).catch(() => {});
+  }
+};
+
+globalThis.fetch = async () => {
+  fetchCalls++;
+  throw new TypeError('authenticated stream request must not run before identity verification');
+};
+globalThis.location = {
+  href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx',
+  origin: 'https://contoso-my.sharepoint.com'
+};
+globalThis.window = globalThis;
+globalThis.g_fileInfo = { isDownloadBlocked: true, duration: 10 };
+globalThis.document = {
+  querySelector: selector => selector.includes('Play video')
+    ? playBtn
+    : ((selector === 'audio, video' || selector === 'video') ? video : null),
+  querySelectorAll: () => []
+};
+
+(async () => {
+  try {
+    await eval(fs.readFileSync(0, 'utf8'));
+  } catch (_) {}
+  if (clickCalls !== 0 || playCalls !== 0 || fetchCalls !== 0) {
+    throw new Error('unverified playback initiated authenticated work: clicks=' + clickCalls +
+      ' plays=' + playCalls + ' fetches=' + fetchCalls);
+  }
+  testCompleted = true;
+})().catch(e => {
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS, "")
+	})
+
+	t.Run("late-arriving-file-info-unlocks-periodic-playback", func(t *testing.T) {
+		probeJS := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1024, maxRecapAudioDurationSec = 60, maxRecapAudioPCMBytes = 10485760;
+const recapAudioCaptureDeadlineMs = 100;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+let fakeNow = 1000000;
+const origSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+  return origSetTimeout(() => {
+    fakeNow += Math.max(0, Number(ms) || 0);
+    fn(...args);
+  }, 0);
+};
+Date.now = () => fakeNow;
+
+let clickCalls = 0;
+let playCalls = 0;
+let testCompleted = false;
+process.on('beforeExit', () => {
+  if (!testCompleted) {
+    console.error('test exited before delayed identity probe completed');
+    process.exit(1);
+  }
+});
+
+const initialInfo = { isDownloadBlocked: true, duration: 10 };
+const verifiedInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 10 };
+Object.defineProperty(globalThis, 'g_fileInfo', {
+  configurable: true,
+  get: () => fakeNow >= 1000050 ? verifiedInfo : initialInfo
+});
+const video = {
+  duration: 10,
+  currentTime: 0,
+  ended: false,
+  paused: true,
+  muted: false,
+  volume: 1,
+  playbackRate: 1,
+  play: async () => {
+    playCalls++;
+    if (fakeNow < 1000050) throw new Error('video played before frame identity verification');
+  },
+  pause: () => {},
+  getAttribute: () => null,
+  querySelector: () => null
+};
+const playBtn = {
+  click: () => {
+    clickCalls++;
+    if (fakeNow < 1000050) throw new Error('play button clicked before frame identity verification');
+  }
+};
+
+globalThis.fetch = async () => { throw new TypeError('delayed identity probe has no transcode network'); };
+globalThis.location = {
+  href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx',
+  origin: 'https://contoso-my.sharepoint.com'
+};
+globalThis.window = globalThis;
+globalThis.document = {
+  querySelector: selector => selector.includes('Play video')
+    ? playBtn
+    : ((selector === 'audio, video' || selector === 'video') ? video : null),
+  querySelectorAll: () => []
+};
+
+(async () => {
+  try {
+    await eval(fs.readFileSync(0, 'utf8'));
+  } catch (_) {}
+  if (fakeNow < 1000050) {
+    throw new Error('capture ended before delayed identity could arrive');
+  }
+  if (clickCalls !== 1 || playCalls !== 1) {
+    throw new Error('expected playback exactly once after delayed verification, got clicks=' +
+      clickCalls + ' plays=' + playCalls);
+  }
+  testCompleted = true;
+})().catch(e => {
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS, "")
+	})
+
+	t.Run("blocked-non-blob-candidates-skip-fetch", func(t *testing.T) {
+		probeJS := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1024, maxRecapAudioDurationSec = 60, maxRecapAudioPCMBytes = 10485760;
+const recapAudioCaptureDeadlineMs = 75;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+let fakeNow = 1000000;
+const origSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+  return origSetTimeout(() => {
+    fakeNow += Math.max(0, Number(ms) || 0);
+    fn(...args);
+  }, 0);
+};
+Date.now = () => fakeNow;
+
+let fetchCalls = 0;
+let testCompleted = false;
+process.on('beforeExit', () => {
+  if (!testCompleted) {
+    console.error('test exited before async blocked-candidate probe completed');
+    process.exit(1);
+  }
+});
+
+globalThis.fetch = async () => {
+  fetchCalls++;
+  return { ok: false, status: 403, headers: { get: () => null } };
+};
+globalThis.location = {
+  href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a'
+};
+globalThis.window = globalThis;
+globalThis.g_fileInfo = {
+  VroomItemId: 'recording-a',
+  isDownloadBlocked: true,
+  duration: 10,
+  downloadUrl: 'https://contoso-my.sharepoint.com/download?driveItemId=recording-a'
+};
+globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+
+(async () => {
+  let failure = null;
+  try {
+    await eval(fs.readFileSync(0, 'utf8'));
+  } catch (e) {
+    failure = e;
+  }
+  const message = String((failure && failure.message) || failure || '');
+  if (message.includes('036.001-T:blocked-non-blob-skip')) throw failure;
+  if (!message.includes('isDownloadBlocked=true')) {
+    throw new Error('expected blocked-download error after identity and duration guards, got: ' + message);
+  }
+  if (fetchCalls !== 0) {
+    throw new Error('expected blocked non-blob candidates not to fetch, got ' + fetchCalls + ' calls');
+  }
+  testCompleted = true;
+})().catch(e => {
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS, blockedMarker)
+	})
+
+	t.Run("blocked-conflicting-candidate-identity-still-rejected", func(t *testing.T) {
+		probeJS := `
+const fs = require('fs');
+const maxRecapAudioSourceBytes = 1024, maxRecapAudioDurationSec = 60, maxRecapAudioPCMBytes = 10240;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+let fetchCalls = 0;
+let testCompleted = false;
+process.on('beforeExit', () => {
+  if (!testCompleted) {
+    console.error('test exited before async identity-conflict probe completed');
+    process.exit(1);
+  }
+});
+globalThis.fetch = async () => { fetchCalls++; throw new Error('fetch must not run'); };
+globalThis.location = {
+  href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a'
+};
+globalThis.window = globalThis;
+globalThis.g_fileInfo = {
+  VroomItemId: 'recording-a',
+  isDownloadBlocked: true,
+  downloadUrl: 'https://contoso-my.sharepoint.com/download?driveItemId=recording-b'
+};
+globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+(async () => {
+  let failure = null;
+  try {
+    await eval(fs.readFileSync(0, 'utf8'));
+  } catch (e) {
+    failure = e;
+  }
+  const message = String((failure && failure.message) || failure || '');
+  if (!message.includes('recap audio recording identity mismatch')) {
+    throw new Error('expected identity mismatch, got: ' + message);
+  }
+  if (fetchCalls !== 0) {
+    throw new Error('identity mismatch should reject before fetch, got ' + fetchCalls + ' calls');
+  }
+  testCompleted = true;
+})().catch(e => {
+  console.error(e && e.stack ? e.stack : String(e));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS, "")
+	})
+}
+
 func TestRecapJSStreamEmbedHighSpeedAudioCaptureWhenDownloadBlocked(t *testing.T) {
 	const mp4HelpersJS = `
 function u32(v) {
@@ -2094,6 +2626,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
   let siblingAbortedBeforeResolve = false;
   let siblingSettledAfterPathB = false;
   let pathBResumed = false;
+  let playCount = 0;
   const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
 
   class FakeSourceBuffer extends EventTarget {
@@ -2110,14 +2643,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
     src: 'blob:https://contoso-my.sharepoint.com/1', currentSrc: 'blob:https://contoso-my.sharepoint.com/1',
     duration: 10, ended: false, paused: true, muted: false, volume: 1, playbackRate: 1, currentTime: 0,
     play: async () => {
-      if (videoEl.paused === false && audioSB && !pathBResumed) {
-        pathBResumed = true;
-        setTimeout(() => {
-          audioSB._end = 10;
-          videoEl.ended = true;
-          audioSB.appendBuffer(seg1);
-        }, 20);
-      }
+      playCount++;
       videoEl.paused = false;
     },
     pause: () => {},
@@ -2133,8 +2659,8 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
       return { ok: true, status: 200, url: s, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, arrayBuffer: async () => encSeg0.slice().buffer };
     }
     if (s.includes('segmentTime=50000000')) {
-      // Worker 1 fails quickly with 500 (non-fatal fallback trigger).
-      return { ok: false, status: 500, url: s, headers: { get: () => null } };
+      // Worker 1 fails quickly with 403 (non-fatal fallback trigger).
+      return { ok: false, status: 403, url: s, headers: { get: () => null } };
     }
     if (s.includes('segmentTime=100000000')) {
       // Sibling worker 2 hangs until aborted; if not aborted before Path B resumes, mark failure!
@@ -2149,6 +2675,14 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
           sig.addEventListener('abort', () => {
             if (pathBResumed) siblingSettledAfterPathB = true;
             siblingAbortedBeforeResolve = true;
+            if (!pathBResumed && audioSB) {
+              pathBResumed = true;
+              setTimeout(() => {
+                audioSB._end = 10;
+                videoEl.ended = true;
+                audioSB.appendBuffer(seg1);
+              }, 0);
+            }
             reject(new Error('aborted'));
           }, { once: true });
         }
@@ -2186,6 +2720,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
   const raw = await eval(fs.readFileSync(0, 'utf8'));
   const parsed = JSON.parse(raw);
   if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected Path B fallback PCM');
+  if (playCount !== 1) throw new Error('expected one play() call per video element, got ' + playCount);
   if (!siblingAbortedBeforeResolve) throw new Error('expected sibling Path A worker to be aborted on fallback');
   if (siblingSettledAfterPathB) throw new Error('sibling Path A worker settled after Path B resumed');
 })().catch(e => { console.error(e && e.stack ? e.stack : String(e)); process.exitCode = 1; });
@@ -3217,6 +3752,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
 
   let audioSB = null;
   let pathBResumed = false;
+  let playCount = 0;
   let pathAAbortObservedBeforeBackoffTimer = false;
   const videoEl = {
     src: 'blob:https://contoso-my.sharepoint.com/1',
@@ -3229,13 +3765,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
     playbackRate: 1,
     currentTime: 0,
     play: async () => {
-      if (videoEl.paused === false && audioSB && !pathBResumed) {
-        pathBResumed = true;
-        pathAAbortObservedBeforeBackoffTimer = backoffCleared;
-        audioSB._end = 1;
-        videoEl.ended = true;
-        audioSB.appendBuffer(seg0);
-      }
+      playCount++;
       videoEl.paused = false;
     },
     pause: () => {},
@@ -3254,6 +3784,15 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
     if (s.includes('segmentTime=50000000')) {
       // Wait 20ms so worker 0 is inside the 250ms backoff, then fail with non-retryable 403.
       await new Promise(r => origSetTimeout(r, 20));
+      origSetTimeout(() => {
+        if (!pathBResumed && audioSB) {
+          pathBResumed = true;
+          pathAAbortObservedBeforeBackoffTimer = backoffCleared;
+          audioSB._end = 1;
+          videoEl.ended = true;
+          audioSB.appendBuffer(seg0);
+        }
+      }, 0);
       return { ok: false, status: 403, url: s, headers: { get: () => null } };
     }
     throw new Error('unexpected fetch: ' + s);
@@ -3291,6 +3830,7 @@ const recapExpectedIdentity = { DriveItemID: 'recording-a' };
   const elapsedMs = Date.now() - started;
   const parsed = JSON.parse(raw);
   if (!parsed.pcmChunks || !parsed.pcmChunks.length) throw new Error('expected Path B fallback PCM');
+  if (playCount !== 1) throw new Error('expected one play() call per video element, got ' + playCount);
   if (!backoffScheduled) throw new Error('test setup error: expected 250ms retry backoff to be scheduled');
   if (!backoffCleared || !pathAAbortObservedBeforeBackoffTimer) {
     throw new Error('retry backoff timer was not cleared immediately on parentSignal abort (backoffCleared=' + backoffCleared + ', beforeResume=' + pathAAbortObservedBeforeBackoffTimer + ', elapsedMs=' + elapsedMs + ')');

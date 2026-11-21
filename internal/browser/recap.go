@@ -282,11 +282,11 @@ const extractRecapAudioJS = `(async () => {
 	const playerCtx = playerContexts[0];
 	const playerWin = playerCtx.win;
 	const playerDoc = playerCtx.doc;
-	const info = playerCtx.info;
-	const pageUrl = playerCtx.pageUrl;
-	const itemId = playerCtx.itemId;
-	const fileName = playerCtx.fileName;
-	const baseIdentityMatched = playerCtx.baseIdentityMatched;
+	let info = playerCtx.info;
+	let pageUrl = playerCtx.pageUrl;
+	let itemId = playerCtx.itemId;
+	let fileName = playerCtx.fileName;
+	let baseIdentityMatched = playerCtx.baseIdentityMatched;
 
 	const pcmEl = playerDoc.querySelector ? playerDoc.querySelector('[data-recap-audio-pcm]') : null;
 	const hasPCM = pcmEl && pcmEl.hasAttribute && pcmEl.hasAttribute('data-recap-audio-pcm');
@@ -366,6 +366,11 @@ const extractRecapAudioJS = `(async () => {
 			const duration = Number(rawDuration);
 			if (Number.isFinite(duration) && duration > 0 &&
 				(duration > maxRecapAudioDurationSec || Math.ceil(duration * 44100) * 2 > maxRecapAudioPCMBytes)) throw new Error(limitError);
+		}
+		if (info.isDownloadBlocked && streamSurface && !/^blob:/i.test(candidateUrl)) {
+			blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+			lastFetchErr = blockedErr;
+			continue;
 		}
 		if (!fetchFn) {
 			lastFetchErr = new Error('recap audio fetch unavailable');
@@ -678,12 +683,20 @@ const extractRecapAudioJS = `(async () => {
 			return u.origin === winOrigin && allowedProto;
 		}
 		let transcodeAudioTemplateUrl = '';
+		let transcodeIdentityVerified = !enforceIdentity || baseIdentityMatched;
+		let verifiedTranscodeURL = '';
 		if (info.transcodeUrl && isAllowedSameOriginTranscodeURL(info.transcodeUrl, playerWin)) {
 			try {
 				const base = (playerWin && playerWin.location && playerWin.location.href) || pageUrl || String((typeof location !== 'undefined' && location.href) || '');
 				transcodeAudioTemplateUrl = new URL(String(info.transcodeUrl), base).toString();
 			} catch (_) {
 				transcodeAudioTemplateUrl = '';
+			}
+			if (transcodeAudioTemplateUrl) {
+				const state = { matched: false };
+				checkIdentityAgainst(transcodeAudioTemplateUrl, pageUrl, state);
+				transcodeIdentityVerified = transcodeIdentityVerified || state.matched;
+				if (state.matched) verifiedTranscodeURL = transcodeAudioTemplateUrl;
 			}
 		}
 		let transcodeWsd = 0;
@@ -694,6 +707,40 @@ const extractRecapAudioJS = `(async () => {
 				return ppdVal / 16000;
 			}
 			return ppdVal >= 1e6 ? (ppdVal / 1e7) : ppdVal;
+		}
+		function verifyTranscodeIdentity(rawUrl) {
+			const state = { matched: false };
+			checkIdentityAgainst(rawUrl, pageUrl, state);
+			if (enforceIdentity && !baseIdentityMatched && !state.matched) {
+				throw new Error('recap audio recording identity unverified');
+			}
+			transcodeIdentityVerified = transcodeIdentityVerified || state.matched || baseIdentityMatched;
+			if (state.matched) verifiedTranscodeURL = String(rawUrl);
+		}
+		function refreshPlayerFrameMetadata() {
+			const current = validateFrameContext(playerWin, playerDoc);
+			info = current.info;
+			pageUrl = current.pageUrl;
+			itemId = current.itemId;
+			fileName = current.fileName;
+			baseIdentityMatched = current.baseIdentityMatched;
+			transcodeIdentityVerified = !enforceIdentity || baseIdentityMatched ||
+				Boolean(verifiedTranscodeURL);
+			const currentTranscodeURL = info && info.transcodeUrl;
+			if (!currentTranscodeURL || !isAllowedSameOriginTranscodeURL(currentTranscodeURL, playerWin)) return;
+			let normalized = '';
+			try {
+				const base = pageUrl || String((typeof location !== 'undefined' && location.href) || '');
+				normalized = new URL(String(currentTranscodeURL), base).toString();
+			} catch (_) {}
+			if (!normalized) return;
+			const state = { matched: false };
+			checkIdentityAgainst(normalized, pageUrl, state);
+			if (state.matched) {
+				verifiedTranscodeURL = normalized;
+				transcodeIdentityVerified = true;
+			}
+			transcodeAudioTemplateUrl = transcodeAudioTemplateUrl || normalized;
 		}
 		const capturedAuthHeadersByOrigin = Object.create(null);
 		const allowlistedHeaderNames = [
@@ -725,7 +772,14 @@ const extractRecapAudioJS = `(async () => {
 		let pathAPromise = null;
 		let pathAStartedAt = 0;
 		let wakeLoop = null;
+		const playedMediaElements = new WeakSet();
 
+		function playMediaElementOnce(m) {
+			if (!m || (typeof m !== 'object' && typeof m !== 'function') ||
+				typeof m.play !== 'function' || playedMediaElements.has(m)) return;
+			playedMediaElements.add(m);
+			try { Promise.resolve(m.play()).catch(() => {}); } catch (_) {}
+		}
 		function signalWake() {
 			if (wakeLoop) {
 				const fn = wakeLoop;
@@ -933,6 +987,7 @@ const extractRecapAudioJS = `(async () => {
 			const isTranscode = u.pathname.toLowerCase().includes('onedrive.transcode') || part === 'initsegment' || part === 'mediasegment';
 			if (!isTranscode) return { isVideoSegment: false };
 			if (!isAllowedSameOriginTranscodeURL(u.toString(), hookWin)) return { isVideoSegment: false };
+			verifyTranscodeIdentity(u.toString());
 			if (headersObj) {
 				const originHdrs = capturedAuthHeadersByOrigin[u.origin] || (capturedAuthHeadersByOrigin[u.origin] = Object.create(null));
 				for (const [k, v] of Object.entries(headersObj)) {
@@ -988,14 +1043,14 @@ const extractRecapAudioJS = `(async () => {
 				streamSourceBytes = mseBytesTotal();
 				if (hooksRestored || cleaningUp) return null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-				if (m && typeof m.play === 'function') {
+				if (m) {
 					try {
 						m.muted = true;
 						m.volume = 0;
 						m.playbackRate = 16;
-						Promise.resolve(m.play()).catch(() => {});
 					} catch (_) {}
 				}
+				playMediaElementOnce(m);
 				signalWake();
 				return null;
 			});
@@ -1655,26 +1710,29 @@ const extractRecapAudioJS = `(async () => {
 			scanPerformanceTranscodeEntries(playerWin);
 			if (playerWin !== window) scanPerformanceTranscodeEntries(window);
 
-			let btnClicked = false;
-			let mediaPlayTriggered = false;
+			let lastBtnClickAt = 0;
+			let triggeredMediaEl = null;
 			function triggerPlaybackIfReady() {
-				if (pathAActive || (btnClicked && mediaPlayTriggered)) return;
+				refreshPlayerFrameMetadata();
+				if (pathAActive || !transcodeIdentityVerified) return;
 				const btn = playerDoc.querySelector ? playerDoc.querySelector(playBtnSelector) : null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-				if (m && !mediaPlayTriggered) {
+				if (m && !pathAActive) {
 					try {
 						m.muted = true;
 						m.volume = 0;
 						if (m.playbackRate !== 16) m.playbackRate = 16;
 					} catch (_) {}
 				}
-				if (!btnClicked && btn && typeof btn.click === 'function') {
-					btnClicked = true;
+				const now = Date.now();
+				if (!pathAActive && !activityObserved && btn && typeof btn.click === 'function' &&
+					(lastBtnClickAt === 0 || now - lastBtnClickAt >= 1000)) {
+					lastBtnClickAt = Math.max(1, now);
 					btn.click();
 				}
-				if (!mediaPlayTriggered && !pathAActive && m && typeof m.play === 'function') {
-					mediaPlayTriggered = true;
-					try { Promise.resolve(m.play()).catch(() => {}); } catch (_) {}
+				if (m !== triggeredMediaEl && !pathAActive && m) {
+					triggeredMediaEl = m;
+					playMediaElementOnce(m);
 				}
 			}
 			triggerPlaybackIfReady();
@@ -1689,7 +1747,10 @@ const extractRecapAudioJS = `(async () => {
 			let pathAResult = null;
 
 			while (Date.now() < deadlineAt) {
-				if (!btnClicked || !mediaPlayTriggered) triggerPlaybackIfReady();
+				if (!pathAActive && (!activityObserved || !triggeredMediaEl ||
+					(playerDoc.querySelector && playerDoc.querySelector('audio, video') !== triggeredMediaEl))) {
+					triggerPlaybackIfReady();
+				}
 				if (fatalErr) throw fatalErr;
 				if (!audioCryptoKeyInfo) await seedEncKeyFromFileInfo();
 				if (!transcodeAudioTemplateUrl || !(transcodeWsd > 0) || !(transcodePpd > 0)) {

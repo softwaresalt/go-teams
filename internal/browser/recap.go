@@ -2016,6 +2016,62 @@ var (
 	maxRecapAudioPCMBytes    = 360 * 1024 * 1024
 )
 
+func isStreamTarget(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || isAuthRedirectURL(rawURL) {
+		return false
+	}
+	lowerPath := strings.ToLower(parsed.Path)
+	return strings.Contains(lowerPath, "streamembed.aspx") ||
+		strings.Contains(lowerPath, "stream.aspx")
+}
+
+func shouldSkipRecapAudioTarget(skipNonStreamTargets bool, rawURL string) bool {
+	return skipNonStreamTargets && !isStreamTarget(rawURL)
+}
+
+func shouldRetryRecapAudioAttempt(
+	attempt, maxAttempts int,
+	sawRetryableStreamTargetErr, hasStreamEmbedTarget bool,
+	lastErr error,
+) bool {
+	if attempt >= maxAttempts-1 {
+		return false
+	}
+	isDownloadBlockedErr := lastErr != nil &&
+		strings.Contains(lastErr.Error(), "isDownloadBlocked=true")
+	return sawRetryableStreamTargetErr ||
+		(!hasStreamEmbedTarget && (lastErr == nil || isDownloadBlockedErr))
+}
+
+func selectRecapAudioError(current, candidate error) error {
+	switch {
+	case current == nil:
+		return candidate
+	case candidate == nil:
+		return current
+	case recapAudioErrorPriority(candidate) > recapAudioErrorPriority(current):
+		return candidate
+	default:
+		return current
+	}
+}
+
+func recapAudioErrorPriority(err error) int {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "exceeds maximum supported size/duration"):
+		return 3
+	case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"),
+		strings.Contains(msg, "MSE stream"), strings.Contains(msg, "Path A capture deadline exceeded"):
+		return 2
+	case strings.Contains(msg, "isDownloadBlocked=true"):
+		return 1
+	default:
+		return 0
+	}
+}
+
 func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetingURL string, w io.Writer) error {
 	if port <= 0 || ownerID == "" || w == nil {
 		return fmt.Errorf("browser: recap audio requires a bound CDP page and writer")
@@ -2031,28 +2087,8 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes, expectedJSON, extractRecapAudioJS)
 
 	var lastErr error
-	errPriority := func(err error) int {
-		msg := err.Error()
-		switch {
-		case strings.Contains(msg, "exceeds maximum supported size/duration"):
-			return 3
-		case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"),
-			strings.Contains(msg, "MSE stream"), strings.Contains(msg, "Path A capture deadline exceeded"):
-			return 2
-		case strings.Contains(msg, "isDownloadBlocked=true"):
-			return 1
-		default:
-			return 0
-		}
-	}
 	setLastErr := func(err error) {
-		if err == nil {
-			return
-		}
-		if lastErr != nil && errPriority(lastErr) > errPriority(err) {
-			return
-		}
-		lastErr = err
+		lastErr = selectRecapAudioError(lastErr, err)
 	}
 
 	captureCtx, cancelCapture := context.WithTimeout(ctx, recapAudioEvalTimeout)
@@ -2100,35 +2136,36 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		orderedTargets := make([]cdpTargetInfo, len(targets))
 		copy(orderedTargets, targets)
 		hasStreamEmbedTarget := false
-		hasXplatTarget := false
 		for _, t := range orderedTargets {
-			if !isTargetInCaptureScope(t, ownerID, frames) {
+			if !isTargetInCaptureScope(t, ownerID, frames) ||
+				isAuthRedirectURL(t.URL) ||
+				hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(t.URL)) {
 				continue
 			}
-			lowerURL := strings.ToLower(t.URL)
-			if strings.Contains(lowerURL, "streamembed.aspx") || strings.Contains(lowerURL, "stream.aspx") {
+			if isStreamTarget(t.URL) {
 				hasStreamEmbedTarget = true
-			}
-			if strings.Contains(lowerURL, "xplatplugins.aspx") {
-				hasXplatTarget = true
 			}
 		}
 		recapTargetRank := func(t cdpTargetInfo) int {
 			lowerURL := strings.ToLower(t.URL)
-			if t.Type == "iframe" {
-				if strings.Contains(lowerURL, "streamembed.aspx") || strings.Contains(lowerURL, "stream.aspx") {
-					return 0
-				}
-				if strings.Contains(lowerURL, "xplatplugins.aspx") {
-					return 1
-				}
+			switch {
+			case t.Type == "iframe" && isStreamTarget(t.URL):
+				return 0
+			case t.Type == "page" && isStreamTarget(t.URL):
+				return 1
+			case t.Type == "iframe" && strings.Contains(lowerURL, "xplatplugins.aspx"):
 				return 2
+			case t.Type == "iframe":
+				return 3
+			default:
+				return 4
 			}
-			return 3
 		}
 		sort.SliceStable(orderedTargets, func(i, j int) bool {
 			return recapTargetRank(orderedTargets[i]) < recapTargetRank(orderedTargets[j])
 		})
+		skipNonStreamTargets := false
+		sawRetryableStreamTargetErr := false
 		for _, target := range orderedTargets {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("browser: recap audio cancelled: %w", err)
@@ -2139,8 +2176,14 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			if isAuthRedirectURL(target.URL) {
 				continue
 			}
-			if !isTargetInCaptureScope(target, ownerID, frames) ||
-				hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
+			if !isTargetInCaptureScope(target, ownerID, frames) {
+				continue
+			}
+			if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
+				setLastErr(fmt.Errorf("browser: recap audio frame URL does not match requested recording"))
+				continue
+			}
+			if shouldSkipRecapAudioTarget(skipNonStreamTargets, target.URL) {
 				continue
 			}
 			tStart := time.Now()
@@ -2151,10 +2194,19 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 					return fmt.Errorf("browser: recap audio cancelled: %w", err)
 				}
 				setLastErr(evalErr)
+				msg := evalErr.Error()
+				streamTargetErr := isStreamDeadlineMsg(msg) ||
+					(isStreamTarget(target.URL) && strings.Contains(msg, "isDownloadBlocked=true"))
+				if streamTargetErr {
+					skipNonStreamTargets = true
+					if attempt == 0 {
+						sawRetryableStreamTargetErr = true
+					}
+				}
 				if err := captureCtx.Err(); err != nil {
 					return captureTimeoutErr(err)
 				}
-				if isStreamDeadlineMsg(evalErr.Error()) {
+				if isStreamDeadlineMsg(msg) {
 					break
 				}
 				continue
@@ -2220,7 +2272,16 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			}
 			if payload.Error != "" {
 				cleanupPendingTransfer()
-				setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
+				payloadErr := fmt.Errorf("browser: recap audio extraction: %s", payload.Error)
+				setLastErr(payloadErr)
+				streamTargetErr := isStreamDeadlineMsg(payload.Error) ||
+					(isStreamTarget(target.URL) && strings.Contains(payload.Error, "isDownloadBlocked=true"))
+				if streamTargetErr {
+					skipNonStreamTargets = true
+					if attempt == 0 {
+						sawRetryableStreamTargetErr = true
+					}
+				}
 				if isStreamDeadlineMsg(payload.Error) {
 					break
 				}
@@ -2337,16 +2398,17 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
 			return nil
 		}
-		isRetryableStreamDeadline := attempt == 0 && lastErr != nil && isStreamDeadlineMsg(lastErr.Error())
-		shouldRetry := attempt < maxAttempts-1 &&
-			(isRetryableStreamDeadline ||
-				(!hasStreamEmbedTarget &&
-					((lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true")) ||
-						(lastErr == nil && hasXplatTarget))))
+		shouldRetry := shouldRetryRecapAudioAttempt(
+			attempt,
+			maxAttempts,
+			sawRetryableStreamTargetErr,
+			hasStreamEmbedTarget,
+			lastErr,
+		)
 		if !shouldRetry {
 			break
 		}
-		timer := time.NewTimer(1 * time.Second)
+		timer := time.NewTimer(recapAudioRetryDelay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -3727,6 +3789,8 @@ var cdpEvalTimeout = 10 * time.Second
 // decodes, and serializes a whole recording before returning. The caller's
 // context still cancels the evaluation earlier.
 var recapAudioEvalTimeout = 10 * time.Minute
+
+var recapAudioRetryDelay = 1 * time.Second
 
 func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
 	audioLimit := int64(maxRecapAudioPCMBytes)*2 + 65536

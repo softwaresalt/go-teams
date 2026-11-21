@@ -24,9 +24,7 @@ plan_revision: 2
 verdict: PASS
 ---
 
-## Latest Review Summary
-
-## Latest Review Summary
+## Latest Review Summary (Attempt 2 — Current)
 
 dispatch_mode: multi-agent
 decision: PASS
@@ -34,7 +32,7 @@ decision: PASS
 * **Attempt 2 (Targeted Delta Multi-Persona + `rubber-duck` Fallback Pass, `plan_revision: 2`):** `PASS` (`P0: 0`, `P1: 0`, `P2: 0`, `P3: 6` advisory implementation notes carried into harvested task descriptions).
 * **Capability Status (`P-012`):** `TOOL_OK: reviewer-subagent-dispatch`, `TOOL_OK: model-specific-review-routing` (`Architecture Strategist` dispatched on anchor route `gpt-6.1-sol` with `reasoning_effort: high`), `TOOL_DEGRADED: rubber-duck — declared fallback: same-roster adversarial review` (`Correctness Reviewer` dispatched as independent second-opinion challenger cross-checking `plan_revision: 2` and `027-DL` directly against `HEAD` `ea651c1`).
 * **Plan Hardening Requirement:** Required (`Requires plan hardening: yes`) and satisfied (`## Plan Hardening` present with Protected Invariants 1–6, Lightweight 3-Threat Model, and `Strict-Safety ProposedAction Inventory` `PA-036-1`..`PA-036-7` including `Approval Required` and conditional `teams-auth-mfa` external checkpoint).
-* **Runtime Verification and Operational Closure Readiness:** Verified complete (`gofmt`, `go vet`, cross-OS `darwin/amd64` `go vet`, `golangci-lint`, `-race -count=1` unit/Node/CDP/CLI suites, `markdownlint` + per-file `gsd gate line-endings`, conditional `PA-036-7` `teams-auth-mfa` checkpoint with `BLOCKED` fallback, 7-day manual-observation closure checklist, Shipment Documentation Consistency Audit gate, `compound-refresh`, and mandatory `P-020` `compact-context`).
+* **Runtime Verification and Operational Closure Readiness:** Verified complete (`gofmt`, `go vet`, cross-OS `darwin/amd64` `go vet`, `golangci-lint`, `-race -count=1` unit/Node/CDP/CLI suites, `markdownlint` + per-file `gsd gate line-endings`, conditional `PA-036-7` `teams-auth-mfa` checkpoint with `BLOCKED` fallback, 7-day manual-observation closure checklist, shipment `036-S`'s planned post-merge Ship-phase Shipment Documentation Consistency Audit gate, `compound-refresh`, and mandatory `P-020` `compact-context`).
 
 ### Persona Coverage Table (Pass 2 Final State)
 
@@ -54,7 +52,28 @@ decision: PASS
 2. **`U3` (`036.003-T` — `Correctness` P3):** When skipping a conflicting sibling `target.URL` in `orderedTargets`, record a priority-`0` error message (e.g., `fmt.Errorf("browser: recap audio frame URL does not match requested recording")`) when `lastErr == nil` so an evaluated valid stream target's `isDownloadBlocked=true` error (`priority 1`) still outranks a skipped sibling frame's URL mismatch if both attempts remain download-blocked, while single-frame URL mismatches (`TestCaptureRecapAudioRejectsOwnedFrameWithMismatchedRecordingIdentity`) still fail fast on attempt `0` without `lastErr == nil` discovery polling.
 3. **`U4` (`036.004-T` — `Security Lens` / `Constitution` P3):** Reuse deterministic `singleCaseInsensitiveQueryValue` (`meeting_chrome.go:440`) or reject ambiguous conflicting case-variant query values in `applyQueryIdentity`, ensure JS `checkIdentityAgainst` tests the scheme prefix case-insensitively (`/^[a-z][a-z0-9+.-]*:/i`), and group sub-cases cleanly with `t.Run`.
 
-## Latest Review Summary
+## Staging Documentation Consistency Audit
+
+This section records the **Stage-phase documentation consistency audit** for the Wave 2A staging publication (`chore/stage-036-S`, PR `#88`), separate from shipment `036-S`'s future Ship-phase post-merge closure audit (`docs/closure/036-S-036-F-post-merge-closure.md`).
+
+* **Verdict:** `AUDIT_FINDINGS_RESOLVED`
+* **Authoritative Rule Source:** All ten checkable audit categories defined in [`.github/instructions/shipment-documentation-audit.instructions.md`](../../.github/instructions/shipment-documentation-audit.instructions.md) (`# Shipment Documentation Consistency Audit`).
+* **Observed Revisions Checked (Category 3 — Immutable Evidence Semantics):**
+  * Observed base revision on `main`: `ea651c1fcff2405b6329ccbb675d04137658058c`
+  * Observed initial staging revision on `chore/stage-036-S`: `b4c75f84b8089da6ee9292f1399eadc91bd51b87`, followed by bounded delta re-audit of the remediated candidate tree on `chore/stage-036-S` prior to commit (no self-referential own-commit SHA or live worktree hash recorded).
+* **Audited Surfaces (`16` Staged Markdown Artifacts + `2` Stash JSONL Files):**
+  * **Staged Markdown artifacts (`16`):** `.backlogit/queue/027-DL.md`, `.backlogit/queue/036-F.md`, `.backlogit/queue/036-S.md`, `.backlogit/queue/036.001-T.md`, `.backlogit/queue/036.002-T.md`, `.backlogit/queue/036.003-T.md`, `.backlogit/queue/036.004-T.md`, `.backlogit/queue/036.005-T.md`, `.backlogit/queue/036.006-T.md`, `.backlogit/queue/036.007-T.md`, `.backlogit/queue/036.008-T.md`, `.backlogit/queue/036.009-T.md`, `docs/decisions/2026-11-20-wave2a-recap-audio-playback-retry-and-ai-summary-hardening-deliberation.md`, `docs/memory/2026-11-20/stage-036-s-wave2a-recap-audio-and-ai-summary-hardening-memory.md`, `docs/plans/2026-11-20-wave2a-recap-audio-playback-retry-and-ai-summary-hardening-plan.md`, and `docs/reviews/2026-11-20-wave2a-recap-audio-playback-retry-and-ai-summary-hardening-plan-review.md`.
+  * **Staged stash JSONL files (`2`):** `.backlogit/stash.jsonl` and `.backlogit/archive/stash.jsonl`.
+* **In-Scope Staging Findings Resolved and Re-Verified (`P-021 C1`, PR `#88` Copilot Review `6001224914`):**
+  1. **`PRRT_kwDOTStvas66OqQm` (`.backlogit/queue/036.009-T.md`, `docs/plans/2026-11-20-wave2a-recap-audio-playback-retry-and-ai-summary-hardening-plan.md`, `docs/decisions/2026-11-20-wave2a-recap-audio-playback-retry-and-ai-summary-hardening-deliberation.md`):** Updated `U9` (`036.009-T`) and mirroring plan/deliberation prose to require `docs/USER_GUIDE.md` and `docs/ARCHITECTURE.md` to distinguish disabling delayed post-call AI Summary queuing and fetching on live calls (`delay <= 0` early return in `runCaptureWithConfig`, without immediate post-call enrichment) from preserving immediate `# AI Summary` export for an already-available Meeting Recap (`past-recap` or `auto` landing on an `isRecap` surface) unless `--no-ai-summary` (`cfg.NoAISummary`) is explicitly set.
+  2. **`PRRT_kwDOTStvas66OqQ0` (`docs/reviews/2026-11-20-wave2a-recap-audio-playback-retry-and-ai-summary-hardening-plan-review.md`):** Recorded this explicit Stage-phase `## Staging Documentation Consistency Audit` outcome, observed revisions, audited staging surfaces, and resolved finding inventory separately from shipment `036-S`'s planned post-merge Ship-phase closure audit.
+  3. **`PRRT_kwDOTStvas66OqRF` (`docs/reviews/2026-11-20-wave2a-recap-audio-playback-retry-and-ai-summary-hardening-plan-review.md`):** Relabeled Attempt 2 (`verdict: PASS`, `plan_revision: 2`) as `## Latest Review Summary (Attempt 2 — Current)` (removing the duplicate heading) and Attempt 1 (`verdict: FAIL`, `plan_revision: 1`) as `## Historical Review Summary (Attempt 1 — Superseded by Attempt 2)` so operator-facing headings unambiguously match the review manifest's `latest_attempt: 2` (`verdict: PASS`).
+* **Deferred Out-of-Scope Follow-Ups:** None (`0` deferred stash entries required).
+
+## Historical Review Summary (Attempt 1 — Superseded by Attempt 2)
+
+> [!NOTE]
+> Historical record only: Attempt 1 reviewed `plan_revision: 1` and returned `FAIL` (`P1: 7`). Every Attempt 1 finding below was remediated in `plan_revision: 2` and superseded by Attempt 2's unanimous `PASS` (`latest_attempt: 2`, `P0: 0`, `P1: 0`, `P2: 0`) recorded in `## Latest Review Summary (Attempt 2 — Current)` above.
 
 dispatch_mode: multi-agent
 decision: FAIL

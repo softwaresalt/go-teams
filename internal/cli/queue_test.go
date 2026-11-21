@@ -318,6 +318,8 @@ func TestAppendDeferredAISummaryQueueHelpers(t *testing.T) {
 	require.NoError(t, err, "trailing backslash in Windows profile path must parse cleanly via splitQueueArgs")
 	assert.Equal(t, `C:\Profiles\Alice\`, extractQueueFlagValue(parsedArgs, "--profile-dir"))
 	assert.Equal(t, mdPath, extractQueueFlagValue(parsedArgs, "--append-ai-summary"))
+	assert.True(t, queueLineEnablesAISummary(parsedArgs),
+		"persisted per-meeting AI Summary opt-in must override the schedule global disable after restart")
 
 	require.NoError(t, markDeferredAISummaryQueueLineDone(qPath, mdPath))
 	b, err := os.ReadFile(qPath)

@@ -170,6 +170,9 @@ func appendDeferredAISummaryQueueLineWithConfig(queuePath, meetingURL, transcrip
 		if cfg.Headless {
 			b.WriteString(" --headless")
 		}
+		if !cfg.NoAISummary {
+			b.WriteString(" --no-ai-summary=false")
+		}
 		lines = append(lines, b.String())
 		return writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline)
 	})

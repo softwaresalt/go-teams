@@ -129,12 +129,7 @@ func TestRunCaptureCleanupOnCancellation(t *testing.T) {
 	}
 }
 
-func TestRunCaptureLiveWithSummaryWritesQueueFallbackAndAppendsAfterDelay(t *testing.T) {
-	cfg := config.Config{CaptureMode: config.CaptureModeLiveWithSummary}
-	assert.Equal(t, 30*time.Minute, effectiveAISummaryDelay(cfg, false))
-	assert.Equal(t, time.Duration(0), effectiveAISummaryDelay(cfg, true))
-	assert.Equal(t, time.Duration(0), effectiveAISummaryDelay(config.Config{CaptureMode: config.CaptureModeEphemeralLive}, false))
-
+func TestRunCmdLiveWithSummaryWritesQueueFallbackAndAppendsAfterDelay(t *testing.T) {
 	dir := t.TempDir()
 	mdPath := filepath.Join(dir, "live-call.md")
 	qPath := filepath.Join(dir, "transcription_queue.txt")
@@ -188,11 +183,11 @@ func TestRunCaptureLiveWithSummaryWritesQueueFallbackAndAppendsAfterDelay(t *tes
 	assert.True(t, strings.HasPrefix(strings.TrimSpace(string(qBytes)), "::"), "completed deferred queue line must be marked ::, got:\n%s", string(qBytes))
 	assert.Contains(t, string(qBytes), "--profile-dir")
 	assert.Contains(t, string(qBytes), "--account")
+}
 
-	// Also verify --mode ephemeral-live defaults CaptureAudio=true and AISummaryDelay=0s,
-	// including when loaded from YAML config, and rejects negative CLI durations.
+func TestRunCmdEphemeralLiveDefaultsAudioAndZeroDelay(t *testing.T) {
 	var gotEphemeral config.Config
-	dEph := &deps{
+	d := &deps{
 		loadConfig: func(string) (config.Config, error) {
 			c := validConfig()
 			c.CaptureMode = config.CaptureModeEphemeralLive
@@ -205,48 +200,93 @@ func TestRunCaptureLiveWithSummaryWritesQueueFallbackAndAppendsAfterDelay(t *tes
 		},
 		newSession: func(config.Config, string) meetingSession { return &fakeSession{} },
 	}
-	require.NoError(t, runCmd(context.Background(), dEph, "join", "https://teams.microsoft.com/meet/123"))
+	require.NoError(t, runCmd(context.Background(), d, "join", "https://teams.microsoft.com/meet/123"))
 	assert.Equal(t, config.CaptureModeEphemeralLive, gotEphemeral.CaptureMode)
 	assert.True(t, gotEphemeral.CaptureAudio)
 	assert.Equal(t, "0s", gotEphemeral.AISummaryDelay)
-
-	err = runCmd(context.Background(), dEph, "join", "https://teams.microsoft.com/meet/123", "--duration=-1m")
-	require.ErrorIs(t, err, config.ErrInvalidDuration)
 }
 
-func TestDefaultNewMeetingAndNewSessionWireAISummaryFlags(t *testing.T) {
-	// 1. --mode past-recap without --no-ai-summary sets ForceRecap=true, AISummaryOnly=false, DisableAISummary=false.
-	recapOpts := buildMeetingOptions(config.Config{
-		CaptureMode: config.CaptureModePastRecap,
-	}, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1")
-	assert.True(t, recapOpts.ForceRecap)
-	assert.False(t, recapOpts.AISummaryOnly, "--mode past-recap must not set AISummaryOnly")
-	assert.False(t, recapOpts.DisableAISummary)
+func TestBuildMeetingOptionsAISummaryFlags(t *testing.T) {
+	const meetingURL = "https://teams.cloud.microsoft/l/meetingrecap?threadId=1"
 
-	// 2. --no-ai-summary (AISummaryDelay="0s") sets DisableAISummary=true.
-	noSummaryCfg := config.Config{
-		CaptureMode:    config.CaptureModePastRecap,
-		AISummaryDelay: "0s",
+	t.Run("zero-delay-does-not-disable-recap", func(t *testing.T) {
+		opts := buildMeetingOptions(config.Config{
+			CaptureMode:    config.CaptureModePastRecap,
+			AISummaryDelay: "0s",
+		}, meetingURL)
+		assert.True(t, opts.ForceRecap)
+		assert.False(t, opts.AISummaryOnly)
+		assert.False(t, opts.DisableAISummary)
+	})
+
+	t.Run("no-ai-summary-disables-recap", func(t *testing.T) {
+		opts := buildMeetingOptions(config.Config{
+			CaptureMode:    config.CaptureModePastRecap,
+			AISummaryDelay: "0s",
+			NoAISummary:    true,
+		}, meetingURL)
+		assert.True(t, opts.ForceRecap)
+		assert.False(t, opts.AISummaryOnly)
+		assert.True(t, opts.DisableAISummary)
+	})
+
+	t.Run("append-always-enables-recap-summary", func(t *testing.T) {
+		opts := buildMeetingOptions(config.Config{
+			CaptureMode:     config.CaptureModePastRecap,
+			AppendAISummary: "C:\\out\\call.md",
+			AISummaryDelay:  "0s",
+			NoAISummary:     true,
+		}, meetingURL)
+		assert.True(t, opts.ForceRecap)
+		assert.True(t, opts.AISummaryOnly)
+		assert.False(t, opts.DisableAISummary)
+	})
+}
+
+func TestIsAISummaryDisabledAcrossModes(t *testing.T) {
+	const meetingURL = "https://teams.cloud.microsoft/l/meetingrecap?threadId=1"
+
+	tests := []struct {
+		name     string
+		cfg      config.Config
+		disabled bool
+	}{
+		{"past-recap-zero-delay", config.Config{CaptureMode: config.CaptureModePastRecap, AISummaryDelay: "0s"}, false},
+		{"auto-zero-delay", config.Config{CaptureMode: config.CaptureModeAuto, AISummaryDelay: "0s"}, false},
+		{"live-with-summary-zero-delay", config.Config{CaptureMode: config.CaptureModeLiveWithSummary, AISummaryDelay: "0s"}, false},
+		{"ephemeral-live", config.Config{CaptureMode: config.CaptureModeEphemeralLive}, true},
+		{"explicit-no-ai", config.Config{CaptureMode: config.CaptureModeAuto, NoAISummary: true}, true},
+		{"append-overrides-no-ai", config.Config{CaptureMode: config.CaptureModeEphemeralLive, AppendAISummary: "call.md", NoAISummary: true}, false},
 	}
-	assert.True(t, isAISummaryDisabled(noSummaryCfg))
-	noSummaryOpts := buildMeetingOptions(noSummaryCfg, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1")
-	assert.True(t, noSummaryOpts.ForceRecap)
-	assert.False(t, noSummaryOpts.AISummaryOnly)
-	assert.True(t, noSummaryOpts.DisableAISummary)
-
-	// 3. --append-ai-summary sets ForceRecap=true, AISummaryOnly=true, DisableAISummary=false.
-	appendCfg := config.Config{
-		CaptureMode:     config.CaptureModePastRecap,
-		AppendAISummary: "C:\\out\\call.md",
-		AISummaryDelay:  "0s",
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.disabled, isAISummaryDisabled(tc.cfg))
+			assert.Equal(t, tc.disabled, buildMeetingOptions(tc.cfg, meetingURL).DisableAISummary)
+		})
 	}
-	assert.False(t, isAISummaryDisabled(appendCfg), "--append-ai-summary must never disable AI summary extraction")
-	appendOpts := buildMeetingOptions(appendCfg, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1")
-	assert.True(t, appendOpts.ForceRecap)
-	assert.True(t, appendOpts.AISummaryOnly)
-	assert.False(t, appendOpts.DisableAISummary)
+}
 
-	// 4. runAppendAISummary forwards AppendAISummary on recapCfg so newMeeting sees AISummaryOnly=true.
+func TestEffectiveAISummaryDelayAcrossModes(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.Config
+		isRecap bool
+		want    time.Duration
+	}{
+		{"live-with-summary-default", config.Config{CaptureMode: config.CaptureModeLiveWithSummary}, false, 30 * time.Minute},
+		{"recap", config.Config{CaptureMode: config.CaptureModePastRecap}, true, 0},
+		{"no-ai-empty-delay", config.Config{CaptureMode: config.CaptureModeAuto, NoAISummary: true}, false, 0},
+		{"no-ai-positive-delay", config.Config{CaptureMode: config.CaptureModeLiveWithSummary, AISummaryDelay: "15m", NoAISummary: true}, false, 0},
+		{"ephemeral-live", config.Config{CaptureMode: config.CaptureModeEphemeralLive}, false, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, effectiveAISummaryDelay(tc.cfg, tc.isRecap))
+		})
+	}
+}
+
+func TestRunAppendAISummaryResetsNoAISummary(t *testing.T) {
 	dir := t.TempDir()
 	mdPath := filepath.Join(dir, "existing.md")
 	require.NoError(t, os.WriteFile(mdPath, []byte("# Meeting Transcript\n\n> **Alice:** Hi.\n"), 0o600))
@@ -257,7 +297,127 @@ func TestDefaultNewMeetingAndNewSessionWireAISummaryFlags(t *testing.T) {
 			return &fakeSummaryMeeting{summary: "Meeting notes:\nAppended item."}, ctx, func() {}, nil
 		},
 	}
-	require.NoError(t, runAppendAISummary(context.Background(), d, config.Config{AISummaryDelay: "0s"}, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", mdPath))
+	err := runAppendAISummary(context.Background(), d, config.Config{
+		AISummaryDelay: "15m",
+		NoAISummary:    true,
+	}, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1", mdPath)
+	require.NoError(t, err)
 	assert.Equal(t, mdPath, gotAppendCfg.AppendAISummary)
+	assert.Empty(t, gotAppendCfg.AISummaryDelay)
+	assert.False(t, gotAppendCfg.NoAISummary)
 	assert.True(t, buildMeetingOptions(gotAppendCfg, "https://teams.cloud.microsoft/l/meetingrecap?threadId=1").AISummaryOnly)
+}
+
+func TestRunCmdSuppressesDeferredAISummaryTimerAndQueue(t *testing.T) {
+	tests := []struct {
+		name          string
+		args          []string
+		appendSummary bool
+		wantMode      string
+		wantDisabled  bool
+		wantNoAI      bool
+	}{
+		{"past-recap-zero-delay", []string{"--mode", "past-recap", "--ai-summary-delay", "0s"}, false, config.CaptureModePastRecap, false, false},
+		{"auto-zero-delay", []string{"--mode", "auto", "--ai-summary-delay", "0s"}, false, config.CaptureModeAuto, false, false},
+		{"live-with-summary-zero-delay", []string{"--mode", "live-with-summary", "--ai-summary-delay", "0s"}, false, config.CaptureModeLiveWithSummary, false, false},
+		{"ephemeral-live", []string{"--mode", "ephemeral-live"}, false, config.CaptureModeEphemeralLive, true, false},
+		{"explicit-no-ai", []string{"--mode", "live-with-summary", "--ai-summary-delay", "15m", "--no-ai-summary"}, false, config.CaptureModeLiveWithSummary, true, true},
+		{"append-resets-no-ai", []string{"--mode", "live-with-summary", "--no-ai-summary"}, true, config.CaptureModePastRecap, false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mdPath := filepath.Join(dir, "existing.md")
+			qPath := filepath.Join(dir, "transcription_queue.txt")
+			require.NoError(t, os.WriteFile(mdPath, []byte("# Meeting Transcript\n"), 0o600))
+
+			var (
+				gotCfg   config.Config
+				gotOpts  browser.MeetingOptions
+				meetings int
+			)
+			d := &deps{
+				loadConfig: func(string) (config.Config, error) {
+					cfg := validConfig()
+					cfg.QueueFile = qPath
+					return cfg, nil
+				},
+				newRunner: func(config.Config) browser.Runner { return &fakeRunner{} },
+				newMeeting: func(ctx context.Context, cfg config.Config, meetingURL string) (browser.Meeting, context.Context, func(), error) {
+					meetings++
+					gotCfg = cfg
+					gotOpts = buildMeetingOptions(cfg, meetingURL)
+					return &fakeSummaryMeeting{summary: "Summary notes:\nEnd-to-end item."}, ctx, func() {}, nil
+				},
+				newSession: func(config.Config, string) meetingSession {
+					return &fakeSession{transcriptPath: mdPath}
+				},
+			}
+
+			args := append([]string{"join", "https://teams.microsoft.com/meet/123"}, tc.args...)
+			if tc.appendSummary {
+				args = append(args, "--append-ai-summary", mdPath)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- runCmd(ctx, d, args...)
+			}()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				cancel()
+				err := <-done
+				t.Fatalf("runCmd waited on a deferred AI summary timer; cancellation returned %v", err)
+			}
+
+			require.Equal(t, 1, meetings)
+			assert.Equal(t, tc.wantMode, gotCfg.CaptureMode)
+			assert.Equal(t, tc.wantDisabled, gotOpts.DisableAISummary)
+			assert.Equal(t, tc.wantNoAI, gotCfg.NoAISummary)
+			_, err := os.Stat(qPath)
+			require.ErrorIs(t, err, os.ErrNotExist, "suppressed AI summary must not enqueue fallback work")
+		})
+	}
+}
+
+func TestRunCmdRejectsInvalidAISummaryDelay(t *testing.T) {
+	tests := []struct {
+		name         string
+		loadedDelay  string
+		args         []string
+		wantSentinel bool
+	}{
+		{"loaded-malformed", "not-a-duration", nil, true},
+		{"loaded-negative", "-1s", nil, true},
+		{"cli-malformed", "", []string{"--ai-summary-delay", "not-a-duration"}, false},
+		{"cli-negative", "", []string{"--ai-summary-delay=-1s"}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &deps{
+				loadConfig: func(string) (config.Config, error) {
+					cfg := validConfig()
+					cfg.AISummaryDelay = tc.loadedDelay
+					return cfg, nil
+				},
+				newRunner: func(config.Config) browser.Runner { return &fakeRunner{} },
+				newMeeting: func(context.Context, config.Config, string) (browser.Meeting, context.Context, func(), error) {
+					t.Fatal("invalid delay must fail before meeting creation")
+					return nil, context.Background(), func() {}, nil
+				},
+				newSession: func(config.Config, string) meetingSession { return &fakeSession{} },
+			}
+
+			args := append([]string{"join", "https://teams.microsoft.com/meet/123"}, tc.args...)
+			err := runCmd(context.Background(), d, args...)
+			require.Error(t, err)
+			assert.Contains(t, strings.ReplaceAll(err.Error(), "_", "-"), "ai-summary-delay")
+			if tc.wantSentinel {
+				require.ErrorIs(t, err, config.ErrInvalidDuration)
+			}
+		})
+	}
 }

@@ -935,6 +935,496 @@ globalThis.AudioContext = class {
 	}
 }
 
+func TestWave2APathAInFlightByteReservation(t *testing.T) {
+	runProbe := func(t *testing.T, probeJS string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "node", "-e", probeJS)
+		cmd.Stdin = strings.NewReader(extractRecapAudioJS)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("recap audio probe failed: %v\n%s", err, out)
+		}
+	}
+
+	t.Run("concurrent-streaming-workers-reserve-before-buffering", func(t *testing.T) {
+		probeJS := recapColdTestMP4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioDurationSec = 4200, maxRecapAudioPCMBytes = 377487360;
+const recapAudioCaptureDeadlineMs = 5000, recapAudioFetchMaxAttempts = 1;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+let maxRecapAudioSourceBytes = 0;
+
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(7);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const wsd = 96256;
+  const segCount = 12;
+  const ppd = wsd * segCount;
+  const audioInit = buildAudioInitSegment();
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, audioInit));
+  const encSeg = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(0, 0x31)));
+  maxRecapAudioSourceBytes = audioInit.byteLength + (encSeg.byteLength * 6);
+
+  let allReadersStartedResolve;
+  const allReadersStarted = new Promise(resolve => { allReadersStartedResolve = resolve; });
+  let readersStarted = 0;
+  let completedReads = 0;
+  let aborts = 0;
+  let cancelsBeforeAbort = 0;
+  let testCompleted = false;
+  process.on('beforeExit', () => {
+    if (!testCompleted) {
+      console.error('test exited before concurrent Path A reservation probe completed');
+      process.exit(1);
+    }
+  });
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  const initURL = base + '?part=initsegment&track=audio&quality=audcopy&wsd=' + wsd + '&ppd=' + ppd + '&driveItemId=recording-a';
+  function makeResponse(url, bytes) {
+    let firstRead = true;
+    const response = {
+      ok: true,
+      status: 200,
+      url,
+      headers: { get: () => null },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (!firstRead) {
+              completedReads++;
+              return { done: true };
+            }
+            firstRead = false;
+            readersStarted++;
+            if (readersStarted === 12) allReadersStartedResolve();
+            await allReadersStarted;
+            return { done: false, value: bytes };
+          },
+          cancel: async () => {
+            if (aborts === 0) cancelsBeforeAbort++;
+          }
+        })
+      },
+      arrayBuffer: async () => bytes.slice().buffer
+    };
+    return response;
+  }
+
+  globalThis.fetch = async (url, init) => {
+    const signal = init && init.signal;
+    if (signal && signal.addEventListener) {
+      signal.addEventListener('abort', () => { aborts++; }, { once: true });
+    }
+    if (!String(url).includes('oneDrive.transcode')) throw new TypeError('Failed to fetch');
+    if (String(url).includes('initsegment')) return makeResponse(String(url), encInit);
+    return makeResponse(String(url), encSeg);
+  };
+
+  globalThis.crypto = { subtle };
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+  globalThis.location = {
+    href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a',
+    origin: 'https://contoso-my.sharepoint.com'
+  };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 120 };
+  let videoMounted = false;
+  let initFetched = false;
+  const video = {
+    src: 'blob:https://contoso-my.sharepoint.com/concurrent',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/concurrent',
+    duration: 120,
+    paused: true,
+    play: async () => {
+      video.paused = false;
+      if (!initFetched) {
+        initFetched = true;
+        const response = await globalThis.fetch(initURL);
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await response.arrayBuffer());
+      }
+    },
+    pause: () => { video.paused = true; },
+    getAttribute: () => null
+  };
+  const playBtn = {
+    click: () => { videoMounted = true; }
+  };
+  globalThis.document = {
+    querySelector: selector => selector.includes('Play video')
+      ? playBtn
+      : (((selector === 'audio, video' || selector === 'video') && videoMounted) ? video : null),
+    querySelectorAll: () => []
+  };
+
+  let failure;
+  try { await eval(fs.readFileSync(0, 'utf8')); } catch (error) { failure = error; }
+  const message = String((failure && failure.message) || failure || '');
+  if (!message.includes('recap audio exceeds maximum supported size/duration')) {
+    throw new Error('expected aggregate Path A source-byte limit failure, got: ' + message);
+  }
+  if (readersStarted < 7) throw new Error('expected aggregate cap to be crossed by concurrent readers, got ' + readersStarted);
+  if (completedReads !== 0) throw new Error('expected cap failure before any worker completed, got ' + completedReads);
+  if (aborts === 0) throw new Error('expected aggregate cap failure to abort active requests');
+  if (cancelsBeforeAbort !== 0) throw new Error('reader.cancel ran before synchronous abort for ' + cancelsBeforeAbort + ' readers');
+  testCompleted = true;
+})().catch(error => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS)
+	})
+
+	t.Run("five-attempt-retries-release-worker-reservations", func(t *testing.T) {
+		probeJS := recapColdTestMP4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioDurationSec = 4200, maxRecapAudioPCMBytes = 377487360;
+const recapAudioCaptureDeadlineMs = 5000, recapAudioFetchMaxAttempts = 5;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+let maxRecapAudioSourceBytes = 0;
+
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(8);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const wsd = 96256;
+  const ppd = wsd;
+  const audioInit = buildAudioInitSegment();
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, audioInit));
+  const media = buildMediaSegment(0, 0x41);
+  const encMedia = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, media));
+  maxRecapAudioSourceBytes = audioInit.byteLength + encMedia.byteLength;
+
+  const origSetTimeout = globalThis.setTimeout;
+  const origClearTimeout = globalThis.clearTimeout;
+  let timerModelNow = 0;
+  const requestTimers = [];
+  const requestTimeoutDelays = [];
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms === 15000) {
+      const timer = { at: timerModelNow + ms, fn, args, canceled: false, fired: false, modeled: true };
+      requestTimers.push(timer);
+      requestTimeoutDelays.push(ms);
+      return timer;
+    }
+    if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+    return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+  };
+  globalThis.clearTimeout = timer => {
+    if (timer && timer.modeled) {
+      timer.canceled = true;
+      return;
+    }
+    origClearTimeout(timer);
+  };
+  function resolveAfterRequestTimeout(resolve) {
+    origSetTimeout(() => {
+      timerModelNow += 15000;
+      for (const timer of requestTimers) {
+        if (!timer.canceled && !timer.fired && timer.at <= timerModelNow) {
+          timer.fired = true;
+          timer.fn(...timer.args);
+        }
+      }
+      resolve();
+    }, 0);
+  }
+  let segmentAttempts = 0;
+  let lateArrayBufferTimeouts = 0;
+  let lateReaderTimeouts = 0;
+  let testCompleted = false;
+  process.on('beforeExit', () => {
+    if (!testCompleted) {
+      console.error('test exited before retry reservation-cleanup probe completed');
+      process.exit(1);
+    }
+  });
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  const initURL = base + '?part=initsegment&track=audio&quality=audcopy&wsd=' + wsd + '&ppd=' + ppd + '&driveItemId=recording-a';
+  function initResponse(url) {
+    return {
+      ok: true,
+      status: 200,
+      url,
+      headers: { get: () => String(encInit.byteLength) },
+      body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) },
+      arrayBuffer: async () => encInit.slice().buffer
+    };
+  }
+  function streamingResponse(url, delayedRead) {
+    let reads = 0;
+    return {
+      ok: true,
+      status: 200,
+      url,
+      headers: { get: name => name.toLowerCase() === 'content-length' ? String(encMedia.byteLength) : null },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            reads++;
+            if (reads === 1) {
+              if (delayedRead) {
+                await new Promise(resolve => resolveAfterRequestTimeout(resolve));
+                lateReaderTimeouts++;
+              }
+              return { done: false, value: encMedia };
+            }
+            return { done: true };
+          },
+          cancel: async () => {}
+        })
+      },
+      arrayBuffer: async () => encMedia.slice().buffer
+    };
+  }
+  function arrayBufferTimeoutResponse(url) {
+    return {
+      ok: true,
+      status: 200,
+      url,
+      headers: { get: name => name.toLowerCase() === 'content-length' ? String(encMedia.byteLength) : null },
+      arrayBuffer: async () => {
+        await new Promise(resolve => resolveAfterRequestTimeout(resolve));
+        lateArrayBufferTimeouts++;
+        return encMedia.slice().buffer;
+      }
+    };
+  }
+
+  globalThis.fetch = async url => {
+    const text = String(url);
+    if (!text.includes('oneDrive.transcode')) throw new TypeError('Failed to fetch');
+    if (text.includes('initsegment')) return initResponse(text);
+    segmentAttempts++;
+    if (segmentAttempts === 1) {
+      return { ok: false, status: 408, url: text, headers: { get: () => null } };
+    }
+    if (segmentAttempts === 2) {
+      return { ok: false, status: 503, url: text, headers: { get: () => null } };
+    }
+    if (segmentAttempts === 3) return arrayBufferTimeoutResponse(text);
+    if (segmentAttempts === 4) return streamingResponse(text, true);
+    return streamingResponse(text, false);
+  };
+
+  globalThis.crypto = { subtle };
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+  globalThis.location = {
+    href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a',
+    origin: 'https://contoso-my.sharepoint.com'
+  };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 10 };
+  let videoMounted = false;
+  let initFetched = false;
+  const video = {
+    src: 'blob:https://contoso-my.sharepoint.com/retry',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/retry',
+    duration: 10,
+    paused: true,
+    play: async () => {
+      video.paused = false;
+      if (!initFetched) {
+        initFetched = true;
+        const response = await globalThis.fetch(initURL);
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await response.arrayBuffer());
+      }
+    },
+    pause: () => { video.paused = true; },
+    getAttribute: () => null
+  };
+  const playBtn = {
+    click: () => { videoMounted = true; }
+  };
+  globalThis.document = {
+    querySelector: selector => selector.includes('Play video')
+      ? playBtn
+      : (((selector === 'audio, video' || selector === 'video') && videoMounted) ? video : null),
+    querySelectorAll: () => []
+  };
+
+  let failure;
+  let raw = '';
+  try { raw = await eval(fs.readFileSync(0, 'utf8')); } catch (error) { failure = error; }
+  const message = String((failure && failure.message) || failure || '');
+  if (failure) throw new Error('retry cleanup unexpectedly exhausted the cap: ' + message);
+  if (segmentAttempts !== 5) throw new Error('expected five segment attempts, got ' + segmentAttempts);
+  if (requestTimeoutDelays.length !== 5 || requestTimeoutDelays.some(ms => ms !== 15000)) {
+    throw new Error('expected five unchanged 15000ms request timers, got ' + JSON.stringify(requestTimeoutDelays));
+  }
+  if (lateArrayBufferTimeouts !== 1) throw new Error('expected one late arrayBuffer timeout, got ' + lateArrayBufferTimeouts);
+  if (lateReaderTimeouts !== 1) throw new Error('expected one late reader timeout, got ' + lateReaderTimeouts);
+  const payload = JSON.parse(raw);
+  if (!Array.isArray(payload.pcmChunks) || payload.pcmChunks.length === 0) {
+    throw new Error('expected successful PCM output after reservation cleanup');
+  }
+  testCompleted = true;
+})().catch(error => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS)
+	})
+
+	t.Run("no-content-length-partial-read-failure-releases-reservation", func(t *testing.T) {
+		probeJS := recapColdTestMP4HelpersJS + `
+const fs = require('fs');
+const { webcrypto } = require('crypto');
+const maxRecapAudioDurationSec = 4200, maxRecapAudioPCMBytes = 377487360;
+const recapAudioCaptureDeadlineMs = 5000, recapAudioFetchMaxAttempts = 2;
+const recapExpectedIdentity = { DriveItemID: 'recording-a' };
+let maxRecapAudioSourceBytes = 0;
+
+(async () => {
+  const subtle = webcrypto.subtle;
+  const iv = new Uint8Array(16).fill(10);
+  const key = await subtle.generateKey({ name: 'AES-CBC', length: 128 }, false, ['encrypt', 'decrypt']);
+  const wsd = 96256;
+  const ppd = wsd;
+  const audioInit = buildAudioInitSegment();
+  const encInit = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, audioInit));
+  const encMedia = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv }, key, buildMediaSegment(0, 0x51)));
+  const partialMedia = encMedia.subarray(0, Math.floor(encMedia.byteLength / 2));
+  maxRecapAudioSourceBytes = audioInit.byteLength + encMedia.byteLength;
+
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms >= 10000) return origSetTimeout(fn, ms, ...args);
+    return origSetTimeout(() => fn(...args), Math.min(ms || 0, 5));
+  };
+
+  let segmentAttempts = 0;
+  let midStreamFailures = 0;
+  let testCompleted = false;
+  process.on('beforeExit', () => {
+    if (!testCompleted) {
+      console.error('test exited before no-Content-Length cleanup probe completed');
+      process.exit(1);
+    }
+  });
+
+  const base = 'https://contoso-my.sharepoint.com/_api/v2.1/drives/d1/items/recording-a/oneDrive.transcode';
+  const initURL = base + '?part=initsegment&track=audio&quality=audcopy&wsd=' + wsd + '&ppd=' + ppd + '&driveItemId=recording-a';
+  function initResponse(url) {
+    return {
+      ok: true,
+      status: 200,
+      url,
+      headers: { get: () => null },
+      body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) },
+      arrayBuffer: async () => encInit.slice().buffer
+    };
+  }
+  function streamingResponse(url, failMidStream) {
+    let reads = 0;
+    return {
+      ok: true,
+      status: 200,
+      url,
+      headers: { get: () => null },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            reads++;
+            if (reads === 1) {
+              return { done: false, value: failMidStream ? partialMedia : encMedia };
+            }
+            if (failMidStream) {
+              midStreamFailures++;
+              throw new TypeError('synthetic mid-stream failure');
+            }
+            return { done: true };
+          },
+          cancel: async () => {}
+        })
+      },
+      arrayBuffer: async () => encMedia.slice().buffer
+    };
+  }
+
+  globalThis.fetch = async url => {
+    const text = String(url);
+    if (!text.includes('oneDrive.transcode')) throw new TypeError('Failed to fetch');
+    if (text.includes('initsegment')) return initResponse(text);
+    segmentAttempts++;
+    return streamingResponse(text, segmentAttempts === 1);
+  };
+
+  globalThis.crypto = { subtle };
+  globalThis.AudioContext = class {
+    async decodeAudioData() { return { sampleRate: 44100, length: 441, duration: 0.01, numberOfChannels: 1, getChannelData: () => new Float32Array(441) }; }
+    async close() {}
+  };
+  globalThis.location = {
+    href: 'https://contoso-my.sharepoint.com/_layouts/15/streamembed.aspx?driveItemId=recording-a',
+    origin: 'https://contoso-my.sharepoint.com'
+  };
+  globalThis.window = globalThis;
+  globalThis.g_fileInfo = { VroomItemId: 'recording-a', isDownloadBlocked: true, duration: 10 };
+  let videoMounted = false;
+  let initFetched = false;
+  const video = {
+    src: 'blob:https://contoso-my.sharepoint.com/partial-retry',
+    currentSrc: 'blob:https://contoso-my.sharepoint.com/partial-retry',
+    duration: 10,
+    paused: true,
+    play: async () => {
+      video.paused = false;
+      if (!initFetched) {
+        initFetched = true;
+        const response = await globalThis.fetch(initURL);
+        await globalThis.crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, await response.arrayBuffer());
+      }
+    },
+    pause: () => { video.paused = true; },
+    getAttribute: () => null
+  };
+  const playBtn = {
+    click: () => { videoMounted = true; }
+  };
+  globalThis.document = {
+    querySelector: selector => selector.includes('Play video')
+      ? playBtn
+      : (((selector === 'audio, video' || selector === 'video') && videoMounted) ? video : null),
+    querySelectorAll: () => []
+  };
+
+  let failure;
+  let raw = '';
+  try { raw = await eval(fs.readFileSync(0, 'utf8')); } catch (error) { failure = error; }
+  const message = String((failure && failure.message) || failure || '');
+  if (failure) throw new Error('partial no-Content-Length retry exhausted the cap: ' + message);
+  if (segmentAttempts !== 2) throw new Error('expected failed attempt plus retry, got ' + segmentAttempts);
+  if (midStreamFailures !== 1) throw new Error('expected one mid-stream failure, got ' + midStreamFailures);
+  const payload = JSON.parse(raw);
+  if (!Array.isArray(payload.pcmChunks) || payload.pcmChunks.length === 0) {
+    throw new Error('expected successful PCM output after partial reservation cleanup');
+  }
+  testCompleted = true;
+})().catch(error => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exitCode = 1;
+});
+`
+		runProbe(t, probeJS)
+	})
+}
+
 func TestWave2ARecapAudioEarlyMountPlayAndBlockedSkip(t *testing.T) {
 	const playbackMarker = "036.001-T:early-mount-playback"
 	const blockedMarker = "036.001-T:blocked-non-blob-skip"

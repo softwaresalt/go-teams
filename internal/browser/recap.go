@@ -656,6 +656,7 @@ const extractRecapAudioJS = `(async () => {
 		const abortCtrl = typeof AbortController === 'function' ? new AbortController() : null;
 		let fatalErr = null;
 		let streamSourceBytes = 0;
+		let inFlightSourceBytes = 0;
 		let pathAActive = false;
 		let pathAStarted = false;
 		let pathAFailed = false;
@@ -829,7 +830,7 @@ const extractRecapAudioJS = `(async () => {
 			if (isFMP4InitSegment(u8)) {
 				if (classifyInitSegmentTrack(u8) === 'video') return;
 				if (!mseInitSegment) {
-					if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+					if (streamSourceBytes + inFlightSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
 						fatalErr = new Error(limitError);
 						if (abortCtrl) abortCtrl.abort();
 						signalWake();
@@ -857,7 +858,7 @@ const extractRecapAudioJS = `(async () => {
 				signalWake();
 				return;
 			}
-			if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+			if (streamSourceBytes + inFlightSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
 				fatalErr = new Error(limitError);
 				if (abortCtrl) abortCtrl.abort();
 				signalWake();
@@ -1041,6 +1042,7 @@ const extractRecapAudioJS = `(async () => {
 				pathAActive = false;
 				pathAFailed = true;
 				streamSourceBytes = mseBytesTotal();
+				inFlightSourceBytes = 0;
 				if (hooksRestored || cleaningUp) return null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 				if (m) {
@@ -1056,6 +1058,7 @@ const extractRecapAudioJS = `(async () => {
 			});
 		}
 		async function fetchBytesOnce(urlStr, origFetchFn, hookWin, signal) {
+			let workerReserved = 0;
 			if (fatalErr) throw fatalErr;
 			const parentSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
 			if (parentSignal && parentSignal.aborted) {
@@ -1109,10 +1112,14 @@ const extractRecapAudioJS = `(async () => {
 					throw err;
 				}
 				const cl = Number(resp.headers && resp.headers.get && resp.headers.get('content-length'));
-				if (Number.isFinite(cl) && cl > 0 && streamSourceBytes + cl > maxRecapAudioSourceBytes) {
-					fatalErr = new Error(limitError);
-					if (abortCtrl) abortCtrl.abort();
-					throw fatalErr;
+				if (Number.isFinite(cl) && cl > 0) {
+					if (streamSourceBytes + inFlightSourceBytes + cl > maxRecapAudioSourceBytes) {
+						fatalErr = new Error(limitError);
+						if (abortCtrl) abortCtrl.abort();
+						throw fatalErr;
+					}
+					inFlightSourceBytes += cl;
+					workerReserved += cl;
 				}
 				if (!resp.body || !resp.body.getReader) {
 					const ab = await resp.arrayBuffer();
@@ -1120,12 +1127,20 @@ const extractRecapAudioJS = `(async () => {
 					if (parentSignal && parentSignal.aborted) {
 						throw new Error('transcode fetch aborted');
 					}
+					if (timedOut) {
+						const err = new Error('transcode fetch timeout');
+						err.retryable = true;
+						throw err;
+					}
 					const u8 = new Uint8Array(ab);
-					if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+					const extra = Math.max(0, u8.byteLength - workerReserved);
+					if (streamSourceBytes + inFlightSourceBytes + extra > maxRecapAudioSourceBytes) {
 						fatalErr = new Error(limitError);
 						if (abortCtrl) abortCtrl.abort();
 						throw fatalErr;
 					}
+					inFlightSourceBytes = Math.max(0, inFlightSourceBytes - workerReserved);
+					workerReserved = 0;
 					streamSourceBytes += u8.byteLength;
 					return u8;
 				}
@@ -1148,19 +1163,31 @@ const extractRecapAudioJS = `(async () => {
 						try { await reader.cancel(); } catch (_) {}
 						throw (fatalErr || new Error('transcode fetch aborted'));
 					}
+					if (timedOut) {
+						try { await reader.cancel(); } catch (_) {}
+						const err = new Error('transcode fetch timeout');
+						err.retryable = true;
+						throw err;
+					}
 					if (part.done) break;
 					const v = part.value;
 					if (!v || !v.byteLength) continue;
-					if (streamSourceBytes + total + v.byteLength > maxRecapAudioSourceBytes) {
-						try { await reader.cancel(); } catch (_) {}
+					const extra = Math.max(0, (total + v.byteLength) - workerReserved);
+					if (extra > 0 && streamSourceBytes + inFlightSourceBytes + extra > maxRecapAudioSourceBytes) {
 						fatalErr = new Error(limitError);
 						if (abortCtrl) abortCtrl.abort();
+						try { await reader.cancel(); } catch (_) {}
 						throw fatalErr;
 					}
+					inFlightSourceBytes += extra;
+					workerReserved += extra;
 					total += v.byteLength;
 					chunks.push(v);
+					await Promise.resolve();
 				}
-				if (streamSourceBytes + total > maxRecapAudioSourceBytes) {
+				inFlightSourceBytes = Math.max(0, inFlightSourceBytes - workerReserved);
+				workerReserved = 0;
+				if (streamSourceBytes + inFlightSourceBytes + total > maxRecapAudioSourceBytes) {
 					fatalErr = new Error(limitError);
 					if (abortCtrl) abortCtrl.abort();
 					throw fatalErr;
@@ -1183,6 +1210,10 @@ const extractRecapAudioJS = `(async () => {
 			} finally {
 				clearTimeout(reqTimer);
 				activeTimers.delete(reqTimer);
+				if (workerReserved > 0) {
+					inFlightSourceBytes = Math.max(0, inFlightSourceBytes - workerReserved);
+					workerReserved = 0;
+				}
 				if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
 					parentSignal.removeEventListener('abort', onParentAbort);
 				}

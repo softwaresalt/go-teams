@@ -39,8 +39,12 @@ Shipment-wide multi-persona review and rubber-duck review were completed for
 the observed revision above. No P0 findings remained. The review found one
 in-scope P1 startup-queue bypass of the global `--no-ai-summary` contract and
 several same-contract robustness or evidence corrections. Those fixes are
-being applied in the pre-PR review-fix cycle; readiness must be re-evaluated
-for the next committed head.
+committed in review-fix revision
+`b260f0c15e2ab4b5a21210066b5877c5f2245fbf`. Exact-revision local review of
+that revision returned P0=0 and P1=0 for shipment behavior; current-PR
+readiness remains a mutable PR-body field. The evidence follow-ups from that
+revision are recorded below and this file supplies the subsequent observed
+delta record.
 
 Deferred scope expansions are `B7C4B018`, `985A9E0B`, `6DD3043F`,
 `F5762A2B`, and `D8723CC0`.
@@ -50,8 +54,11 @@ Deferred scope expansions are `B7C4B018`, `985A9E0B`, `6DD3043F`,
 Observed revision `8407b479afa08474c5a7608472b139ecc79b9d8b` has
 `AUDIT_FOLLOWUPS`. The unresolved Stage-owned 036.009-T planning-record
 evidence gap is captured by `F5762A2B`; modularization and retained
-maintainability residuals are captured by `D8723CC0`. The review-fix candidate
-and this memory artifact require a bounded delta audit before commit.
+maintainability residuals are captured by `D8723CC0`. The committed review-fix revision
+`b260f0c15e2ab4b5a21210066b5877c5f2245fbf` was audited as
+`AUDIT_FOLLOWUPS`. `F5762A2B` remains the named Stage-owned evidence blocker,
+and `D8723CC0` covers modularization and retainment cleanup. No in-scope P0/P1
+behavioral contradiction remained for that observed revision.
 
 ## Next step
 

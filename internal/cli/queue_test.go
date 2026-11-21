@@ -272,6 +272,8 @@ func TestQueueLineAISummaryOverrideDetection(t *testing.T) {
 	assert.True(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md", "--no-ai-summary=false"}))
 	assert.False(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md"}))
 	assert.False(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md", "--no-ai-summary=true"}))
+	assert.True(t, queueLineEnablesAISummary([]string{"--no-ai-summary=true", "--no-ai-summary=false"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--no-ai-summary=false", "--no-ai-summary=true"}))
 }
 
 func TestQueueFileHonorsPerEntryAudioAliasOverrides(t *testing.T) {

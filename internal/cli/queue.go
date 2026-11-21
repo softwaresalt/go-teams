@@ -86,15 +86,16 @@ func extractQueueFlagValue(args []string, flagName string) string {
 
 func queueLineEnablesAISummary(args []string) bool {
 	const prefix = "--no-ai-summary="
+	enabled := false
 	for _, arg := range args {
 		lower := strings.ToLower(arg)
 		if !strings.HasPrefix(lower, prefix) {
 			continue
 		}
 		value := strings.TrimSpace(strings.TrimPrefix(lower, prefix))
-		return value == "false" || value == "0" || value == "off"
+		enabled = value == "false" || value == "0" || value == "off"
 	}
-	return false
+	return enabled
 }
 
 func parseQueueContent(data []byte) (lines []string, lineEnding string, hasTrailingNewline bool) {
@@ -307,9 +308,12 @@ func runQueueFileFiltered(
 
 		slog.Info("cli: processing queue entry", "line", i+1, "args", sanitizeQueueArgsForLog(lineArgs))
 		if err := executeQueueLine(ctx, d, effectiveArgs); err != nil {
-			if errors.Is(err, errQueueEntryNotYetDue) ||
-				errors.Is(err, errQueueEntryAISummaryDisabled) {
+			if errors.Is(err, errQueueEntryNotYetDue) {
 				slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)
+				continue
+			}
+			if errors.Is(err, errQueueEntryAISummaryDisabled) {
+				slog.Info("cli: skipping deferred queue entry because AI Summary is disabled", "line", i+1)
 				continue
 			}
 			slog.Error("cli: queue entry failed", "line", i+1, "err", err)

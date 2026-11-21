@@ -154,12 +154,12 @@ password entry, MFA, or lobby admission themselves.
    measures for speech activity and `audio.Encoder` writes to an `.mp3` next to
    the transcript.
 6. For `live-with-summary` captures, `internal/cli` closes Chromium immediately
-   when the live call ends (releasing the `UserDataDir` profile), appends a
-   crash-safe `"<url>" --append-ai-summary "<transcript.md>" --not-before <RFC3339>`
-   entry to `queue_file` / `transcription_queue.txt`, and runs an
-   `ai_summary_delay` timer (default `30m`) that reopens the meeting in Recap
-   mode (`ForceRecap: true`), appends `# AI Summary` via
-   `capture.AppendAISummaryToFile`, and marks the queue line `::`.
+   when the live call ends (releasing the `UserDataDir` profile). When AI
+   Summary is enabled and `ai_summary_delay > 0`, it also appends a crash-safe
+   `"<url>" --append-ai-summary "<transcript.md>" --not-before <RFC3339>` entry
+   to `queue_file` / `transcription_queue.txt`, runs the timer (default `30m`),
+   reopens the meeting in Recap mode (`ForceRecap: true`), appends `# AI
+   Summary` via `capture.AppendAISummaryToFile`, and marks the queue line `::`.
 
 ### Finite Meeting Recap export
 
@@ -179,6 +179,15 @@ transcript instead of listening live:
    the Copilot pane, triggering `"Recap the meeting"`, and reading
    `.fai-CopilotMessage__content`, retried up to 60 times with 500 ms (`30s`)
    between attempts. Transcript export still succeeds when no summary appears.
+   Recap AI Summary extraction runs unless `--no-ai-summary`
+   (`Config.NoAISummary`) or `ephemeral-live` mode disables it; an explicit
+   `--append-ai-summary` request is a deliberate one-shot override. A configured
+   `ai_summary_delay: "0s"` is not the Recap disable switch: on a live call,
+   `delay <= 0` prevents delayed post-call queueing and fetching, returning
+   before either operation rather than enriching immediately; on an
+   already-available Recap (`past-recap`, or `auto` on an `isRecap` surface),
+   the Recap Summary is still exported immediately unless `--no-ai-summary`
+   disables it.
 3. With audio enabled, the recording is decoded through Web Audio over CDP (using
    chunked CDP pull transfers for multi-megabyte PCM buffers) and encoded to MP3
    by `internal/audio.Encoder`, after verifying recording identity (`VroomItemID`,
@@ -186,24 +195,39 @@ transcript instead of listening live:
    size and duration limits. When direct download URLs are blocked by view-only
    permissions (`g_fileInfo.isDownloadBlocked=true` in `streamembed.aspx` or
    `stream.aspx`, across same-origin child `<iframe>` or transitive `ParentID`
-   OOPIF topologies), `extractRecapAudioJS` triggers muted playback, isolates
-   `track=audio` (`wsd`) from `track=video`, and collects only the `audio/mp4`
-   (`mp4a.40.2`) fMP4 stream at `14x-100x` real-time speed via WebCrypto AES-CBC
-   (`window.crypto.subtle.decrypt` or `g_fileInfo.EncKey` key import) parallel
-   `oneDrive.transcode` fetch/decrypt (discovered via network hooks or
-   `PerformanceResourceTiming` resource entries for pre-buffered Web Worker
-   streams) and MSE `MediaSource.prototype.addSourceBuffer` /
+   OOPIF topologies), `extractRecapAudioJS` skips direct fetches of non-blob
+   candidates, re-clicks `"Play video"` every `1000ms` until initial stream
+   activity, and rebinds replacement `<video>` elements so muted playback is
+   triggered safely. It isolates `track=audio` (`wsd`) from `track=video` and
+   collects only the `audio/mp4` (`mp4a.40.2`) fMP4 stream at `14x-100x`
+   real-time speed via WebCrypto AES-CBC (`window.crypto.subtle.decrypt` or
+   `g_fileInfo.EncKey` key import) parallel `oneDrive.transcode` fetch/decrypt
+   (discovered via network hooks or window-visible `PerformanceResourceTiming`
+   resource entries) and MSE `MediaSource.prototype.addSourceBuffer` /
    `SourceBuffer.prototype.appendBuffer` hooks (`16x` `playbackRate`,
    `currentTime` stepping, and `tfdt`-ordered deduplication), then decodes
    through `AudioContext.decodeAudioData` to 44.1 kHz mono PCM. For cold
    SharePoint recordings (`maxRecapAudioDurationSec > 300`), Path A fetches and
-   decrypts segments with 12-worker concurrency, a 4-minute capture deadline
+   decrypts segments with 12-worker concurrency. Each worker reserves its
+   `inFlightSourceBytes` before reading, enforcing the shared `256 MiB`
+   `maxRecapAudioSourceBytes` cap across the pool. Capture has a 4-minute deadline
    (`10m` operation-wide CDP evaluation budget in
    `captureRecapAudioFromTargets`), 5-attempt exponential retry backoff
    (`250ms-2000ms` across HTTP `408`/`429`/`5xx`), separate Play-button and
    late-mounted `<video>.play()` tracking, in-flight Path A deadline
    precedence over partial pre-pause MSE buffers, and a single attempt-0 retry
-   recovery pass when a cold recording exceeds the capture deadline. Inert
+   recovery pass when a retryable `streamembed.aspx` or `stream.aspx`
+   `isDownloadBlocked=true` target error is observed. Target matching is path
+   based: non-stream parent targets are skipped, and delayed target discovery
+   remains independent of `xplatplugins.aspx`. Scheme-less or server-relative
+   `fileUrl` and `?id=` recording paths are percent-decoded case-insensitively
+   in one pass before identity matching. Window resource timing is deliberately
+   qualified: `window.performance.getEntriesByType('resource')` observes only
+   window-visible `PerformanceResourceTiming` entries. It does not see
+   `oneDrive.transcode` requests initiated solely inside a dedicated Web
+   Worker whose entries remain on that Worker's local performance timeline;
+   those requests require dedicated Worker CDP `Network` or
+   `Target.setAutoAttach` instrumentation. Inert
    `isDownloadBlocked=true` pages with no playable stream surface still fail
    explicitly rather than decoding HTML error bytes as audio.
 4. `capture.Session` writes the transcript, a Markdown horizontal rule, and the
@@ -222,12 +246,13 @@ transcript instead of listening live:
    `executeQueueLine`, with `inheritedQueueFlags` prepended. Those flags
    forward the outer capture flags (config path, output settings, template,
    profile, bot name, category, browser path, default account, headless,
-   audio, overwrite, mode, duration, idle timeout, AI summary delay, lobby
-   timeout) while preserving outer prompt streams (`promptIn` / `promptOut`),
-   but never the outer `--url`, `--queue`, `--append-ai-summary`, or
-   `--not-before`. When a due line carries `--append-ai-summary <transcript.md>`, `runCapture`
-   dispatches to `runAppendAISummary` (`ForceRecap: true`) and appends
-   `# AI Summary` in place via `capture.AppendAISummaryToFile`.
+   audio, overwrite, mode, duration, idle timeout, AI summary delay,
+   `--no-ai-summary`, and lobby timeout) while preserving outer prompt streams
+   (`promptIn` / `promptOut`), but never the outer `--url`, `--queue`,
+   `--append-ai-summary`, or `--not-before`. When a due line carries
+   `--append-ai-summary <transcript.md>`, `runCapture` dispatches to
+   `runAppendAISummary` (`ForceRecap: true`) and appends `# AI Summary` in place
+   via `capture.AppendAISummaryToFile`.
 3. After a line succeeds it is commented out by prepending `::` under
    `queueFileMu` after re-reading the file on disk so concurrent deferred
    appends are never clobbered. `writeQueueLines` writes the new content to a

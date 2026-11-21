@@ -414,7 +414,8 @@ func (t *headedAuthTracker) onNonAuthPage(st headedPageState) string {
 func hasSpecificMeetingOrRecapTarget(meetingURL string) bool {
 	lower := strings.ToLower(strings.TrimSpace(meetingURL))
 	if strings.Contains(lower, "meetingrecap") ||
-		isStreamTarget(meetingURL) ||
+		strings.Contains(lower, "stream.aspx") ||
+		strings.Contains(lower, "streamembed.aspx") ||
 		strings.Contains(lower, "meetup-join") ||
 		strings.Contains(lower, "/meet/") {
 		return true

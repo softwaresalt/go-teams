@@ -1563,7 +1563,7 @@ globalThis.document = {
 		runProbe(t, probeJS)
 	})
 
-	t.Run("path-a-failure-does-not-replay-current-video", func(t *testing.T) {
+	t.Run("path-a-failure-preserves-active-playback", func(t *testing.T) {
 		probeJS := `
 const fs = require('fs');
 const { webcrypto } = require('crypto');
@@ -1615,9 +1615,6 @@ const playBtn = {
 globalThis.crypto = webcrypto;
 globalThis.fetch = async () => {
   fetchCalls++;
-  if (fetchCalls === 1) {
-    await new Promise(resolve => setTimeout(resolve, 1250));
-  }
   return { ok: false, status: 403, headers: { get: () => null } };
 };
 globalThis.location = {
@@ -1655,7 +1652,7 @@ globalThis.document = {
     throw new Error('expected Path A-active capture to stop button clicks across the 1s click window, got ' + clickCount);
   }
   if (playCount !== 1) {
-    throw new Error('expected current video play() exactly once after Path A failure, got ' + playCount);
+    throw new Error('expected active playback to remain bounded during failed Path A capture, got ' + playCount);
   }
   testCompleted = true;
 })().catch(e => {

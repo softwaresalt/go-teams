@@ -47,7 +47,7 @@ revision are recorded below and this file supplies the subsequent observed
 delta record.
 
 Deferred scope expansions are `B7C4B018`, `985A9E0B`, `6DD3043F`,
-`F5762A2B`, and `D8723CC0`.
+`F5762A2B`, `D8723CC0`, and `07CF08DF`.
 
 ## Documentation consistency audit
 
@@ -58,7 +58,9 @@ maintainability residuals are captured by `D8723CC0`. The committed review-fix r
 `b260f0c15e2ab4b5a21210066b5877c5f2245fbf` was audited as
 `AUDIT_FOLLOWUPS`. `F5762A2B` remains the named Stage-owned evidence blocker,
 and `D8723CC0` covers modularization and retainment cleanup. No in-scope P0/P1
-behavioral contradiction remained for that observed revision.
+behavioral contradiction remained for that observed revision. `07CF08DF`
+captures the out-of-scope post-auth navigation-helper consistency finding
+without changing its task-external file budget.
 
 ## Next step
 

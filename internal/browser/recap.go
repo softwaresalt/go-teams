@@ -787,6 +787,7 @@ const extractRecapAudioJS = `(async () => {
 		let cleaningUp = false;
 		let pathAPromise = null;
 		let pathAStartedAt = 0;
+		let pathBPlaybackResumed = false;
 		let wakeLoop = null;
 		const playedMediaElements = new WeakSet();
 		const pendingMediaPlayElements = new WeakSet();
@@ -823,10 +824,10 @@ const extractRecapAudioJS = `(async () => {
 			} catch (_) {}
 		}
 
-		function playMediaElementOnce(m) {
+		function playMediaElementOnce(m, force = false) {
 			if (!m || (typeof m !== 'object' && typeof m !== 'function') ||
-				typeof m.play !== 'function' || playedMediaElements.has(m) ||
-				pendingMediaPlayElements.has(m)) return;
+				typeof m.play !== 'function' ||
+				(!force && (playedMediaElements.has(m) || pendingMediaPlayElements.has(m)))) return;
 			pendingMediaPlayElements.add(m);
 			trackedMediaElements.add(m);
 			try {
@@ -842,6 +843,14 @@ const extractRecapAudioJS = `(async () => {
 			} catch (_) {
 				pendingMediaPlayElements.delete(m);
 			}
+		}
+		function resumeMSEPlaybackAfterPathAFailure() {
+			if (pathBPlaybackResumed || hooksRestored || cleaningUp) return;
+			pathBPlaybackResumed = true;
+			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			configureSilentMedia(m);
+			if (m && m.paused === false) return;
+			playMediaElementOnce(m, true);
 		}
 		function signalWake() {
 			if (wakeLoop) {
@@ -1100,9 +1109,7 @@ const extractRecapAudioJS = `(async () => {
 				streamSourceBytes = mseBytesTotal();
 				inFlightSourceBytes = 0;
 				if (hooksRestored || cleaningUp) return null;
-				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-				configureSilentMedia(m);
-				playMediaElementOnce(m);
+				resumeMSEPlaybackAfterPathAFailure();
 				signalWake();
 				return null;
 			});
@@ -1857,6 +1864,7 @@ const extractRecapAudioJS = `(async () => {
 					}
 					if (settled.done && !settled.res) {
 						pathAPromise = null;
+						resumeMSEPlaybackAfterPathAFailure();
 					}
 				} else {
 					await sleepOrWake(25);

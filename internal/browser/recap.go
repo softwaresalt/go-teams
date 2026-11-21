@@ -167,16 +167,24 @@ const extractRecapAudioJS = `(async () => {
 			baseIdentityMatched: state.matched
 		};
 	}
+	function isStreamPageURL(raw) {
+		try {
+			const parsed = new URL(String(raw || ''), 'https://local.invalid');
+			const path = parsed.pathname.toLowerCase().replace(/\/+$/, '');
+			return path.endsWith('/stream.aspx') || path.endsWith('/streamembed.aspx');
+		} catch (_) {
+			return false;
+		}
+	}
 	function hasPlayableStreamSurface(ctx) {
 		const d = ctx.doc;
 		const w = ctx.win;
 		const fi = ctx.info || {};
-		const urlLower = String(ctx.pageUrl || '').toLowerCase();
+		const streamURL = isStreamPageURL(ctx.pageUrl);
 		const media = d && d.querySelector ? d.querySelector('audio, video') : null;
 		const playBtn = d && d.querySelector ? d.querySelector(playBtnSelector) : null;
 		return Boolean(
-			urlLower.includes('streamembed.aspx') ||
-			urlLower.includes('stream.aspx') ||
+			streamURL ||
 			playBtn ||
 			(media && (typeof media.play === 'function' || typeof w.MediaSource !== 'undefined')) ||
 			fi.transcodeUrl
@@ -184,8 +192,7 @@ const extractRecapAudioJS = `(async () => {
 	}
 	function frameScore(ctx) {
 		let score = 0;
-		const urlLower = String(ctx.pageUrl || '').toLowerCase();
-		if (urlLower.includes('streamembed.aspx') || urlLower.includes('stream.aspx')) score += 100;
+		if (isStreamPageURL(ctx.pageUrl)) score += 100;
 		if (hasPlayableStreamSurface(ctx)) score += 50;
 		if (ctx.doc && ctx.doc.querySelector && ctx.doc.querySelector('audio, video')) score += 10;
 		if (ctx.info && ctx.info.isDownloadBlocked) score += 5;
@@ -782,12 +789,59 @@ const extractRecapAudioJS = `(async () => {
 		let pathAStartedAt = 0;
 		let wakeLoop = null;
 		const playedMediaElements = new WeakSet();
+		const pendingMediaPlayElements = new WeakSet();
+		const trackedMediaElements = new Set();
+		const mediaPlaybackState = new WeakMap();
+
+		function configureSilentMedia(m) {
+			if (!m) return;
+			if (!mediaPlaybackState.has(m)) {
+				mediaPlaybackState.set(m, {
+					muted: m.muted,
+					volume: m.volume,
+					playbackRate: m.playbackRate
+				});
+			}
+			trackedMediaElements.add(m);
+			try {
+				m.muted = true;
+				m.volume = 0;
+				m.playbackRate = 16;
+			} catch (_) {}
+		}
+
+		function restoreMedia(m) {
+			const state = mediaPlaybackState.get(m);
+			if (m && typeof m.pause === 'function') {
+				try { m.pause(); } catch (_) {}
+			}
+			if (!m || !state) return;
+			try {
+				m.muted = state.muted;
+				m.volume = state.volume;
+				m.playbackRate = state.playbackRate;
+			} catch (_) {}
+		}
 
 		function playMediaElementOnce(m) {
 			if (!m || (typeof m !== 'object' && typeof m !== 'function') ||
-				typeof m.play !== 'function' || playedMediaElements.has(m)) return;
-			playedMediaElements.add(m);
-			try { Promise.resolve(m.play()).catch(() => {}); } catch (_) {}
+				typeof m.play !== 'function' || playedMediaElements.has(m) ||
+				pendingMediaPlayElements.has(m)) return;
+			pendingMediaPlayElements.add(m);
+			trackedMediaElements.add(m);
+			try {
+				Promise.resolve(m.play())
+					.then(() => {
+						playedMediaElements.add(m);
+						if (cleaningUp && m && typeof m.pause === 'function') {
+							try { m.pause(); } catch (_) {}
+						}
+					})
+					.catch(() => {})
+					.finally(() => { pendingMediaPlayElements.delete(m); });
+			} catch (_) {
+				pendingMediaPlayElements.delete(m);
+			}
 		}
 		function signalWake() {
 			if (wakeLoop) {
@@ -933,13 +987,7 @@ const extractRecapAudioJS = `(async () => {
 		function stepVideoPlayback() {
 			if (pathAActive || fatalErr) return;
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-			if (m) {
-				try {
-					m.muted = true;
-					m.volume = 0;
-					if (m.playbackRate !== 16) m.playbackRate = 16;
-				} catch (_) {}
-			}
+			configureSilentMedia(m);
 			const sb = audioSBRef;
 			if (sb && sb.buffered && sb.buffered.length > 0) {
 				try {
@@ -1053,13 +1101,7 @@ const extractRecapAudioJS = `(async () => {
 				inFlightSourceBytes = 0;
 				if (hooksRestored || cleaningUp) return null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-				if (m) {
-					try {
-						m.muted = true;
-						m.volume = 0;
-						m.playbackRate = 16;
-					} catch (_) {}
-				}
+				configureSilentMedia(m);
 				playMediaElementOnce(m);
 				signalWake();
 				return null;
@@ -1330,6 +1372,11 @@ const extractRecapAudioJS = `(async () => {
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 			if (m && typeof m.pause === 'function') {
 				try { m.pause(); } catch (_) {}
+			}
+			for (const tracked of trackedMediaElements) {
+				if (tracked && typeof tracked.pause === 'function') {
+					try { tracked.pause(); } catch (_) {}
+				}
 			}
 			const pathAAbortCtrl = typeof AbortController === 'function' ? new AbortController() : null;
 			const pathASignal = pathAAbortCtrl ? pathAAbortCtrl.signal : undefined;
@@ -1666,27 +1713,32 @@ const extractRecapAudioJS = `(async () => {
 			}
 		}
 		function cleanupHooks() {
-			if (hooksRestored) return;
-			hooksRestored = true;
-			for (const tid of activeTimers) clearTimeout(tid);
-			activeTimers.clear();
-			for (const item of trackedListeners) {
-				try {
-					if (item.target && typeof item.target.removeEventListener === 'function') {
-						item.target.removeEventListener(item.type, item.fn);
-					}
-				} catch (_) {}
-			}
-			for (let i = restorers.length - 1; i >= 0; i--) {
-				try { restorers[i](); } catch (_) {}
-			}
-			if (abortCtrl) {
-				try { abortCtrl.abort(); } catch (_) {}
+			if (!hooksRestored) {
+				hooksRestored = true;
+				for (const tid of activeTimers) clearTimeout(tid);
+				activeTimers.clear();
+				for (const item of trackedListeners) {
+					try {
+						if (item.target && typeof item.target.removeEventListener === 'function') {
+							item.target.removeEventListener(item.type, item.fn);
+						}
+					} catch (_) {}
+				}
+				for (let i = restorers.length - 1; i >= 0; i--) {
+					try { restorers[i](); } catch (_) {}
+				}
+				if (abortCtrl) {
+					try { abortCtrl.abort(); } catch (_) {}
+				}
 			}
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 			if (m && typeof m.pause === 'function') {
 				try { m.pause(); } catch (_) {}
 			}
+			for (const tracked of trackedMediaElements) {
+				restoreMedia(tracked);
+			}
+			trackedMediaElements.clear();
 		}
 
 		async function seedEncKeyFromFileInfo() {
@@ -1757,11 +1809,7 @@ const extractRecapAudioJS = `(async () => {
 				const btn = playerDoc.querySelector ? playerDoc.querySelector(playBtnSelector) : null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 				if (m && !pathAActive) {
-					try {
-						m.muted = true;
-						m.volume = 0;
-						if (m.playbackRate !== 16) m.playbackRate = 16;
-					} catch (_) {}
+					configureSilentMedia(m);
 				}
 				const now = Date.now();
 				if (!pathAActive && !activityObserved && btn && typeof btn.click === 'function' &&
@@ -1769,7 +1817,7 @@ const extractRecapAudioJS = `(async () => {
 					lastBtnClickAt = Math.max(1, now);
 					btn.click();
 				}
-				if (m !== triggeredMediaEl && !pathAActive && m) {
+				if (!pathAActive && m) {
 					triggeredMediaEl = m;
 					playMediaElementOnce(m);
 				}
@@ -1977,20 +2025,19 @@ const extractRecapAudioJS = `(async () => {
 				try { abortCtrl.abort(); } catch (_) {}
 			}
 			if (pathAPromise) {
-				let settleTid = null;
-				try {
-					await Promise.race([
-						Promise.allSettled([pathAPromise]),
-						new Promise(resolve => {
-							settleTid = setTimeout(resolve, 250);
-							activeTimers.add(settleTid);
-						})
-					]);
-				} finally {
-					if (settleTid !== null) {
-						clearTimeout(settleTid);
-						activeTimers.delete(settleTid);
-					}
+				let settlementTimer = null;
+				let settlementTimedOut = false;
+				const settled = await Promise.race([
+					Promise.allSettled([pathAPromise]).then(results => ({ results, timedOut: false })),
+					new Promise(resolve => {
+						settlementTimer = setTimeout(() => resolve({ results: null, timedOut: true }), 2000);
+					})
+				]);
+				if (settlementTimer !== null) clearTimeout(settlementTimer);
+				settlementTimedOut = settled.timedOut;
+				cleanupHooks();
+				if (settlementTimedOut) {
+					throw new Error('recap audio Path A worker settlement timeout');
 				}
 			}
 			cleanupHooks();
@@ -2029,9 +2076,9 @@ func isStreamTarget(rawURL string) bool {
 	if err != nil || isAuthRedirectURL(rawURL) {
 		return false
 	}
-	lowerPath := strings.ToLower(parsed.Path)
-	return strings.Contains(lowerPath, "streamembed.aspx") ||
-		strings.Contains(lowerPath, "stream.aspx")
+	base := strings.ToLower(strings.TrimSuffix(parsed.Path, "/"))
+	return strings.HasSuffix(base, "/streamembed.aspx") ||
+		strings.HasSuffix(base, "/stream.aspx")
 }
 
 func shouldSkipRecapAudioTarget(skipNonStreamTargets bool, rawURL string) bool {

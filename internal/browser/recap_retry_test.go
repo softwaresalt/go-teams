@@ -844,6 +844,8 @@ func TestWave2ACaptureRecapAudioRetryBreakAndDiscovery(t *testing.T) {
 	t.Run("stream-target sibling evaluation", func(t *testing.T) {
 		require.True(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/stream.aspx"))
 		require.True(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/streamembed.aspx"))
+		require.False(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/notstream.aspx"))
+		require.False(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/stream.aspx.backup"))
 		require.False(t, isStreamTarget("https://tenant.sharepoint.com/xplatplugins.aspx?fileUrl=https%3A%2F%2Ftenant.sharepoint.com%2Fstream.aspx"))
 		require.False(t, isStreamTarget("https://login.microsoftonline.com/?redirect_uri=https%3A%2F%2Ftenant.sharepoint.com%2Fstreamembed.aspx"))
 

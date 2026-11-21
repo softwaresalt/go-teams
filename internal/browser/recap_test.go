@@ -1470,7 +1470,9 @@ process.on('beforeExit', () => {
 const clickTimes = [];
 let firstPlayCount = 0;
 let replacementPlayCount = 0;
-function makeVideo(label, incrementPlay) {
+let firstPauseCount = 0;
+let replacementPauseCount = 0;
+function makeVideo(label, play) {
   return {
     label,
     muted: false,
@@ -1480,14 +1482,17 @@ function makeVideo(label, incrementPlay) {
     duration: 10,
     currentTime: 0,
     ended: false,
-    play: async () => { incrementPlay(); },
-    pause: () => {},
+    play,
+    pause: () => { if (label === 'first') firstPauseCount++; else replacementPauseCount++; },
     getAttribute: () => null,
     querySelector: () => null
   };
 }
-const firstVideo = makeVideo('first', () => { firstPlayCount++; });
-const replacementVideo = makeVideo('replacement', () => { replacementPlayCount++; });
+const firstVideo = makeVideo('first', async () => {
+  firstPlayCount++;
+  if (firstPlayCount === 1) throw new Error('transient play rejection');
+});
+const replacementVideo = makeVideo('replacement', async () => { replacementPlayCount++; });
 const playBtn = {
   click: () => {
     clickTimes.push(fakeNow);
@@ -1536,13 +1541,17 @@ globalThis.document = {
   if (JSON.stringify(clickTimes) !== JSON.stringify([baseNow, baseNow + 1000, baseNow + 2000])) {
     throw new Error('expected Play video clicks at 0/1000/2000ms, got ' + JSON.stringify(clickTimes));
   }
-  if (firstPlayCount !== 1 || replacementPlayCount !== 1) {
-    throw new Error('expected one play call per mounted video, got first=' + firstPlayCount +
+  if (firstPlayCount !== 2 || replacementPlayCount !== 1) {
+    throw new Error('expected rejected play to retry and replacement play once, got first=' + firstPlayCount +
       ' replacement=' + replacementPlayCount);
   }
+  if (firstPauseCount < 1 || replacementPauseCount < 1) {
+    throw new Error('expected cleanup to pause replacement and detached media, got first=' +
+      firstPauseCount + ' replacement=' + replacementPauseCount);
+  }
   for (const video of [firstVideo, replacementVideo]) {
-    if (!video.muted || video.volume !== 0 || video.playbackRate !== 16) {
-      throw new Error('expected muted 16x media, got ' + JSON.stringify(video));
+    if (video.muted || video.volume !== 1 || video.playbackRate !== 1) {
+      throw new Error('expected media playback state restored, got ' + JSON.stringify(video));
     }
   }
   testCompleted = true;

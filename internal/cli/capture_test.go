@@ -369,8 +369,12 @@ func TestRunCmdSuppressesDeferredAISummaryTimerAndQueue(t *testing.T) {
 				require.NoError(t, err)
 			case <-time.After(time.Second):
 				cancel()
-				err := <-done
-				t.Fatalf("runCmd waited on a deferred AI summary timer; cancellation returned %v", err)
+				select {
+				case err := <-done:
+					t.Fatalf("runCmd waited on a deferred AI summary timer; cancellation returned %v", err)
+				case <-time.After(time.Second):
+					t.Fatal("runCmd did not return after deferred AI summary cancellation")
+				}
 			}
 
 			require.Equal(t, 1, meetings)

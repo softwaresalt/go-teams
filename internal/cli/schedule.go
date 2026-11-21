@@ -282,7 +282,15 @@ func runDeferredAppendAISummarySweep(ctx context.Context, d *deps, cfg config.Co
 	if strings.TrimSpace(configPath) != "" {
 		inherited = append(inherited, "--config", configPath)
 	}
-	if err := runQueueFile(ctx, d, queuePath, inherited); err != nil {
+	if cfg.NoAISummary {
+		inherited = append(inherited, "--no-ai-summary")
+	}
+	skipLine := func(args []string) bool {
+		return cfg.NoAISummary &&
+			!queueLineEnablesAISummary(args) &&
+			extractQueueFlagValue(args, "--append-ai-summary") != ""
+	}
+	if err := runQueueFileFiltered(ctx, d, queuePath, inherited, skipLine); err != nil {
 		slog.Warn("schedule: startup deferred queue sweep completed with errors", "queue", queuePath, "err", err)
 	}
 }

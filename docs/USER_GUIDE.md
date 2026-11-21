@@ -448,7 +448,7 @@ go-teams.exe captions "https://teams.cloud.microsoft/l/meetingrecap?threadId=syn
   temporary file or rename fails, it falls back to an in-place `os.WriteFile`
   with `0o600` permissions. Line endings (LF or CRLF) are preserved.
 * Capture flags on the outer command are forwarded to every line
-  (  `inheritedQueueFlags`): `--config`, `--output-folder`, `--output-dir`,
+  (`inheritedQueueFlags`): `--config`, `--output-folder`, `--output-dir`,
   `--output`, `--output-file`, `--filename-template` / `--name-template`,
   `--profile-dir`, `--bot-name`, `--category`, `--browser-path`, `--account`,
   `--headless`, `--headed`, `--audio` / `--recap-audio`, `--overwrite`, `--mode`,
@@ -573,7 +573,10 @@ releases as soon as the live call ends, before any delayed
 `--ai-summary-delay` AI Summary fetch, so the next meeting is not blocked. When
 `queue_file` is configured, the daemon sweeps it at startup and runs pending
 entries, skipping `--not-before` entries whose timestamp is still in the
-future. On shutdown the daemon allows a 15-second graceful window. When
+future. Global `schedule --no-ai-summary` is inherited by ordinary queued
+captures and skips deferred `--append-ai-summary` entries, without preventing
+other eligible queue work. On shutdown the daemon allows a 15-second graceful
+window. When
 `overwrite` is `false` (the default) and a target file already exists, any
 interactive `(Y)es | (N)o` overwrite confirmation prompt is bounded to 15
 seconds so an unattended schedule releases the `busy` gate (a closed stdin

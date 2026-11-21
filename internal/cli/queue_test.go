@@ -206,6 +206,21 @@ func TestQueueFileDoesNotCommentOutCancelledEntryAndRejectsNestedQueueAndForward
 	}
 }
 
+func TestQueueNoAISummarySkipsInheritedAppendWithoutCommentingLine(t *testing.T) {
+	queuePath := filepath.Join(t.TempDir(), "transcript-queue.txt")
+	line := `-u "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --append-ai-summary "transcript.md"`
+	require.NoError(t, os.WriteFile(queuePath, []byte(line+"\n"), 0o600))
+
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
+	}
+	require.NoError(t, runCmd(context.Background(), d, "--queue", queuePath, "--no-ai-summary"))
+
+	updated, err := os.ReadFile(queuePath)
+	require.NoError(t, err)
+	assert.Equal(t, line+"\n", string(updated))
+}
+
 func TestSplitQueueArgsUnterminatedQuoteDoesNotLeakLine(t *testing.T) {
 	line := `join --url "https://teams.microsoft.com/meet/123?p=secret-passcode`
 
@@ -251,6 +266,12 @@ func TestSanitizeQueueArgsForLogRedactsAccountFlag(t *testing.T) {
 	gotEquals := sanitizeQueueArgsForLog([]string{"-u", "https://teams.microsoft.com/meet/1", "--account=Bob Smith"})
 	assert.Equal(t, "-u https://teams.microsoft.com/meet/1 --account=B***", gotEquals)
 	assert.NotContains(t, gotEquals, "Bob Smith")
+}
+
+func TestQueueLineAISummaryOverrideDetection(t *testing.T) {
+	assert.True(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md", "--no-ai-summary=false"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md", "--no-ai-summary=true"}))
 }
 
 func TestQueueFileHonorsPerEntryAudioAliasOverrides(t *testing.T) {

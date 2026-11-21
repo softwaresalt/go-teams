@@ -166,6 +166,9 @@ func runCaptureWithHooks(ctx context.Context, d *deps, cfg config.Config, meetin
 		return err
 	}
 	if targetMD := strings.TrimSpace(cfg.AppendAISummary); targetMD != "" {
+		if cfg.NoAISummary && isInsideQueueExecution(ctx) {
+			return errQueueEntryAISummaryDisabled
+		}
 		if hooks.onLiveCallFinished != nil {
 			defer hooks.onLiveCallFinished()
 		}

@@ -87,6 +87,42 @@ func TestScheduleNoAISummaryAndPerMeetingDelayPrecedence(t *testing.T) {
 		require.NotNil(t, flag)
 		assert.Equal(t, "disable AI Summary capture for both Meeting Recaps and post-call enrichment", flag.Usage)
 	})
+
+	t.Run("startup-deferred-sweep-honors-global-disable", func(t *testing.T) {
+		queuePath := filepath.Join(t.TempDir(), "queue.txt")
+		require.NoError(t, os.WriteFile(queuePath, []byte(
+			"https://teams.microsoft.com/meet/synthetic --append-ai-summary transcript.md\n"+
+				"-u \"https://teams.microsoft.com/meet/synthetic\"\n",
+		), 0o600))
+		var busy atomic.Bool
+		var ordinaryCalls int
+		var ordinaryNoAI bool
+		d := &deps{
+			loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
+			newRunner:  func(config.Config) browser.Runner { return &fakeRunner{} },
+			newMeeting: func(ctx context.Context, cfg config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+				ordinaryCalls++
+				ordinaryNoAI = cfg.NoAISummary
+				return nil, ctx, func() {}, nil
+			},
+			newSession: func(config.Config, string) meetingSession {
+				return recorderSession{&captureRecorder{}}
+			},
+		}
+
+		runDeferredAppendAISummarySweep(context.Background(), d, config.Config{
+			NoAISummary: true,
+			QueueFile:   queuePath,
+		}, "", &busy)
+
+		assert.False(t, busy.Load(), "disabled startup sweep must leave the busy gate untouched")
+		assert.Equal(t, 1, ordinaryCalls)
+		assert.True(t, ordinaryNoAI, "ordinary queued captures must inherit the global disable")
+		updated, err := os.ReadFile(queuePath)
+		require.NoError(t, err)
+		assert.Contains(t, string(updated), "--append-ai-summary transcript.md")
+		assert.Contains(t, string(updated), "::-u", "ordinary queue entries must still run")
+	})
 }
 
 func TestScheduleJobRunsCapture(t *testing.T) {

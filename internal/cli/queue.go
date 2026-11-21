@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	errQueueEntryNotYetDue = errors.New("cli: queue entry not yet due")
-	queueFileMu            sync.Mutex
+	errQueueEntryNotYetDue         = errors.New("cli: queue entry not yet due")
+	errQueueEntryAISummaryDisabled = errors.New("cli: queue AI summary disabled")
+	queueFileMu                    sync.Mutex
 )
 
 const (
@@ -81,6 +82,19 @@ func extractQueueFlagValue(args []string, flagName string) string {
 		}
 	}
 	return ""
+}
+
+func queueLineEnablesAISummary(args []string) bool {
+	const prefix = "--no-ai-summary="
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(lower, prefix))
+		return value == "false" || value == "0" || value == "off"
+	}
+	return false
 }
 
 func parseQueueContent(data []byte) (lines []string, lineEnding string, hasTrailingNewline bool) {
@@ -223,6 +237,16 @@ func markQueueLineCompleted(queuePath string, lineIdx int, originalLine string) 
 // Blank lines and lines starting with "::" (after leading whitespace) are
 // ignored.
 func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs []string) error {
+	return runQueueFileFiltered(ctx, d, queuePath, inheritedArgs, nil)
+}
+
+func runQueueFileFiltered(
+	ctx context.Context,
+	d *deps,
+	queuePath string,
+	inheritedArgs []string,
+	skipLine func([]string) bool,
+) error {
 	data, err := os.ReadFile(queuePath)
 	if err != nil {
 		return fmt.Errorf("cli: read queue file %s: %w", queuePath, err)
@@ -259,6 +283,9 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 		if len(lineArgs) == 0 {
 			continue
 		}
+		if skipLine != nil && skipLine(lineArgs) {
+			continue
+		}
 		if containsQueueFlag(lineArgs) {
 			errs = append(errs, fmt.Errorf("cli: queue line %d: nested --queue flag is not allowed", i+1))
 			continue
@@ -280,7 +307,8 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 
 		slog.Info("cli: processing queue entry", "line", i+1, "args", sanitizeQueueArgsForLog(lineArgs))
 		if err := executeQueueLine(ctx, d, effectiveArgs); err != nil {
-			if errors.Is(err, errQueueEntryNotYetDue) {
+			if errors.Is(err, errQueueEntryNotYetDue) ||
+				errors.Is(err, errQueueEntryAISummaryDisabled) {
 				slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)
 				continue
 			}

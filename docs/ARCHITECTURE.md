@@ -280,8 +280,9 @@ its Chromium process finish, `onLiveCallFinished` releases the `busy` gate and
 detaches any post-call `ai_summary_delay` timer onto a daemon `sync.WaitGroup`
 so neither `busy` nor `cron.SkipIfStillRunning` blocks subsequent scheduled
 meetings during the 30-minute AI summary wait. On startup, `schedule` also runs
-a non-blocking sweep for due `--append-ai-summary` entries in `queue_file` /
-`transcription_queue.txt`.
+a non-blocking sweep of eligible `queue_file` / `transcription_queue.txt`
+entries. A global `--no-ai-summary` retains the gate for ordinary queued
+captures while skipping deferred `--append-ai-summary` entries.
 
 ### Self-update
 

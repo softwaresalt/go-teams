@@ -91,30 +91,34 @@ type MeetingSchedule struct {
 
 // Config is the top-level go-teams CLI configuration.
 type Config struct {
-	OutputDir            string            `yaml:"output_dir"`
-	OutputFile           string            `yaml:"output_file,omitempty"`
-	FilenameTemplate     string            `yaml:"filename_template,omitempty"`
-	MeetingURL           string            `yaml:"meeting_url,omitempty"`
-	ProfileDir           string            `yaml:"profile_dir"`
-	BotName              string            `yaml:"bot_name"`
-	Category             string            `yaml:"category,omitempty"`
-	Headless             bool              `yaml:"headless"`
-	CaptureAudio         bool              `yaml:"capture_audio,omitempty"`
-	Overwrite            bool              `yaml:"overwrite,omitempty"`
-	BrowserPath          string            `yaml:"browser_path,omitempty"`
-	DefaultAccount       string            `yaml:"default_account,omitempty"`
-	CaptureMode          string            `yaml:"capture_mode,omitempty"`
-	Duration             string            `yaml:"duration,omitempty"`
-	IdleTimeout          string            `yaml:"idle_timeout,omitempty"`
-	AISummaryDelay       string            `yaml:"ai_summary_delay,omitempty"`
-	LobbyTimeout         string            `yaml:"lobby_timeout,omitempty"`
-	QueueFile            string            `yaml:"queue_file,omitempty"`
-	ConfigPath           string            `yaml:"-"`
-	MeetingTitle         string            `yaml:"-"`
-	AppendAISummary      string            `yaml:"-"`
-	NotBefore            string            `yaml:"-"`
-	ExplicitCaptureAudio bool              `yaml:"-"`
-	Meetings             []MeetingSchedule `yaml:"meetings"`
+	OutputDir            string `yaml:"output_dir"`
+	OutputFile           string `yaml:"output_file,omitempty"`
+	FilenameTemplate     string `yaml:"filename_template,omitempty"`
+	MeetingURL           string `yaml:"meeting_url,omitempty"`
+	ProfileDir           string `yaml:"profile_dir"`
+	BotName              string `yaml:"bot_name"`
+	Category             string `yaml:"category,omitempty"`
+	Headless             bool   `yaml:"headless"`
+	CaptureAudio         bool   `yaml:"capture_audio,omitempty"`
+	Overwrite            bool   `yaml:"overwrite,omitempty"`
+	BrowserPath          string `yaml:"browser_path,omitempty"`
+	DefaultAccount       string `yaml:"default_account,omitempty"`
+	CaptureMode          string `yaml:"capture_mode,omitempty"`
+	Duration             string `yaml:"duration,omitempty"`
+	IdleTimeout          string `yaml:"idle_timeout,omitempty"`
+	AISummaryDelay       string `yaml:"ai_summary_delay,omitempty"`
+	LobbyTimeout         string `yaml:"lobby_timeout,omitempty"`
+	QueueFile            string `yaml:"queue_file,omitempty"`
+	ConfigPath           string `yaml:"-"`
+	MeetingTitle         string `yaml:"-"`
+	AppendAISummary      string `yaml:"-"`
+	NotBefore            string `yaml:"-"`
+	ExplicitCaptureAudio bool   `yaml:"-"`
+	// NoAISummary records an explicit --no-ai-summary CLI flag at runtime without YAML serialization.
+	NoAISummary bool `yaml:"-"`
+	// ExplicitAISummaryEnable records a deliberate runtime opt-in that must survive queue replay.
+	ExplicitAISummaryEnable bool              `yaml:"-"`
+	Meetings                []MeetingSchedule `yaml:"meetings"`
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default

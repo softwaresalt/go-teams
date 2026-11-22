@@ -105,7 +105,7 @@ at the start of its line and change the value. A good first set is:
 
 ```yaml
 output_dir: "C:\\Transcripts\\Team"
-default_account: "alice@contoso.com"
+default_account: "synthetic-user@example.com"
 category: "TEAM"
 ```
 
@@ -124,7 +124,7 @@ Run the sign-in command (using `default_account` from `config.yaml` or passing
 including any multi-factor prompt:
 
 ```powershell
-.\bin\go-teams.exe auth --account alice@contoso.com
+.\bin\go-teams.exe auth --account synthetic-user@example.com
 ```
 
 `--account` (or `default_account` in `config.yaml`) is required for `auth` and
@@ -262,10 +262,10 @@ enable and record live captions to a local Markdown file:
 
 ```bash
 # Open Teams in a browser window, sign in, join any call, and save captions to ./transcripts:
-go run ./cmd/go-teams captions --account alice@contoso.com --output-dir ./transcripts
+go run ./cmd/go-teams captions --account synthetic-user@example.com --output-dir ./transcripts
 
 # Or navigate directly to a specific Teams meeting URL:
-go run ./cmd/go-teams captions "https://teams.microsoft.com/meet/synthetic" --account alice@contoso.com --output-dir ./transcripts
+go run ./cmd/go-teams captions "https://teams.microsoft.com/meet/synthetic" --account synthetic-user@example.com --output-dir ./transcripts
 ```
 
 ## Compiled executable and explicit output file
@@ -308,8 +308,10 @@ Flags for the root command, `captions`, and `join`:
 * `--mode`: meeting capture protocol (`auto`, `ephemeral-live`, `live-with-summary`, or `past-recap`)
 * `--duration`: nominal scheduled live capture window (for example `30m`, `1h`, `1h30m`) before post-duration inactivity monitoring begins
 * `--idle-timeout`: silence/inactivity grace period after `--duration` or in-browser call-end teardown before stopping live capture (default `3m`)
-* `--ai-summary-delay`: delay after a live call ends before reopening the meeting in Recap mode to fetch and append `# AI Summary` (default `30m` for `live-with-summary`)
-* `--no-ai-summary`: disable AI Summary capture for both Meeting Recaps and delayed post-call enrichment (`--ai-summary-delay=0s`)
+* `--ai-summary-delay`: delay after a live call ends before reopening the meeting in Recap mode to fetch and append `# AI Summary` (default `30m` for `live-with-summary`); a value of `0s` disables deferred post-call queueing and fetching without performing immediate enrichment, but does not suppress an already-available Recap's immediate `# AI Summary`
+* `--no-ai-summary`: disable AI Summary capture for both Meeting Recaps and
+  post-call enrichment, independently of `--ai-summary-delay`; an explicit
+  `--append-ai-summary` request remains a deliberate one-shot summary override
 * `--lobby-timeout`: maximum time to wait in pre-join or the meeting lobby before aborting
 * `--overwrite`: overwrite existing `.md` transcript and `.mp3` audio files without prompting (default `false` prompts `(Y)es | (N)o`)
 * `--append-ai-summary`: existing Markdown transcript file to append the Meeting Recap AI Summary into without overwriting live captions
@@ -327,11 +329,24 @@ the transcript, extracted from the recording that belongs to the requested
 Recap. For view-only SharePoint Meeting Recaps and `stream.aspx` recordings
 where direct file downloads are blocked (`isDownloadBlocked=true`), `go-teams`
 captures the in-page `streamembed.aspx` or `stream.aspx` audio-only stream at
-high speed (`14x-100x` real-time) while stripping the video track (using
-`PerformanceResourceTiming` and `g_fileInfo.EncKey` when pre-buffered by a Web
-Worker) and encodes it to MP3 in pure Go without external tools. Recap audio is
-rejected rather than captured when its recording identity cannot be verified or
-when it exceeds the supported size or duration limits.
+high speed (`14x-100x` real-time) while stripping the video track. Before
+initial stream activity, playback setup re-clicks `"Play video"` every
+`1000ms` and safely follows replacement `<video>` elements; direct fetches of
+non-blob candidates are skipped. Across the 12 Path A workers, per-worker
+`inFlightSourceBytes` reservations enforce the shared `256 MiB` source cap.
+Path decoding is case-insensitive and single-pass for `fileUrl` and `?id=`
+recording identities, while a retryable blocked-stream target error receives at
+most one attempt-0 retry. `PerformanceResourceTiming` discovery and
+`g_fileInfo.EncKey` apply to entries that are visible from the page window:
+`window.performance.getEntriesByType('resource')` does not observe a
+`oneDrive.transcode` request initiated solely in a dedicated Web Worker when
+its entry remains isolated on the Worker's local performance timeline. Worker
+requests require dedicated Worker CDP `Network` / `Target.setAutoAttach`
+instrumentation. Stream target selection skips non-stream parent targets, and
+delayed-mount discovery does not depend on `xplatplugins.aspx`. Audio is
+encoded to MP3 in pure Go without external tools. Recap audio is rejected
+rather than captured when its recording identity cannot be verified or when it
+exceeds the supported size or duration limits.
 
 `--browser-path`, `--profile-dir`, and `--account` are also accepted by `auth`
 and `schedule`, and `schedule` additionally binds `--audio` / `--recap-audio`,
@@ -470,19 +485,27 @@ batches.
 
 * `ephemeral-live`: real-time live caption and MP3 audio capture (`capture_audio`
   defaults to `true` unless `--audio=false` is passed) with no post-call AI
-  Summary wait (`ai_summary_delay: 0s`), designed for meetings that leave no
-  post-call Recap or recording.
+  Summary wait (`ai_summary_delay: 0s`); it disables AI Summary capture for
+  both Recap surfaces and post-call enrichment, and is designed for meetings
+  that leave no post-call Recap or recording.
 * `live-with-summary`: real-time caption and optional audio capture during the
   live call, immediate flush of `.md` and `.mp3` and browser teardown when the
   call ends (releasing the Chromium `UserDataDir` profile immediately), a
   crash-safe pending entry in `transcription_queue.txt` (`queue_file`), and an
   in-process timer (`--ai-summary-delay`, default `30m`) that reopens the
   meeting in Recap mode, appends `# AI Summary` to the saved Markdown file, and
-  marks the queue line `::`.
+  marks the queue line `::`. When `--ai-summary-delay=0s` (or
+  `ai_summary_delay: "0s"`), `delay <= 0` returns before deferred queueing or
+  fetching, so it disables delayed post-call AI Summary work and does not
+  perform immediate post-call enrichment.
 * `past-recap`: finite post-meeting Recap export (transcript + immediate AI
-  Summary + optional MP3) with no live-call wait.
+  Summary + optional MP3) with no live-call wait. `ai_summary_delay: "0s"` does
+  not suppress this immediate Recap Summary; use `--no-ai-summary` or
+  `Config.NoAISummary` to disable it.
 * `auto` (default): selects `past-recap` for Recap views and live capture
-  otherwise.
+  otherwise. Its zero-delay behavior follows the selected surface: live capture
+  suppresses deferred queueing and fetching, while an available Recap keeps the
+  immediate `# AI Summary` unless `--no-ai-summary` is set.
 
 ### Activity-aware nominal duration, overtime, and idle shutdown
 
@@ -509,7 +532,7 @@ Configure recurring 5-field `cron:` expressions or one-time `at:` timestamps
 ```yaml
 output_dir: C:\Transcripts\WSP
 profile_dir: "%LOCALAPPDATA%\\go-teams\\profile"
-default_account: alice@contoso.com
+default_account: synthetic-user@example.com
 headless: true
 queue_file: C:\Transcripts\WSP\transcription_queue.txt
 meetings:
@@ -550,7 +573,10 @@ releases as soon as the live call ends, before any delayed
 `--ai-summary-delay` AI Summary fetch, so the next meeting is not blocked. When
 `queue_file` is configured, the daemon sweeps it at startup and runs pending
 entries, skipping `--not-before` entries whose timestamp is still in the
-future. On shutdown the daemon allows a 15-second graceful window. When
+future. Global `schedule --no-ai-summary` is inherited by ordinary queued
+captures and skips deferred `--append-ai-summary` entries, without preventing
+other eligible queue work. On shutdown the daemon allows a 15-second graceful
+window. When
 `overwrite` is `false` (the default) and a target file already exists, any
 interactive `(Y)es | (N)o` overwrite confirmation prompt is bounded to 15
 seconds so an unattended schedule releases the `busy` gate (a closed stdin
@@ -581,9 +607,13 @@ lowest to highest precedence:
    through `--audio=false` or top-level `capture_audio: false`. Setting
    `capture_audio: true` on the meeting entry overrides that explicit `false`.
 
-As a result, per-meeting settings in `config.yaml` override global `schedule`
-flags (such as `--audio=false` or `--no-ai-summary`) for that meeting. The
-daemon-wide browser and profile flags (`--browser-path`, `--profile-dir`,
+As a result, ordinary per-meeting settings in `config.yaml` override the
+corresponding global `schedule` flags. The global `schedule --no-ai-summary`
+flag is an exception: it remains active on scheduled entries, including
+`mode: past-recap` and `ai_summary_delay: 0s`, unless a positive per-meeting
+`ai_summary_delay` enables that entry's summary path. The `ephemeral-live`
+protocol disables AI Summary capture regardless of delay. The daemon-wide
+browser and profile flags (`--browser-path`, `--profile-dir`,
 `--account`, `--headless`, and `--headed`) apply to every scheduled meeting.
 
 > [!IMPORTANT]
@@ -634,7 +664,7 @@ schtasks /Create /SC ONCE /TN "TeamsCapture-ArchReview" /ST 14:00 /SD 11/15/2026
 Sign in using a visible capture session first and reuse that profile:
 
 ```powershell
-.\bin\go-teams.exe captions --account alice@contoso.com --profile-dir ".\bin\profile"
+.\bin\go-teams.exe captions --account synthetic-user@example.com --profile-dir ".\bin\profile"
 .\bin\go-teams.exe captions --url "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --output-file ".\transcripts\recap.md" --profile-dir ".\bin\profile" --headless
 ```
 
@@ -659,7 +689,7 @@ scheduled automation. Do not run two browser instances against the same profile.
 Headless mode cannot complete interactive login, MFA, or lobby admission for
 you. Live capture continues until cancellation; recap capture exits after
 exporting available transcript entries and the optional AI summary, separated
-by a Markdown horizontal rule. AI summary discovery retries up to 20 times
+by a Markdown horizontal rule. AI summary discovery retries up to 60 times
 with 500 ms between attempts; transcript export still succeeds if no summary
 is available.
 
@@ -828,7 +858,7 @@ filename_template: "<category>-<concat-meeting-name>-transcript-<YYYYMMDD>.md"
 category: standup
 profile_dir: /home/user/.config/go-teams/profile
 browser_path: /usr/bin/google-chrome
-default_account: alice@contoso.com
+default_account: synthetic-user@example.com
 bot_name: Transcription Agent
 headless: true
 capture_audio: false # true also writes an .mp3 for live meetings and Meeting Recaps
@@ -857,7 +887,7 @@ meetings:
 | `capture_mode` | `mode` | Capture protocol: `auto`, `ephemeral-live`, `live-with-summary`, or `past-recap` |
 | `duration` | | Nominal live capture window (for example `30m`, `1h`) before post-duration idle monitoring |
 | `idle_timeout` | | Post-duration or post-teardown silence window before stopping capture (default `3m`) |
-| `ai_summary_delay` | | Post-call delay before reopening Recap to append `# AI Summary` (default `30m` for `live-with-summary`) |
+| `ai_summary_delay` | | Post-call delay before reopening Recap to append `# AI Summary` (default `30m` for `live-with-summary`); `0s` / `delay <= 0` disables delayed queueing and fetching on live calls without immediate enrichment, but preserves immediate Recap export unless `--no-ai-summary` disables it |
 | `lobby_timeout` | | Maximum pre-join / lobby wait window before aborting |
 | `queue_file` | | Path to `transcription_queue.txt` used to persist deferred `--append-ai-summary` entries |
 | `meetings` | | Scheduled meetings (`name`, `url`, `cron` or `at`, plus optional `mode`/`capture_mode`, `duration`, `idle_timeout`, `ai_summary_delay`, `lobby_timeout`, `category`, `capture_audio`/`audio`, `overwrite`/`file_overwrite`, `output_dir`) |

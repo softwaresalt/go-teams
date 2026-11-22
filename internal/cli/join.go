@@ -34,7 +34,7 @@ const (
   --idle-timeout     Silence grace period after --duration or in-browser call end (default 3m).
   --lobby-timeout    Maximum wait in pre-join or the meeting lobby before aborting.
   --ai-summary-delay Delay after a live call ends before the AI Summary is appended (default 30m).
-  --no-ai-summary    Disable the delayed AI Summary (same as --ai-summary-delay=0s).
+  --no-ai-summary    Disable AI Summary capture for both Meeting Recaps and delayed post-call enrichment.
   --append-ai-summary <file.md> with --not-before <RFC3339> enriches an existing transcript with
   the Meeting Recap AI Summary; a queued entry is skipped until --not-before has passed.`
 
@@ -129,7 +129,7 @@ func bindCaptureFlags(cmd *cobra.Command, f *captureFlags) {
 	cmd.Flags().DurationVar(&f.duration, "duration", 0, "nominal live capture duration (e.g. 30m, 1h) before post-duration idle monitoring")
 	cmd.Flags().DurationVar(&f.idleTimeout, "idle-timeout", 0, "inactivity grace period after duration or call-end before stopping capture (default 3m)")
 	cmd.Flags().DurationVar(&f.aiSummaryDelay, "ai-summary-delay", 0, "delay after a live call ends before fetching and appending the AI Summary (default 30m)")
-	cmd.Flags().BoolVar(&f.noAISummary, "no-ai-summary", false, "disable delayed post-call AI Summary capture")
+	cmd.Flags().BoolVar(&f.noAISummary, "no-ai-summary", false, "disable AI Summary capture for both Meeting Recaps and delayed post-call enrichment")
 	cmd.Flags().DurationVar(&f.lobbyTimeout, "lobby-timeout", 0, "maximum time to wait in pre-join or lobby before aborting")
 	cmd.Flags().StringVar(&f.appendAISummary, "append-ai-summary", "", "existing Markdown transcript file to append the Meeting Recap AI Summary into")
 	cmd.Flags().StringVar(&f.notBefore, "not-before", "", "RFC3339 timestamp before which a queued --append-ai-summary entry is skipped")
@@ -151,6 +151,10 @@ func applyOutputTarget(cfg *config.Config, target string) {
 	}
 	cfg.OutputDir = target
 	cfg.OutputFile = ""
+}
+
+func captureFlagChanged(cmd *cobra.Command, name string) bool {
+	return cmd != nil && cmd.Flags().Changed(name)
 }
 
 func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
@@ -186,47 +190,59 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	if f.browserPath != "" {
 		cfg.BrowserPath = f.browserPath
 	}
-	if cmd.Flags().Changed("account") || strings.TrimSpace(f.account) != "" {
+	if captureFlagChanged(cmd, "account") || strings.TrimSpace(f.account) != "" {
 		cfg.DefaultAccount = strings.TrimSpace(f.account)
 	}
-	if cmd.Flags().Changed("headless") {
+	if captureFlagChanged(cmd, "headless") {
 		cfg.Headless = f.headless
 	}
 	if f.headed {
 		cfg.Headless = false
 	}
-	audioFlagChanged := cmd.Flags().Changed("audio") || cmd.Flags().Changed("recap-audio")
+	audioFlagChanged := captureFlagChanged(cmd, "audio") || captureFlagChanged(cmd, "recap-audio")
 	if audioFlagChanged {
 		cfg.CaptureAudio = f.audio
 		cfg.ExplicitCaptureAudio = true
 	}
-	if cmd != nil && cmd.Flags().Changed("overwrite") {
+	if captureFlagChanged(cmd, "overwrite") {
 		cfg.Overwrite = f.overwrite
 	} else if f.overwrite {
 		cfg.Overwrite = true
 	}
-	if cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "" {
+	if captureFlagChanged(cmd, "mode") || strings.TrimSpace(f.mode) != "" {
 		cfg.CaptureMode = strings.ToLower(strings.TrimSpace(f.mode))
 	}
-	if cmd.Flags().Changed("duration") || f.duration != 0 {
+	if captureFlagChanged(cmd, "duration") || f.duration != 0 {
 		cfg.Duration = f.duration.String()
 	}
-	if cmd.Flags().Changed("idle-timeout") || f.idleTimeout != 0 {
+	if captureFlagChanged(cmd, "idle-timeout") || f.idleTimeout != 0 {
 		cfg.IdleTimeout = f.idleTimeout.String()
 	}
-	if cmd.Flags().Changed("ai-summary-delay") || f.aiSummaryDelay != 0 {
+	if captureFlagChanged(cmd, "ai-summary-delay") || f.aiSummaryDelay != 0 {
 		cfg.AISummaryDelay = f.aiSummaryDelay.String()
+		if f.aiSummaryDelay > 0 {
+			cfg.ExplicitAISummaryEnable = true
+		}
 	}
-	if f.noAISummary {
+	if captureFlagChanged(cmd, "no-ai-summary") {
+		cfg.NoAISummary = f.noAISummary
+		if !f.noAISummary {
+			cfg.ExplicitAISummaryEnable = true
+		}
+		if f.noAISummary {
+			cfg.AISummaryDelay = "0s"
+		}
+	} else if f.noAISummary {
+		cfg.NoAISummary = true
 		cfg.AISummaryDelay = "0s"
 	}
-	if cmd.Flags().Changed("lobby-timeout") || f.lobbyTimeout != 0 {
+	if captureFlagChanged(cmd, "lobby-timeout") || f.lobbyTimeout != 0 {
 		cfg.LobbyTimeout = f.lobbyTimeout.String()
 	}
-	if cmd.Flags().Changed("append-ai-summary") || strings.TrimSpace(f.appendAISummary) != "" {
+	if captureFlagChanged(cmd, "append-ai-summary") || strings.TrimSpace(f.appendAISummary) != "" {
 		cfg.AppendAISummary = strings.TrimSpace(f.appendAISummary)
 	}
-	if cmd.Flags().Changed("not-before") || strings.TrimSpace(f.notBefore) != "" {
+	if captureFlagChanged(cmd, "not-before") || strings.TrimSpace(f.notBefore) != "" {
 		cfg.NotBefore = strings.TrimSpace(f.notBefore)
 	}
 	if strings.EqualFold(strings.TrimSpace(cfg.CaptureMode), config.CaptureModeEphemeralLive) {
@@ -271,7 +287,7 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 	if f.browserPath != "" {
 		out = append(out, "--browser-path", f.browserPath)
 	}
-	if cmd.Flags().Changed("account") {
+	if captureFlagChanged(cmd, "account") {
 		if trimmed := strings.TrimSpace(f.account); trimmed != "" {
 			out = append(out, "--account", trimmed)
 		} else {
@@ -280,7 +296,7 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 	} else if strings.TrimSpace(f.account) != "" {
 		out = append(out, "--account", strings.TrimSpace(f.account))
 	}
-	if cmd.Flags().Changed("headless") {
+	if captureFlagChanged(cmd, "headless") {
 		if f.headless {
 			out = append(out, "--headless")
 		} else {
@@ -293,7 +309,7 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 	// Both flags share f.audio, so forward the resolved value under each flag
 	// that was set; the values agree, so their order cannot matter downstream.
 	for _, name := range []string{"audio", "recap-audio"} {
-		if !cmd.Flags().Changed(name) {
+		if !captureFlagChanged(cmd, name) {
 			continue
 		}
 		if f.audio {
@@ -302,29 +318,33 @@ func inheritedQueueFlags(cmd *cobra.Command, configPath string, f captureFlags) 
 			out = append(out, "--"+name+"=false")
 		}
 	}
-	if cmd != nil && cmd.Flags().Changed("overwrite") {
+	if captureFlagChanged(cmd, "overwrite") {
 		if f.overwrite {
 			out = append(out, "--overwrite")
 		} else {
 			out = append(out, "--overwrite=false")
 		}
 	}
-	if cmd.Flags().Changed("mode") || strings.TrimSpace(f.mode) != "" {
+	if captureFlagChanged(cmd, "mode") || strings.TrimSpace(f.mode) != "" {
 		out = append(out, "--mode", strings.ToLower(strings.TrimSpace(f.mode)))
 	}
-	if cmd.Flags().Changed("duration") || f.duration > 0 {
+	if captureFlagChanged(cmd, "duration") || f.duration > 0 {
 		out = append(out, "--duration", f.duration.String())
 	}
-	if cmd.Flags().Changed("idle-timeout") || f.idleTimeout > 0 {
+	if captureFlagChanged(cmd, "idle-timeout") || f.idleTimeout > 0 {
 		out = append(out, "--idle-timeout", f.idleTimeout.String())
 	}
-	if cmd.Flags().Changed("ai-summary-delay") {
+	if captureFlagChanged(cmd, "ai-summary-delay") {
 		out = append(out, "--ai-summary-delay", f.aiSummaryDelay.String())
 	}
-	if cmd.Flags().Changed("no-ai-summary") && f.noAISummary {
-		out = append(out, "--no-ai-summary")
+	if captureFlagChanged(cmd, "no-ai-summary") {
+		if f.noAISummary {
+			out = append(out, "--no-ai-summary")
+		} else {
+			out = append(out, "--no-ai-summary=false")
+		}
 	}
-	if cmd.Flags().Changed("lobby-timeout") || f.lobbyTimeout > 0 {
+	if captureFlagChanged(cmd, "lobby-timeout") || f.lobbyTimeout > 0 {
 		out = append(out, "--lobby-timeout", f.lobbyTimeout.String())
 	}
 	return out

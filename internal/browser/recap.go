@@ -87,6 +87,9 @@ const extractRecapAudioJS = `(async () => {
 			return String(s || '');
 		}
 	}
+	function decodeURLPathDelimiters(s) {
+		return String(s || '').replace(/%2f/ig, '/').replace(/%2e/ig, '.');
+	}
 	function checkIdentityAgainst(raw, baseUrl, state) {
 		if (!raw) return;
 		let u;
@@ -95,30 +98,32 @@ const extractRecapAudioJS = `(async () => {
 		const hashQuery = u.hash.indexOf('?');
 		if (hashQuery >= 0) queries.push(new URLSearchParams(u.hash.slice(hashQuery + 1)));
 		for (const params of queries) {
-			for (const [key, field] of [['threadId','ThreadID'], ['driveItemId','DriveItemID'], ['driveId','DriveID'], ['callId','CallID'], ['iCalUid','ICalUID']]) {
-				for (const value of params.getAll(key)) matchField(field, value, field !== 'DriveID', state);
-			}
-			for (const paramKey of ['fileUrl', 'id']) {
-				for (const value of params.getAll(paramKey)) {
-					if (paramKey === 'id' && !/\.(mp4|mkv|webm|mov|m4a)(?:$|[?#])/i.test(String(value || ''))) continue;
-					let filePath = '';
-					let alreadyDecoded = false;
-					if (paramKey === 'id' && !/^https?:\/\//i.test(value)) {
-						filePath = String(value || '');
-						alreadyDecoded = true;
-					} else {
-						try {
-							filePath = new URL(value, baseUrl).pathname;
-						} catch (_) {
-							if (paramKey === 'fileUrl') throw new Error('recap audio recording identity mismatch');
-							continue;
-						}
+			for (const [rawKey, rawValue] of params.entries()) {
+				const paramKey = String(rawKey || '').toLowerCase();
+				const rawVal = String(rawValue || '').trim();
+				if (!rawVal) continue;
+				for (const [key, field] of [['threadid','ThreadID'], ['driveitemid','DriveItemID'], ['driveid','DriveID'], ['callid','CallID'], ['icaluid','ICalUID']]) {
+					if (paramKey === key) matchField(field, rawVal, field !== 'DriveID', state);
+				}
+				if (paramKey !== 'fileurl' && paramKey !== 'id') continue;
+				let filePath = '';
+				let alreadyDecoded = false;
+				if (!/^[a-z][a-z0-9+.-]*:/i.test(rawVal) && !rawVal.startsWith('//') && !rawVal.startsWith(':')) {
+					const qIdx = rawVal.indexOf('?');
+					filePath = qIdx >= 0 ? rawVal.slice(0, qIdx) : rawVal;
+					alreadyDecoded = true;
+				} else {
+					try {
+						filePath = decodeURLPathDelimiters(new URL(rawVal, baseUrl).pathname);
+					} catch (_) {
+						if (paramKey === 'fileurl') throw new Error('recap audio recording identity mismatch');
+						continue;
 					}
-					if (!filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
-						const rawName = filePath.split('/').pop();
-						const recName = alreadyDecoded ? rawName : safeDecodeURIComponent(rawName);
-						matchField('RecordingName', recName, true, state);
-					}
+				}
+				if (!filePath.endsWith('/') && !filePath.includes('/:') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(filePath)) {
+					const rawName = filePath.split('/').pop();
+					const recName = alreadyDecoded ? rawName : safeDecodeURIComponent(rawName);
+					matchField('RecordingName', recName, true, state);
 				}
 			}
 		}
@@ -127,7 +132,10 @@ const extractRecapAudioJS = `(async () => {
 		if (token) matchField('MeetingToken', token[0], true, state);
 		const meet = decoded.match(/\/meet\/([a-z0-9_-]+)/i);
 		if (meet) matchField('MeetID', meet[1], true, state);
-		if (/\.(mp4|mkv|webm|mov|m4a)$/i.test(u.pathname)) matchField('RecordingName', safeDecodeURIComponent(u.pathname.split('/').pop()), true, state);
+		const directPath = decodeURLPathDelimiters(u.pathname);
+		if (!directPath.endsWith('/') && /\.(mp4|mkv|webm|mov|m4a)$/i.test(directPath)) {
+			matchField('RecordingName', safeDecodeURIComponent(directPath.split('/').pop()), true, state);
+		}
 	}
 	const playBtnSelector = 'button[aria-label="Play video"], button[title="Play video"], button[data-automationid="playButton"], button[aria-label="Play"], [role="menuitem"][aria-label="Play"], .vjs-big-play-button, [role="button"][aria-label="Play video"]';
 	function validateFrameContext(win, doc) {
@@ -159,16 +167,24 @@ const extractRecapAudioJS = `(async () => {
 			baseIdentityMatched: state.matched
 		};
 	}
+	function isStreamPageURL(raw) {
+		try {
+			const parsed = new URL(String(raw || ''), 'https://local.invalid');
+			const path = parsed.pathname.toLowerCase().replace(/\/+$/, '');
+			return path.endsWith('/stream.aspx') || path.endsWith('/streamembed.aspx');
+		} catch (_) {
+			return false;
+		}
+	}
 	function hasPlayableStreamSurface(ctx) {
 		const d = ctx.doc;
 		const w = ctx.win;
 		const fi = ctx.info || {};
-		const urlLower = String(ctx.pageUrl || '').toLowerCase();
+		const streamURL = isStreamPageURL(ctx.pageUrl);
 		const media = d && d.querySelector ? d.querySelector('audio, video') : null;
 		const playBtn = d && d.querySelector ? d.querySelector(playBtnSelector) : null;
 		return Boolean(
-			urlLower.includes('streamembed.aspx') ||
-			urlLower.includes('stream.aspx') ||
+			streamURL ||
 			playBtn ||
 			(media && (typeof media.play === 'function' || typeof w.MediaSource !== 'undefined')) ||
 			fi.transcodeUrl
@@ -176,8 +192,7 @@ const extractRecapAudioJS = `(async () => {
 	}
 	function frameScore(ctx) {
 		let score = 0;
-		const urlLower = String(ctx.pageUrl || '').toLowerCase();
-		if (urlLower.includes('streamembed.aspx') || urlLower.includes('stream.aspx')) score += 100;
+		if (isStreamPageURL(ctx.pageUrl)) score += 100;
 		if (hasPlayableStreamSurface(ctx)) score += 50;
 		if (ctx.doc && ctx.doc.querySelector && ctx.doc.querySelector('audio, video')) score += 10;
 		if (ctx.info && ctx.info.isDownloadBlocked) score += 5;
@@ -282,11 +297,11 @@ const extractRecapAudioJS = `(async () => {
 	const playerCtx = playerContexts[0];
 	const playerWin = playerCtx.win;
 	const playerDoc = playerCtx.doc;
-	const info = playerCtx.info;
-	const pageUrl = playerCtx.pageUrl;
-	const itemId = playerCtx.itemId;
-	const fileName = playerCtx.fileName;
-	const baseIdentityMatched = playerCtx.baseIdentityMatched;
+	let info = playerCtx.info;
+	let pageUrl = playerCtx.pageUrl;
+	let itemId = playerCtx.itemId;
+	let fileName = playerCtx.fileName;
+	let baseIdentityMatched = playerCtx.baseIdentityMatched;
 
 	const pcmEl = playerDoc.querySelector ? playerDoc.querySelector('[data-recap-audio-pcm]') : null;
 	const hasPCM = pcmEl && pcmEl.hasAttribute && pcmEl.hasAttribute('data-recap-audio-pcm');
@@ -366,6 +381,11 @@ const extractRecapAudioJS = `(async () => {
 			const duration = Number(rawDuration);
 			if (Number.isFinite(duration) && duration > 0 &&
 				(duration > maxRecapAudioDurationSec || Math.ceil(duration * 44100) * 2 > maxRecapAudioPCMBytes)) throw new Error(limitError);
+		}
+		if (info.isDownloadBlocked && streamSurface && !/^blob:/i.test(candidateUrl)) {
+			blockedErr = new Error('recap audio download is blocked by SharePoint permissions (isDownloadBlocked=true)');
+			lastFetchErr = blockedErr;
+			continue;
 		}
 		if (!fetchFn) {
 			lastFetchErr = new Error('recap audio fetch unavailable');
@@ -651,6 +671,7 @@ const extractRecapAudioJS = `(async () => {
 		const abortCtrl = typeof AbortController === 'function' ? new AbortController() : null;
 		let fatalErr = null;
 		let streamSourceBytes = 0;
+		let inFlightSourceBytes = 0;
 		let pathAActive = false;
 		let pathAStarted = false;
 		let pathAFailed = false;
@@ -678,12 +699,20 @@ const extractRecapAudioJS = `(async () => {
 			return u.origin === winOrigin && allowedProto;
 		}
 		let transcodeAudioTemplateUrl = '';
+		let transcodeIdentityVerified = !enforceIdentity || baseIdentityMatched;
+		let verifiedTranscodeURL = '';
 		if (info.transcodeUrl && isAllowedSameOriginTranscodeURL(info.transcodeUrl, playerWin)) {
 			try {
 				const base = (playerWin && playerWin.location && playerWin.location.href) || pageUrl || String((typeof location !== 'undefined' && location.href) || '');
 				transcodeAudioTemplateUrl = new URL(String(info.transcodeUrl), base).toString();
 			} catch (_) {
 				transcodeAudioTemplateUrl = '';
+			}
+			if (transcodeAudioTemplateUrl) {
+				const state = { matched: false };
+				checkIdentityAgainst(transcodeAudioTemplateUrl, pageUrl, state);
+				transcodeIdentityVerified = transcodeIdentityVerified || state.matched;
+				if (state.matched) verifiedTranscodeURL = transcodeAudioTemplateUrl;
 			}
 		}
 		let transcodeWsd = 0;
@@ -694,6 +723,40 @@ const extractRecapAudioJS = `(async () => {
 				return ppdVal / 16000;
 			}
 			return ppdVal >= 1e6 ? (ppdVal / 1e7) : ppdVal;
+		}
+		function verifyTranscodeIdentity(rawUrl) {
+			const state = { matched: false };
+			checkIdentityAgainst(rawUrl, pageUrl, state);
+			if (enforceIdentity && !baseIdentityMatched && !state.matched) {
+				throw new Error('recap audio recording identity unverified');
+			}
+			transcodeIdentityVerified = transcodeIdentityVerified || state.matched || baseIdentityMatched;
+			if (state.matched) verifiedTranscodeURL = String(rawUrl);
+		}
+		function refreshPlayerFrameMetadata() {
+			const current = validateFrameContext(playerWin, playerDoc);
+			info = current.info;
+			pageUrl = current.pageUrl;
+			itemId = current.itemId;
+			fileName = current.fileName;
+			baseIdentityMatched = current.baseIdentityMatched;
+			transcodeIdentityVerified = !enforceIdentity || baseIdentityMatched ||
+				Boolean(verifiedTranscodeURL);
+			const currentTranscodeURL = info && info.transcodeUrl;
+			if (!currentTranscodeURL || !isAllowedSameOriginTranscodeURL(currentTranscodeURL, playerWin)) return;
+			let normalized = '';
+			try {
+				const base = pageUrl || String((typeof location !== 'undefined' && location.href) || '');
+				normalized = new URL(String(currentTranscodeURL), base).toString();
+			} catch (_) {}
+			if (!normalized) return;
+			const state = { matched: false };
+			checkIdentityAgainst(normalized, pageUrl, state);
+			if (state.matched) {
+				verifiedTranscodeURL = normalized;
+				transcodeIdentityVerified = true;
+			}
+			transcodeAudioTemplateUrl = transcodeAudioTemplateUrl || normalized;
 		}
 		const capturedAuthHeadersByOrigin = Object.create(null);
 		const allowlistedHeaderNames = [
@@ -724,8 +787,71 @@ const extractRecapAudioJS = `(async () => {
 		let cleaningUp = false;
 		let pathAPromise = null;
 		let pathAStartedAt = 0;
+		let pathBPlaybackResumed = false;
 		let wakeLoop = null;
+		const playedMediaElements = new WeakSet();
+		const pendingMediaPlayElements = new WeakSet();
+		const trackedMediaElements = new Set();
+		const mediaPlaybackState = new WeakMap();
 
+		function configureSilentMedia(m) {
+			if (!m) return;
+			if (!mediaPlaybackState.has(m)) {
+				mediaPlaybackState.set(m, {
+					muted: m.muted,
+					volume: m.volume,
+					playbackRate: m.playbackRate
+				});
+			}
+			trackedMediaElements.add(m);
+			try {
+				m.muted = true;
+				m.volume = 0;
+				m.playbackRate = 16;
+			} catch (_) {}
+		}
+
+		function restoreMedia(m) {
+			const state = mediaPlaybackState.get(m);
+			if (m && typeof m.pause === 'function') {
+				try { m.pause(); } catch (_) {}
+			}
+			if (!m || !state) return;
+			try {
+				m.muted = state.muted;
+				m.volume = state.volume;
+				m.playbackRate = state.playbackRate;
+			} catch (_) {}
+		}
+
+		function playMediaElementOnce(m, force = false) {
+			if (!m || (typeof m !== 'object' && typeof m !== 'function') ||
+				typeof m.play !== 'function' ||
+				(!force && (playedMediaElements.has(m) || pendingMediaPlayElements.has(m)))) return;
+			pendingMediaPlayElements.add(m);
+			trackedMediaElements.add(m);
+			try {
+				Promise.resolve(m.play())
+					.then(() => {
+						playedMediaElements.add(m);
+						if (cleaningUp && m && typeof m.pause === 'function') {
+							try { m.pause(); } catch (_) {}
+						}
+					})
+					.catch(() => {})
+					.finally(() => { pendingMediaPlayElements.delete(m); });
+			} catch (_) {
+				pendingMediaPlayElements.delete(m);
+			}
+		}
+		function resumeMSEPlaybackAfterPathAFailure() {
+			if (pathBPlaybackResumed || hooksRestored || cleaningUp) return;
+			pathBPlaybackResumed = true;
+			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
+			configureSilentMedia(m);
+			if (m && m.paused === false) return;
+			playMediaElementOnce(m, true);
+		}
 		function signalWake() {
 			if (wakeLoop) {
 				const fn = wakeLoop;
@@ -775,7 +901,7 @@ const extractRecapAudioJS = `(async () => {
 			if (isFMP4InitSegment(u8)) {
 				if (classifyInitSegmentTrack(u8) === 'video') return;
 				if (!mseInitSegment) {
-					if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+					if (streamSourceBytes + inFlightSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
 						fatalErr = new Error(limitError);
 						if (abortCtrl) abortCtrl.abort();
 						signalWake();
@@ -803,7 +929,7 @@ const extractRecapAudioJS = `(async () => {
 				signalWake();
 				return;
 			}
-			if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+			if (streamSourceBytes + inFlightSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
 				fatalErr = new Error(limitError);
 				if (abortCtrl) abortCtrl.abort();
 				signalWake();
@@ -870,13 +996,7 @@ const extractRecapAudioJS = `(async () => {
 		function stepVideoPlayback() {
 			if (pathAActive || fatalErr) return;
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-			if (m) {
-				try {
-					m.muted = true;
-					m.volume = 0;
-					if (m.playbackRate !== 16) m.playbackRate = 16;
-				} catch (_) {}
-			}
+			configureSilentMedia(m);
 			const sb = audioSBRef;
 			if (sb && sb.buffered && sb.buffered.length > 0) {
 				try {
@@ -933,6 +1053,7 @@ const extractRecapAudioJS = `(async () => {
 			const isTranscode = u.pathname.toLowerCase().includes('onedrive.transcode') || part === 'initsegment' || part === 'mediasegment';
 			if (!isTranscode) return { isVideoSegment: false };
 			if (!isAllowedSameOriginTranscodeURL(u.toString(), hookWin)) return { isVideoSegment: false };
+			verifyTranscodeIdentity(u.toString());
 			if (headersObj) {
 				const originHdrs = capturedAuthHeadersByOrigin[u.origin] || (capturedAuthHeadersByOrigin[u.origin] = Object.create(null));
 				for (const [k, v] of Object.entries(headersObj)) {
@@ -986,21 +1107,15 @@ const extractRecapAudioJS = `(async () => {
 				pathAActive = false;
 				pathAFailed = true;
 				streamSourceBytes = mseBytesTotal();
+				inFlightSourceBytes = 0;
 				if (hooksRestored || cleaningUp) return null;
-				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-				if (m && typeof m.play === 'function') {
-					try {
-						m.muted = true;
-						m.volume = 0;
-						m.playbackRate = 16;
-						Promise.resolve(m.play()).catch(() => {});
-					} catch (_) {}
-				}
+				resumeMSEPlaybackAfterPathAFailure();
 				signalWake();
 				return null;
 			});
 		}
 		async function fetchBytesOnce(urlStr, origFetchFn, hookWin, signal) {
+			let workerReserved = 0;
 			if (fatalErr) throw fatalErr;
 			const parentSignal = signal || (abortCtrl ? abortCtrl.signal : undefined);
 			if (parentSignal && parentSignal.aborted) {
@@ -1054,10 +1169,14 @@ const extractRecapAudioJS = `(async () => {
 					throw err;
 				}
 				const cl = Number(resp.headers && resp.headers.get && resp.headers.get('content-length'));
-				if (Number.isFinite(cl) && cl > 0 && streamSourceBytes + cl > maxRecapAudioSourceBytes) {
-					fatalErr = new Error(limitError);
-					if (abortCtrl) abortCtrl.abort();
-					throw fatalErr;
+				if (Number.isFinite(cl) && cl > 0) {
+					if (streamSourceBytes + inFlightSourceBytes + cl > maxRecapAudioSourceBytes) {
+						fatalErr = new Error(limitError);
+						if (abortCtrl) abortCtrl.abort();
+						throw fatalErr;
+					}
+					inFlightSourceBytes += cl;
+					workerReserved += cl;
 				}
 				if (!resp.body || !resp.body.getReader) {
 					const ab = await resp.arrayBuffer();
@@ -1065,12 +1184,20 @@ const extractRecapAudioJS = `(async () => {
 					if (parentSignal && parentSignal.aborted) {
 						throw new Error('transcode fetch aborted');
 					}
+					if (timedOut) {
+						const err = new Error('transcode fetch timeout');
+						err.retryable = true;
+						throw err;
+					}
 					const u8 = new Uint8Array(ab);
-					if (streamSourceBytes + u8.byteLength > maxRecapAudioSourceBytes) {
+					const extra = Math.max(0, u8.byteLength - workerReserved);
+					if (streamSourceBytes + inFlightSourceBytes + extra > maxRecapAudioSourceBytes) {
 						fatalErr = new Error(limitError);
 						if (abortCtrl) abortCtrl.abort();
 						throw fatalErr;
 					}
+					inFlightSourceBytes = Math.max(0, inFlightSourceBytes - workerReserved);
+					workerReserved = 0;
 					streamSourceBytes += u8.byteLength;
 					return u8;
 				}
@@ -1093,19 +1220,31 @@ const extractRecapAudioJS = `(async () => {
 						try { await reader.cancel(); } catch (_) {}
 						throw (fatalErr || new Error('transcode fetch aborted'));
 					}
+					if (timedOut) {
+						try { await reader.cancel(); } catch (_) {}
+						const err = new Error('transcode fetch timeout');
+						err.retryable = true;
+						throw err;
+					}
 					if (part.done) break;
 					const v = part.value;
 					if (!v || !v.byteLength) continue;
-					if (streamSourceBytes + total + v.byteLength > maxRecapAudioSourceBytes) {
-						try { await reader.cancel(); } catch (_) {}
+					const extra = Math.max(0, (total + v.byteLength) - workerReserved);
+					if (extra > 0 && streamSourceBytes + inFlightSourceBytes + extra > maxRecapAudioSourceBytes) {
 						fatalErr = new Error(limitError);
 						if (abortCtrl) abortCtrl.abort();
+						try { await reader.cancel(); } catch (_) {}
 						throw fatalErr;
 					}
+					inFlightSourceBytes += extra;
+					workerReserved += extra;
 					total += v.byteLength;
 					chunks.push(v);
+					await Promise.resolve();
 				}
-				if (streamSourceBytes + total > maxRecapAudioSourceBytes) {
+				inFlightSourceBytes = Math.max(0, inFlightSourceBytes - workerReserved);
+				workerReserved = 0;
+				if (streamSourceBytes + inFlightSourceBytes + total > maxRecapAudioSourceBytes) {
 					fatalErr = new Error(limitError);
 					if (abortCtrl) abortCtrl.abort();
 					throw fatalErr;
@@ -1128,6 +1267,10 @@ const extractRecapAudioJS = `(async () => {
 			} finally {
 				clearTimeout(reqTimer);
 				activeTimers.delete(reqTimer);
+				if (workerReserved > 0) {
+					inFlightSourceBytes = Math.max(0, inFlightSourceBytes - workerReserved);
+					workerReserved = 0;
+				}
 				if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
 					parentSignal.removeEventListener('abort', onParentAbort);
 				}
@@ -1236,6 +1379,11 @@ const extractRecapAudioJS = `(async () => {
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 			if (m && typeof m.pause === 'function') {
 				try { m.pause(); } catch (_) {}
+			}
+			for (const tracked of trackedMediaElements) {
+				if (tracked && typeof tracked.pause === 'function') {
+					try { tracked.pause(); } catch (_) {}
+				}
 			}
 			const pathAAbortCtrl = typeof AbortController === 'function' ? new AbortController() : null;
 			const pathASignal = pathAAbortCtrl ? pathAAbortCtrl.signal : undefined;
@@ -1572,27 +1720,32 @@ const extractRecapAudioJS = `(async () => {
 			}
 		}
 		function cleanupHooks() {
-			if (hooksRestored) return;
-			hooksRestored = true;
-			for (const tid of activeTimers) clearTimeout(tid);
-			activeTimers.clear();
-			for (const item of trackedListeners) {
-				try {
-					if (item.target && typeof item.target.removeEventListener === 'function') {
-						item.target.removeEventListener(item.type, item.fn);
-					}
-				} catch (_) {}
-			}
-			for (let i = restorers.length - 1; i >= 0; i--) {
-				try { restorers[i](); } catch (_) {}
-			}
-			if (abortCtrl) {
-				try { abortCtrl.abort(); } catch (_) {}
+			if (!hooksRestored) {
+				hooksRestored = true;
+				for (const tid of activeTimers) clearTimeout(tid);
+				activeTimers.clear();
+				for (const item of trackedListeners) {
+					try {
+						if (item.target && typeof item.target.removeEventListener === 'function') {
+							item.target.removeEventListener(item.type, item.fn);
+						}
+					} catch (_) {}
+				}
+				for (let i = restorers.length - 1; i >= 0; i--) {
+					try { restorers[i](); } catch (_) {}
+				}
+				if (abortCtrl) {
+					try { abortCtrl.abort(); } catch (_) {}
+				}
 			}
 			const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
 			if (m && typeof m.pause === 'function') {
 				try { m.pause(); } catch (_) {}
 			}
+			for (const tracked of trackedMediaElements) {
+				restoreMedia(tracked);
+			}
+			trackedMediaElements.clear();
 		}
 
 		async function seedEncKeyFromFileInfo() {
@@ -1655,26 +1808,25 @@ const extractRecapAudioJS = `(async () => {
 			scanPerformanceTranscodeEntries(playerWin);
 			if (playerWin !== window) scanPerformanceTranscodeEntries(window);
 
-			let btnClicked = false;
-			let mediaPlayTriggered = false;
+			let lastBtnClickAt = 0;
+			let triggeredMediaEl = null;
 			function triggerPlaybackIfReady() {
-				if (pathAActive || (btnClicked && mediaPlayTriggered)) return;
+				refreshPlayerFrameMetadata();
+				if (pathAActive || !transcodeIdentityVerified) return;
 				const btn = playerDoc.querySelector ? playerDoc.querySelector(playBtnSelector) : null;
 				const m = playerDoc.querySelector ? playerDoc.querySelector('audio, video') : null;
-				if (m && !mediaPlayTriggered) {
-					try {
-						m.muted = true;
-						m.volume = 0;
-						if (m.playbackRate !== 16) m.playbackRate = 16;
-					} catch (_) {}
+				if (m && !pathAActive) {
+					configureSilentMedia(m);
 				}
-				if (!btnClicked && btn && typeof btn.click === 'function') {
-					btnClicked = true;
+				const now = Date.now();
+				if (!pathAActive && !activityObserved && btn && typeof btn.click === 'function' &&
+					(lastBtnClickAt === 0 || now - lastBtnClickAt >= 1000)) {
+					lastBtnClickAt = Math.max(1, now);
 					btn.click();
 				}
-				if (!mediaPlayTriggered && !pathAActive && m && typeof m.play === 'function') {
-					mediaPlayTriggered = true;
-					try { Promise.resolve(m.play()).catch(() => {}); } catch (_) {}
+				if (!pathAActive && m) {
+					triggeredMediaEl = m;
+					playMediaElementOnce(m);
 				}
 			}
 			triggerPlaybackIfReady();
@@ -1689,7 +1841,10 @@ const extractRecapAudioJS = `(async () => {
 			let pathAResult = null;
 
 			while (Date.now() < deadlineAt) {
-				if (!btnClicked || !mediaPlayTriggered) triggerPlaybackIfReady();
+				if (!pathAActive && (!activityObserved || !triggeredMediaEl ||
+					(playerDoc.querySelector && playerDoc.querySelector('audio, video') !== triggeredMediaEl))) {
+					triggerPlaybackIfReady();
+				}
 				if (fatalErr) throw fatalErr;
 				if (!audioCryptoKeyInfo) await seedEncKeyFromFileInfo();
 				if (!transcodeAudioTemplateUrl || !(transcodeWsd > 0) || !(transcodePpd > 0)) {
@@ -1709,6 +1864,7 @@ const extractRecapAudioJS = `(async () => {
 					}
 					if (settled.done && !settled.res) {
 						pathAPromise = null;
+						resumeMSEPlaybackAfterPathAFailure();
 					}
 				} else {
 					await sleepOrWake(25);
@@ -1877,20 +2033,19 @@ const extractRecapAudioJS = `(async () => {
 				try { abortCtrl.abort(); } catch (_) {}
 			}
 			if (pathAPromise) {
-				let settleTid = null;
-				try {
-					await Promise.race([
-						Promise.allSettled([pathAPromise]),
-						new Promise(resolve => {
-							settleTid = setTimeout(resolve, 250);
-							activeTimers.add(settleTid);
-						})
-					]);
-				} finally {
-					if (settleTid !== null) {
-						clearTimeout(settleTid);
-						activeTimers.delete(settleTid);
-					}
+				let settlementTimer = null;
+				let settlementTimedOut = false;
+				const settled = await Promise.race([
+					Promise.allSettled([pathAPromise]).then(results => ({ results, timedOut: false })),
+					new Promise(resolve => {
+						settlementTimer = setTimeout(() => resolve({ results: null, timedOut: true }), 2000);
+					})
+				]);
+				if (settlementTimer !== null) clearTimeout(settlementTimer);
+				settlementTimedOut = settled.timedOut;
+				cleanupHooks();
+				if (settlementTimedOut) {
+					throw new Error('recap audio Path A worker settlement timeout');
 				}
 			}
 			cleanupHooks();
@@ -1924,6 +2079,62 @@ var (
 	maxRecapAudioPCMBytes    = 360 * 1024 * 1024
 )
 
+func isStreamTarget(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || isAuthRedirectURL(rawURL) {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSuffix(parsed.Path, "/"))
+	return strings.HasSuffix(base, "/streamembed.aspx") ||
+		strings.HasSuffix(base, "/stream.aspx")
+}
+
+func shouldSkipRecapAudioTarget(skipNonStreamTargets bool, rawURL string) bool {
+	return skipNonStreamTargets && !isStreamTarget(rawURL)
+}
+
+func shouldRetryRecapAudioAttempt(
+	attempt, maxAttempts int,
+	sawRetryableStreamTargetErr, hasStreamEmbedTarget bool,
+	lastErr error,
+) bool {
+	if attempt >= maxAttempts-1 {
+		return false
+	}
+	isDownloadBlockedErr := lastErr != nil &&
+		strings.Contains(lastErr.Error(), "isDownloadBlocked=true")
+	return sawRetryableStreamTargetErr ||
+		(!hasStreamEmbedTarget && (lastErr == nil || isDownloadBlockedErr))
+}
+
+func selectRecapAudioError(current, candidate error) error {
+	switch {
+	case current == nil:
+		return candidate
+	case candidate == nil:
+		return current
+	case recapAudioErrorPriority(candidate) > recapAudioErrorPriority(current):
+		return candidate
+	default:
+		return current
+	}
+}
+
+func recapAudioErrorPriority(err error) int {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "exceeds maximum supported size/duration"):
+		return 3
+	case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"),
+		strings.Contains(msg, "MSE stream"), strings.Contains(msg, "Path A capture deadline exceeded"):
+		return 2
+	case strings.Contains(msg, "isDownloadBlocked=true"):
+		return 1
+	default:
+		return 0
+	}
+}
+
 func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetingURL string, w io.Writer) error {
 	if port <= 0 || ownerID == "" || w == nil {
 		return fmt.Errorf("browser: recap audio requires a bound CDP page and writer")
@@ -1939,28 +2150,8 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		maxRecapAudioSourceBytes, maxRecapAudioDurationSec, maxRecapAudioPCMBytes, expectedJSON, extractRecapAudioJS)
 
 	var lastErr error
-	errPriority := func(err error) int {
-		msg := err.Error()
-		switch {
-		case strings.Contains(msg, "exceeds maximum supported size/duration"):
-			return 3
-		case strings.Contains(msg, "identity mismatch"), strings.Contains(msg, "identity unverified"),
-			strings.Contains(msg, "MSE stream"), strings.Contains(msg, "Path A capture deadline exceeded"):
-			return 2
-		case strings.Contains(msg, "isDownloadBlocked=true"):
-			return 1
-		default:
-			return 0
-		}
-	}
 	setLastErr := func(err error) {
-		if err == nil {
-			return
-		}
-		if lastErr != nil && errPriority(lastErr) > errPriority(err) {
-			return
-		}
-		lastErr = err
+		lastErr = selectRecapAudioError(lastErr, err)
 	}
 
 	captureCtx, cancelCapture := context.WithTimeout(ctx, recapAudioEvalTimeout)
@@ -2008,35 +2199,36 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 		orderedTargets := make([]cdpTargetInfo, len(targets))
 		copy(orderedTargets, targets)
 		hasStreamEmbedTarget := false
-		hasXplatTarget := false
 		for _, t := range orderedTargets {
-			if !isTargetInCaptureScope(t, ownerID, frames) {
+			if !isTargetInCaptureScope(t, ownerID, frames) ||
+				isAuthRedirectURL(t.URL) ||
+				hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(t.URL)) {
 				continue
 			}
-			lowerURL := strings.ToLower(t.URL)
-			if strings.Contains(lowerURL, "streamembed.aspx") || strings.Contains(lowerURL, "stream.aspx") {
+			if isStreamTarget(t.URL) {
 				hasStreamEmbedTarget = true
-			}
-			if strings.Contains(lowerURL, "xplatplugins.aspx") {
-				hasXplatTarget = true
 			}
 		}
 		recapTargetRank := func(t cdpTargetInfo) int {
 			lowerURL := strings.ToLower(t.URL)
-			if t.Type == "iframe" {
-				if strings.Contains(lowerURL, "streamembed.aspx") || strings.Contains(lowerURL, "stream.aspx") {
-					return 0
-				}
-				if strings.Contains(lowerURL, "xplatplugins.aspx") {
-					return 1
-				}
+			switch {
+			case t.Type == "iframe" && isStreamTarget(t.URL):
+				return 0
+			case t.Type == "page" && isStreamTarget(t.URL):
+				return 1
+			case t.Type == "iframe" && strings.Contains(lowerURL, "xplatplugins.aspx"):
 				return 2
+			case t.Type == "iframe":
+				return 3
+			default:
+				return 4
 			}
-			return 3
 		}
 		sort.SliceStable(orderedTargets, func(i, j int) bool {
 			return recapTargetRank(orderedTargets[i]) < recapTargetRank(orderedTargets[j])
 		})
+		skipNonStreamTargets := false
+		sawRetryableStreamTargetErr := false
 		for _, target := range orderedTargets {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("browser: recap audio cancelled: %w", err)
@@ -2047,8 +2239,14 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			if isAuthRedirectURL(target.URL) {
 				continue
 			}
-			if !isTargetInCaptureScope(target, ownerID, frames) ||
-				hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
+			if !isTargetInCaptureScope(target, ownerID, frames) {
+				continue
+			}
+			if hasMeetingIdentityConflict(expected, ExtractMeetingIdentity(target.URL)) {
+				setLastErr(fmt.Errorf("browser: recap audio frame URL does not match requested recording"))
+				continue
+			}
+			if shouldSkipRecapAudioTarget(skipNonStreamTargets, target.URL) {
 				continue
 			}
 			tStart := time.Now()
@@ -2059,10 +2257,19 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 					return fmt.Errorf("browser: recap audio cancelled: %w", err)
 				}
 				setLastErr(evalErr)
+				msg := evalErr.Error()
+				streamTargetErr := isStreamDeadlineMsg(msg) ||
+					(isStreamTarget(target.URL) && strings.Contains(msg, "isDownloadBlocked=true"))
+				if streamTargetErr {
+					skipNonStreamTargets = true
+					if attempt == 0 {
+						sawRetryableStreamTargetErr = true
+					}
+				}
 				if err := captureCtx.Err(); err != nil {
 					return captureTimeoutErr(err)
 				}
-				if isStreamDeadlineMsg(evalErr.Error()) {
+				if isStreamDeadlineMsg(msg) {
 					break
 				}
 				continue
@@ -2128,7 +2335,16 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			}
 			if payload.Error != "" {
 				cleanupPendingTransfer()
-				setLastErr(fmt.Errorf("browser: recap audio extraction: %s", payload.Error))
+				payloadErr := fmt.Errorf("browser: recap audio extraction: %s", payload.Error)
+				setLastErr(payloadErr)
+				streamTargetErr := isStreamDeadlineMsg(payload.Error) ||
+					(isStreamTarget(target.URL) && strings.Contains(payload.Error, "isDownloadBlocked=true"))
+				if streamTargetErr {
+					skipNonStreamTargets = true
+					if attempt == 0 {
+						sawRetryableStreamTargetErr = true
+					}
+				}
 				if isStreamDeadlineMsg(payload.Error) {
 					break
 				}
@@ -2245,16 +2461,17 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 			slog.Info("browser: captured recap audio", "elapsed", time.Since(tStart).Round(time.Millisecond), "duration_sec", payload.DurationSec, "source_bytes", payload.SourceBytes, "pcm_bytes", size)
 			return nil
 		}
-		isRetryableStreamDeadline := attempt == 0 && lastErr != nil && isStreamDeadlineMsg(lastErr.Error())
-		shouldRetry := attempt < maxAttempts-1 &&
-			(isRetryableStreamDeadline ||
-				(!hasStreamEmbedTarget &&
-					((lastErr != nil && strings.Contains(lastErr.Error(), "isDownloadBlocked=true")) ||
-						(lastErr == nil && hasXplatTarget))))
+		shouldRetry := shouldRetryRecapAudioAttempt(
+			attempt,
+			maxAttempts,
+			sawRetryableStreamTargetErr,
+			hasStreamEmbedTarget,
+			lastErr,
+		)
 		if !shouldRetry {
 			break
 		}
-		timer := time.NewTimer(1 * time.Second)
+		timer := time.NewTimer(recapAudioRetryDelay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -2281,10 +2498,11 @@ func captureRecapAudioFromTargets(ctx context.Context, port int, ownerID, meetin
 }
 
 var (
-	isoDurationRe  = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$`)
-	colonTimeRe    = regexp.MustCompile(`^(?:(\d+):)?(\d{1,2}):(\d{2})$`)
-	meetingTokenRe = regexp.MustCompile(`(?i)meeting_[A-Za-z0-9_-]+`)
-	meetSegmentRe  = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
+	isoDurationRe       = regexp.MustCompile(`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$`)
+	colonTimeRe         = regexp.MustCompile(`^(?:(\d+):)?(\d{1,2}):(\d{2})$`)
+	meetingTokenRe      = regexp.MustCompile(`(?i)meeting_[A-Za-z0-9_-]+`)
+	meetSegmentRe       = regexp.MustCompile(`(?i)/meet/([A-Za-z0-9_-]+)`)
+	recapSchemePrefixRe = regexp.MustCompile(`(?i)^[A-Za-z][A-Za-z0-9+.-]*:`)
 )
 
 // MeetingIdentity holds the unique meeting and recording identifiers parsed
@@ -2313,11 +2531,12 @@ func ExtractMeetingIdentity(rawURL string) MeetingIdentity {
 	}
 	u, err := url.Parse(trimmed)
 	if err == nil {
-		applyQueryIdentity(&id, u.Query())
+		recordingNameConflict := false
+		applyQueryIdentity(&id, u.Query(), &recordingNameConflict)
 		if u.Fragment != "" {
 			if idx := strings.Index(u.Fragment, "?"); idx >= 0 {
 				if fragVals, fErr := url.ParseQuery(u.Fragment[idx+1:]); fErr == nil {
-					applyQueryIdentity(&id, fragVals)
+					applyQueryIdentity(&id, fragVals, &recordingNameConflict)
 				}
 			}
 		}
@@ -2339,41 +2558,72 @@ func ExtractMeetingIdentity(rawURL string) MeetingIdentity {
 	return id
 }
 
-func applyQueryIdentity(id *MeetingIdentity, vals url.Values) {
-	if v := strings.TrimSpace(vals.Get("threadId")); v != "" && id.ThreadID == "" {
+func applyQueryIdentity(id *MeetingIdentity, vals url.Values, recordingNameConflict *bool) {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "threadId", false); present && !ambiguous && id.ThreadID == "" {
 		id.ThreadID = strings.ToLower(v)
 		if tok := meetingTokenRe.FindString(v); tok != "" && id.MeetingToken == "" {
 			id.MeetingToken = strings.ToLower(tok)
 		}
 	}
-	if v := strings.TrimSpace(vals.Get("driveItemId")); v != "" && id.DriveItemID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "driveItemId", false); present && !ambiguous && id.DriveItemID == "" {
 		id.DriveItemID = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(vals.Get("driveId")); v != "" && id.DriveID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "driveId", false); present && !ambiguous && id.DriveID == "" {
 		id.DriveID = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(vals.Get("callId")); v != "" && id.CallID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "callId", false); present && !ambiguous && id.CallID == "" {
 		id.CallID = strings.ToLower(v)
 	}
-	if v := strings.TrimSpace(vals.Get("iCalUid")); v != "" && id.ICalUID == "" {
+	if v, present, ambiguous := singleCaseInsensitiveQueryValue(vals, "iCalUid", false); present && !ambiguous && id.ICalUID == "" {
 		id.ICalUID = strings.ToLower(v)
 	}
 	for _, key := range []string{"fileUrl", "id"} {
-		if v := strings.TrimSpace(vals.Get(key)); v != "" && id.RecordingName == "" {
-			var p string
-			if key == "id" && !strings.Contains(v, "://") {
-				p = v
-			} else if fu, err := url.Parse(v); err == nil {
-				p = fu.Path
+		for queryKey, values := range vals {
+			if !strings.EqualFold(queryKey, key) {
+				continue
 			}
-			if p != "" && !strings.Contains(p, "/:") {
-				base := path.Base(p)
-				ext := strings.ToLower(path.Ext(base))
-				if base != "." && base != "/" && (ext == ".mp4" || ext == ".mkv" || ext == ".webm" || ext == ".mov" || ext == ".m4a") {
-					id.RecordingName = strings.ToLower(base)
+			for _, value := range values {
+				recordingName := recapRecordingName(strings.TrimSpace(value))
+				if recordingName == "" {
+					continue
+				}
+				if id.RecordingName == "" && !*recordingNameConflict {
+					id.RecordingName = recordingName
+					continue
+				}
+				if id.RecordingName != recordingName {
+					id.RecordingName = ""
+					*recordingNameConflict = true
 				}
 			}
 		}
+	}
+}
+
+func recapRecordingName(value string) string {
+	var p string
+	if !recapSchemePrefixRe.MatchString(value) && !strings.HasPrefix(value, "//") && !strings.HasPrefix(value, ":") {
+		if qIdx := strings.IndexByte(value, '?'); qIdx >= 0 {
+			p = value[:qIdx]
+		} else {
+			p = value
+		}
+	} else if parsed, err := url.Parse(value); err == nil {
+		p = parsed.Path
+	}
+	if p == "" || strings.HasSuffix(p, "/") || strings.Contains(p, "/:") {
+		return ""
+	}
+	base := path.Base(p)
+	ext := strings.ToLower(path.Ext(base))
+	if base == "." || base == "/" {
+		return ""
+	}
+	switch ext {
+	case ".mp4", ".mkv", ".webm", ".mov", ".m4a":
+		return strings.ToLower(base)
+	default:
+		return ""
 	}
 }
 
@@ -2407,7 +2657,7 @@ func recapAudioIdentity(rawURL string) MeetingIdentity {
 		return id
 	}
 	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || u.Path == "" || strings.Contains(u.Path, "/:") {
+	if err != nil || u.Path == "" || strings.HasSuffix(u.Path, "/") || strings.Contains(u.Path, "/:") {
 		return id
 	}
 	base := path.Base(u.Path)
@@ -2531,7 +2781,10 @@ const copyAISummaryJS = `(async () => {
 			const recapTriggered = Boolean(rootEl && rootEl.dataset && rootEl.dataset.goTeamsStreamRecapTriggered === 'true');
 			if (!recapTriggered) {
 				const candidates = Array.from(document.querySelectorAll('button, [role="button"], [class*="PromptStarter"], [class*="zeroPrompt"]') || []);
-				const recapBtn = candidates.find(el => String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting');
+				const recapBtn = candidates.find(el =>
+					String((el && (el.innerText || el.textContent)) || '').trim().toLowerCase() === 'recap the meeting' &&
+					!(el && el.closest && el.closest('.ms-List, [data-tid*="transcript" i]'))
+				);
 				if (recapBtn && typeof recapBtn.click === 'function' && !(recapBtn.dataset && recapBtn.dataset.goTeamsRecapClicked === 'true')) {
 					if (recapBtn.dataset) recapBtn.dataset.goTeamsRecapClicked = 'true';
 					if (rootEl && rootEl.dataset) rootEl.dataset.goTeamsStreamRecapTriggered = 'true';
@@ -2545,7 +2798,9 @@ const copyAISummaryJS = `(async () => {
 			const spCopyBtns = Array.from(document.querySelectorAll('.fai-CopilotMessage__actions button[title="Copy"], .fai-CopilotMessage__actions button[aria-label="Copy"]') || []);
 			const freshCopyBtns = spCopyBtns.filter(btn => {
 				const msg = btn && btn.closest ? btn.closest('.fai-CopilotMessage') : null;
-				return !(msg && msg.dataset && msg.dataset.goTeamsPreexisting === 'true');
+				return Boolean(msg) &&
+					!(msg.dataset && msg.dataset.goTeamsPreexisting === 'true') &&
+					!(btn && btn.closest && btn.closest('.fui-ChatMyMessage, .fui-ChatMyMessage__body, [class*="ChatMyMessage"]'));
 			});
 			const spCopyBtn = freshCopyBtns.length ? freshCopyBtns[freshCopyBtns.length - 1] : null;
 			if (spCopyBtn) {
@@ -3635,6 +3890,8 @@ var cdpEvalTimeout = 10 * time.Second
 // decodes, and serializes a whole recording before returning. The caller's
 // context still cancels the evaluation earlier.
 var recapAudioEvalTimeout = 10 * time.Minute
+
+var recapAudioRetryDelay = 1 * time.Second
 
 func evalInCDPTarget(ctx context.Context, wsURL, expr string) (string, error) {
 	audioLimit := int64(maxRecapAudioPCMBytes)*2 + 65536

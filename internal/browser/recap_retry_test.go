@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -787,14 +789,334 @@ globalThis.AudioContext = class {
 `
 
 func TestCaptureRecapAudioReturnsErrorWhenNoAudioAvailable(t *testing.T) {
+	previousRetryDelay := recapAudioRetryDelay
+	recapAudioRetryDelay = 5 * time.Millisecond
+	t.Cleanup(func() { recapAudioRetryDelay = previousRetryDelay })
+
 	f := newRecapAudioFixture(t, harnessRecapURL, "")
 	got, err := f.capture(t)
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "recap") || !strings.Contains(strings.ToLower(err.Error()), "audio") {
+	if err == nil || !strings.Contains(err.Error(), "unavailable for requested recording") {
 		t.Errorf("expected descriptive recap audio error, got %v", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("no audio source wrote %d bytes", len(got))
 	}
+	require.Equal(t, int32(8), f.lists.Load(), "no-audio capture must exhaust exactly eight target lists")
+}
+
+func TestWave2ACaptureRecapAudioRetryBreakAndDiscovery(t *testing.T) {
+	previousRetryDelay := recapAudioRetryDelay
+	recapAudioRetryDelay = 2 * time.Millisecond
+	t.Cleanup(func() { recapAudioRetryDelay = previousRetryDelay })
+
+	t.Run("attempt-0 blocked stream retry", func(t *testing.T) {
+		blocked := errors.New("recap audio download is blocked (isDownloadBlocked=true)")
+		require.True(t, shouldRetryRecapAudioAttempt(0, 8, true, true, blocked))
+		require.False(t, shouldRetryRecapAudioAttempt(1, 8, false, true, blocked))
+
+		var streamEvals, parentEvals atomic.Int32
+		port, lists := newRecapAudioRetryTargetFixture(t,
+			func(int32) []recapAudioRetryTarget {
+				return []recapAudioRetryTarget{
+					{ID: "xplat", ParentID: "owner", URL: "https://tenant.sharepoint.com/xplatplugins.aspx", WSPath: "/xplat"},
+					{ID: "stream", ParentID: "xplat", URL: "https://tenant.sharepoint.com/sites/recording/streamembed.aspx?driveItemId=recording-a", WSPath: "/stream"},
+				}
+			},
+			func(path string, _ int32) (string, string) {
+				switch path {
+				case "/stream":
+					streamEvals.Add(1)
+					return "", "recap audio download is blocked (isDownloadBlocked=true)"
+				case "/owner", "/xplat":
+					parentEvals.Add(1)
+				}
+				return "", ""
+			},
+		)
+		var out bytes.Buffer
+		err := captureRecapAudioFromTargets(context.Background(), port, "owner", harnessRecapURL, &out)
+		require.Error(t, err)
+		require.Equal(t, int32(2), lists.Load(), "attempt-0 blocked stream must retry exactly once")
+		require.Equal(t, int32(2), streamEvals.Load(), "blocked stream must stop after attempt 1")
+		require.Zero(t, parentEvals.Load(), "nonstream targets must not be evaluated after a retryable stream error")
+	})
+
+	t.Run("stream-target sibling evaluation", func(t *testing.T) {
+		require.True(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/stream.aspx"))
+		require.True(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/streamembed.aspx"))
+		require.False(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/notstream.aspx"))
+		require.False(t, isStreamTarget("https://tenant.sharepoint.com/sites/recording/stream.aspx.backup"))
+		require.False(t, isStreamTarget("https://tenant.sharepoint.com/xplatplugins.aspx?fileUrl=https%3A%2F%2Ftenant.sharepoint.com%2Fstream.aspx"))
+		require.False(t, isStreamTarget("https://login.microsoftonline.com/?redirect_uri=https%3A%2F%2Ftenant.sharepoint.com%2Fstreamembed.aspx"))
+
+		pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+		success := `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-a","pcmChunks":["` + pcm + `"]}`
+		var firstEvals, secondEvals, parentEvals atomic.Int32
+		port, lists := newRecapAudioRetryTargetFixture(t,
+			func(int32) []recapAudioRetryTarget {
+				return []recapAudioRetryTarget{
+					{ID: "first", ParentID: "owner", URL: "https://tenant.sharepoint.com/sites/recording/stream.aspx", WSPath: "/first"},
+					{ID: "second", ParentID: "owner", URL: "https://tenant.sharepoint.com/sites/recording/streamembed.aspx?driveItemId=recording-a", WSPath: "/second"},
+					{ID: "xplat", ParentID: "owner", URL: "https://tenant.sharepoint.com/xplatplugins.aspx", WSPath: "/xplat"},
+				}
+			},
+			func(path string, _ int32) (string, string) {
+				switch path {
+				case "/first":
+					firstEvals.Add(1)
+					return `{"pageUrl":"https://teams.cloud.microsoft/l/meetingrecap","pcmChunks":[]}`, ""
+				case "/second":
+					secondEvals.Add(1)
+					return success, ""
+				case "/xplat", "/owner":
+					parentEvals.Add(1)
+				}
+				return "", ""
+			},
+		)
+		var out bytes.Buffer
+		require.NoError(t, captureRecapAudioFromTargets(context.Background(), port, "owner", harnessRecapURL, &out))
+		require.Equal(t, int32(1), lists.Load())
+		require.Equal(t, int32(1), firstEvals.Load())
+		require.Equal(t, int32(1), secondEvals.Load(), "identity-unverified stream must not prevent sibling evaluation")
+		require.Zero(t, parentEvals.Load())
+		require.NotEmpty(t, out.Bytes())
+	})
+
+	t.Run("skip nonstream targets", func(t *testing.T) {
+		require.False(t, shouldSkipRecapAudioTarget(true, "https://tenant.sharepoint.com/sites/recording/stream.aspx"))
+		require.True(t, shouldSkipRecapAudioTarget(true, "https://tenant.sharepoint.com/xplatplugins.aspx"))
+		require.True(t, shouldSkipRecapAudioTarget(true, "https://tenant.sharepoint.com/sites/site/v2/"))
+		require.False(t, shouldSkipRecapAudioTarget(false, "https://tenant.sharepoint.com/xplatplugins.aspx"))
+
+		var streamEvals, nonstreamEvals atomic.Int32
+		port, lists := newRecapAudioRetryTargetFixture(t,
+			func(int32) []recapAudioRetryTarget {
+				return []recapAudioRetryTarget{
+					{ID: "xplat", ParentID: "owner", URL: "https://tenant.sharepoint.com/xplatplugins.aspx", WSPath: "/xplat"},
+					{ID: "stream", ParentID: "owner", URL: "https://tenant.sharepoint.com/sites/recording/stream.aspx?driveItemId=recording-a", WSPath: "/stream"},
+				}
+			},
+			func(path string, _ int32) (string, string) {
+				switch path {
+				case "/stream":
+					streamEvals.Add(1)
+					return "", "MSE stream incomplete before deadline"
+				case "/xplat", "/owner":
+					nonstreamEvals.Add(1)
+				}
+				return "", ""
+			},
+		)
+		var out bytes.Buffer
+		err := captureRecapAudioFromTargets(context.Background(), port, "owner", harnessRecapURL, &out)
+		require.Error(t, err)
+		require.Equal(t, int32(2), lists.Load())
+		require.Equal(t, int32(2), streamEvals.Load())
+		require.Zero(t, nonstreamEvals.Load())
+	})
+
+	t.Run("delayed mount polling independent of xplatplugins", func(t *testing.T) {
+		require.True(t, shouldRetryRecapAudioAttempt(0, 8, false, false, nil))
+		require.True(t, shouldRetryRecapAudioAttempt(6, 8, false, false, nil))
+		require.False(t, shouldRetryRecapAudioAttempt(7, 8, false, false, nil))
+		require.False(t, shouldRetryRecapAudioAttempt(7, 8, true, true, errors.New("isDownloadBlocked=true")))
+
+		pcm := base64.StdEncoding.EncodeToString(make([]byte, 4608))
+		success := `{"pageUrl":"` + harnessRecapURL + `","itemId":"recording-a","pcmChunks":["` + pcm + `"]}`
+		var streamEvals atomic.Int32
+		port, lists := newRecapAudioRetryTargetFixture(t,
+			func(attempt int32) []recapAudioRetryTarget {
+				if attempt < 4 {
+					return nil
+				}
+				return []recapAudioRetryTarget{{
+					ID: "stream", ParentID: "owner",
+					URL:    "https://tenant.sharepoint.com/sites/recording/stream.aspx?driveItemId=recording-a",
+					WSPath: "/stream",
+				}}
+			},
+			func(path string, _ int32) (string, string) {
+				if path == "/stream" {
+					streamEvals.Add(1)
+					return success, ""
+				}
+				return "", ""
+			},
+		)
+		var out bytes.Buffer
+		require.NoError(t, captureRecapAudioFromTargets(context.Background(), port, "owner", harnessRecapURL, &out))
+		require.Equal(t, int32(5), lists.Load(), "delayed mount polling must not depend on xplatplugins")
+		require.Equal(t, int32(1), streamEvals.Load())
+		require.NotEmpty(t, out.Bytes())
+	})
+
+	t.Run("priority preservation", func(t *testing.T) {
+		deadline := errors.New("Path A capture deadline exceeded")
+		blocked := errors.New("isDownloadBlocked=true")
+		require.ErrorIs(t, selectRecapAudioError(deadline, blocked), deadline)
+		require.ErrorIs(t, selectRecapAudioError(blocked, deadline), deadline)
+
+		var streamEvals atomic.Int32
+		port, lists := newRecapAudioRetryTargetFixture(t,
+			func(int32) []recapAudioRetryTarget {
+				return []recapAudioRetryTarget{{
+					ID: "stream", ParentID: "owner",
+					URL:    "https://tenant.sharepoint.com/sites/recording/stream.aspx?driveItemId=recording-a",
+					WSPath: "/stream",
+				}}
+			},
+			func(path string, attempt int32) (string, string) {
+				if path != "/stream" {
+					return "", ""
+				}
+				streamEvals.Add(1)
+				if attempt == 0 {
+					return "", deadline.Error()
+				}
+				return "", blocked.Error()
+			},
+		)
+		var out bytes.Buffer
+		err := captureRecapAudioFromTargets(context.Background(), port, "owner", harnessRecapURL, &out)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), deadline.Error())
+		require.NotContains(t, err.Error(), blocked.Error())
+		require.Equal(t, int32(2), lists.Load())
+		require.Equal(t, int32(2), streamEvals.Load())
+	})
+}
+
+type recapAudioRetryTarget struct {
+	ID       string
+	ParentID string
+	URL      string
+	WSPath   string
+}
+
+func newRecapAudioRetryTargetFixture(
+	t *testing.T,
+	targetsForAttempt func(int32) []recapAudioRetryTarget,
+	evaluate func(path string, attempt int32) (string, string),
+) (int, *atomic.Int32) {
+	t.Helper()
+	lists := &atomic.Int32{}
+	handlerErrors := make(chan error, 1)
+	reportHandlerError := func(err error) {
+		select {
+		case handlerErrors <- err:
+		default:
+		}
+	}
+	t.Cleanup(func() {
+		select {
+		case err := <-handlerErrors:
+			t.Errorf("CDP fixture handler: %v", err)
+		default:
+		}
+	})
+
+	var serverURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/json/list" {
+			attempt := lists.Add(1) - 1
+			wsBase := "ws" + strings.TrimPrefix(serverURL, "http")
+			specs := targetsForAttempt(attempt)
+			targets := make([]cdpTargetInfo, 0, len(specs)+1)
+			targets = append(targets, cdpTargetInfo{
+				ID: "owner", Type: "page", URL: harnessRecapURL,
+				WebSocketDebuggerURL: wsBase + "/owner",
+			})
+			for _, spec := range specs {
+				targets = append(targets, cdpTargetInfo{
+					ID: spec.ID, ParentID: spec.ParentID, Type: "iframe", URL: spec.URL,
+					WebSocketDebuggerURL: wsBase + spec.WSPath,
+				})
+			}
+			if err := json.NewEncoder(w).Encode(targets); err != nil {
+				reportHandlerError(fmt.Errorf("encode target list: %w", err))
+			}
+			return
+		}
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			reportHandlerError(fmt.Errorf("upgrade CDP: %w", err))
+			return
+		}
+		defer func() {
+			if closeErr := conn.Close(); closeErr != nil {
+				reportHandlerError(fmt.Errorf("close CDP connection: %w", closeErr))
+			}
+		}()
+		raw, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			reportHandlerError(fmt.Errorf("read CDP: %w", err))
+			return
+		}
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			reportHandlerError(fmt.Errorf("decode CDP request: %w", err))
+			return
+		}
+
+		attempt := lists.Load() - 1
+		var resp map[string]any
+		if req.Method == "Page.getFrameTree" {
+			children := targetsForAttempt(attempt)
+			childFrames := make([]map[string]any, 0, len(children))
+			for _, child := range children {
+				childFrames = append(childFrames, map[string]any{
+					"frame": map[string]string{"id": child.ID, "url": child.URL},
+				})
+			}
+			resp = map[string]any{
+				"id": req.ID,
+				"result": map[string]any{
+					"frameTree": map[string]any{
+						"frame":       map[string]string{"id": "owner", "url": harnessRecapURL},
+						"childFrames": childFrames,
+					},
+				},
+			}
+		} else {
+			value, exception := evaluate(r.URL.Path, attempt)
+			if exception != "" {
+				resp = map[string]any{
+					"id": req.ID,
+					"result": map[string]any{
+						"exceptionDetails": map[string]any{
+							"exception": map[string]any{"description": "Error: " + exception},
+						},
+					},
+				}
+			} else {
+				resp = map[string]any{
+					"id": req.ID,
+					"result": map[string]any{
+						"result": map[string]string{"value": value},
+					},
+				}
+			}
+		}
+		payload, err := json.Marshal(resp)
+		if err != nil {
+			reportHandlerError(fmt.Errorf("encode CDP response: %w", err))
+			return
+		}
+		if err := wsutil.WriteServerText(conn, payload); err != nil {
+			reportHandlerError(fmt.Errorf("write CDP response: %w", err))
+		}
+	}))
+	serverURL = srv.URL
+	t.Cleanup(srv.Close)
+	_, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	return port, lists
 }
 
 func TestRecapAudioCDPRejectsOversizedFrameHeaderBeforeBody(t *testing.T) {

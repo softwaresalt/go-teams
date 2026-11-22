@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,8 +19,9 @@ import (
 )
 
 var (
-	errQueueEntryNotYetDue = errors.New("cli: queue entry not yet due")
-	queueFileMu            sync.Mutex
+	errQueueEntryNotYetDue         = errors.New("cli: queue entry not yet due")
+	errQueueEntryAISummaryDisabled = errors.New("cli: queue AI summary disabled")
+	queueFileMu                    sync.Mutex
 )
 
 const (
@@ -81,6 +83,23 @@ func extractQueueFlagValue(args []string, flagName string) string {
 		}
 	}
 	return ""
+}
+
+func queueLineEnablesAISummary(args []string) bool {
+	const prefix = "--no-ai-summary="
+	enabled := false
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(lower, prefix))
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			enabled = !parsed
+		}
+	}
+	return enabled
 }
 
 func parseQueueContent(data []byte) (lines []string, lineEnding string, hasTrailingNewline bool) {
@@ -155,6 +174,9 @@ func appendDeferredAISummaryQueueLineWithConfig(queuePath, meetingURL, transcrip
 		if cfg.Headless {
 			b.WriteString(" --headless")
 		}
+		if cfg.ExplicitAISummaryEnable && !cfg.NoAISummary {
+			b.WriteString(" --no-ai-summary=false")
+		}
 		lines = append(lines, b.String())
 		return writeQueueLines(queuePath, lines, lineEnding, hasTrailingNewline)
 	})
@@ -223,6 +245,16 @@ func markQueueLineCompleted(queuePath string, lineIdx int, originalLine string) 
 // Blank lines and lines starting with "::" (after leading whitespace) are
 // ignored.
 func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs []string) error {
+	return runQueueFileFiltered(ctx, d, queuePath, inheritedArgs, nil)
+}
+
+func runQueueFileFiltered(
+	ctx context.Context,
+	d *deps,
+	queuePath string,
+	inheritedArgs []string,
+	skipLine func([]string) bool,
+) error {
 	data, err := os.ReadFile(queuePath)
 	if err != nil {
 		return fmt.Errorf("cli: read queue file %s: %w", queuePath, err)
@@ -259,6 +291,9 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 		if len(lineArgs) == 0 {
 			continue
 		}
+		if skipLine != nil && skipLine(lineArgs) {
+			continue
+		}
 		if containsQueueFlag(lineArgs) {
 			errs = append(errs, fmt.Errorf("cli: queue line %d: nested --queue flag is not allowed", i+1))
 			continue
@@ -282,6 +317,10 @@ func runQueueFile(ctx context.Context, d *deps, queuePath string, inheritedArgs 
 		if err := executeQueueLine(ctx, d, effectiveArgs); err != nil {
 			if errors.Is(err, errQueueEntryNotYetDue) {
 				slog.Info("cli: skipping deferred queue entry before not-before timestamp", "line", i+1)
+				continue
+			}
+			if errors.Is(err, errQueueEntryAISummaryDisabled) {
+				slog.Info("cli: skipping deferred queue entry because AI Summary is disabled", "line", i+1)
 				continue
 			}
 			slog.Error("cli: queue entry failed", "line", i+1, "err", err)

@@ -76,19 +76,14 @@ func isAISummaryDisabled(c config.Config) bool {
 	if strings.TrimSpace(c.AppendAISummary) != "" {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(c.CaptureMode), config.CaptureModeEphemeralLive) {
+	if c.NoAISummary || strings.EqualFold(strings.TrimSpace(c.CaptureMode), config.CaptureModeEphemeralLive) {
 		return true
 	}
-	raw := strings.TrimSpace(c.AISummaryDelay)
-	if raw == "" {
-		return false
-	}
-	d, err := time.ParseDuration(raw)
-	return err == nil && d == 0
+	return false
 }
 
 func effectiveAISummaryDelay(cfg config.Config, isRecap bool) time.Duration {
-	if isRecap {
+	if isRecap || cfg.NoAISummary {
 		return 0
 	}
 	mode := strings.ToLower(strings.TrimSpace(cfg.CaptureMode))
@@ -120,6 +115,7 @@ func runAppendAISummary(ctx context.Context, d *deps, cfg config.Config, meeting
 	recapCfg.CaptureMode = config.CaptureModePastRecap
 	recapCfg.AppendAISummary = transcriptPath
 	recapCfg.AISummaryDelay = ""
+	recapCfg.NoAISummary = false
 	if strings.TrimSpace(recapCfg.LobbyTimeout) == "" {
 		recapCfg.LobbyTimeout = defaultRecapEnrichmentTimeout.String()
 	}
@@ -170,6 +166,9 @@ func runCaptureWithHooks(ctx context.Context, d *deps, cfg config.Config, meetin
 		return err
 	}
 	if targetMD := strings.TrimSpace(cfg.AppendAISummary); targetMD != "" {
+		if cfg.NoAISummary && isInsideQueueExecution(ctx) {
+			return errQueueEntryAISummaryDisabled
+		}
 		if hooks.onLiveCallFinished != nil {
 			defer hooks.onLiveCallFinished()
 		}

@@ -206,6 +206,21 @@ func TestQueueFileDoesNotCommentOutCancelledEntryAndRejectsNestedQueueAndForward
 	}
 }
 
+func TestQueueNoAISummarySkipsInheritedAppendWithoutCommentingLine(t *testing.T) {
+	queuePath := filepath.Join(t.TempDir(), "transcript-queue.txt")
+	line := `-u "https://teams.cloud.microsoft/l/meetingrecap?threadId=synthetic" --append-ai-summary "transcript.md"`
+	require.NoError(t, os.WriteFile(queuePath, []byte(line+"\n"), 0o600))
+
+	d := &deps{
+		loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
+	}
+	require.NoError(t, runCmd(context.Background(), d, "--queue", queuePath, "--no-ai-summary"))
+
+	updated, err := os.ReadFile(queuePath)
+	require.NoError(t, err)
+	assert.Equal(t, line+"\n", string(updated))
+}
+
 func TestSplitQueueArgsUnterminatedQuoteDoesNotLeakLine(t *testing.T) {
 	line := `join --url "https://teams.microsoft.com/meet/123?p=secret-passcode`
 
@@ -253,6 +268,17 @@ func TestSanitizeQueueArgsForLogRedactsAccountFlag(t *testing.T) {
 	assert.NotContains(t, gotEquals, "Bob Smith")
 }
 
+func TestQueueLineAISummaryOverrideDetection(t *testing.T) {
+	assert.True(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md", "--no-ai-summary=false"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md", "--no-ai-summary=true"}))
+	assert.True(t, queueLineEnablesAISummary([]string{"--no-ai-summary=true", "--no-ai-summary=false"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--no-ai-summary=false", "--no-ai-summary=true"}))
+	assert.True(t, queueLineEnablesAISummary([]string{"--no-ai-summary=f"}))
+	assert.True(t, queueLineEnablesAISummary([]string{"--no-ai-summary=F"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--no-ai-summary=off"}))
+}
+
 func TestQueueFileHonorsPerEntryAudioAliasOverrides(t *testing.T) {
 	dir := t.TempDir()
 	queuePath := filepath.Join(dir, "transcript-queue.txt")
@@ -283,9 +309,10 @@ func TestAppendDeferredAISummaryQueueHelpers(t *testing.T) {
 	qPath := filepath.Join(dir, "transcription_queue.txt")
 	mdPath := filepath.Join(dir, "call.md")
 	cfg := config.Config{
-		ProfileDir:     `C:\Profiles\Alice\`,
-		DefaultAccount: "alice@contoso.com",
-		Headless:       true,
+		ProfileDir:              `C:\Profiles\Alice\`,
+		DefaultAccount:          "alice@contoso.com",
+		Headless:                true,
+		ExplicitAISummaryEnable: true,
 	}
 	require.NoError(t, appendDeferredAISummaryQueueLineWithConfig(qPath, "https://teams.microsoft.com/meet/123", mdPath, time.Now().UTC(), cfg))
 
@@ -295,6 +322,8 @@ func TestAppendDeferredAISummaryQueueHelpers(t *testing.T) {
 	require.NoError(t, err, "trailing backslash in Windows profile path must parse cleanly via splitQueueArgs")
 	assert.Equal(t, `C:\Profiles\Alice\`, extractQueueFlagValue(parsedArgs, "--profile-dir"))
 	assert.Equal(t, mdPath, extractQueueFlagValue(parsedArgs, "--append-ai-summary"))
+	assert.True(t, queueLineEnablesAISummary(parsedArgs),
+		"persisted per-meeting AI Summary opt-in must override the schedule global disable after restart")
 
 	require.NoError(t, markDeferredAISummaryQueueLineDone(qPath, mdPath))
 	b, err := os.ReadFile(qPath)

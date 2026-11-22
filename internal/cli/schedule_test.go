@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,6 +17,113 @@ import (
 	"github.com/softwaresalt/go-teams/internal/config"
 	"github.com/softwaresalt/go-teams/internal/scheduler"
 )
+
+func TestScheduleNoAISummaryAndPerMeetingDelayPrecedence(t *testing.T) {
+	t.Run("explicit-no-ai-summary-true", func(t *testing.T) {
+		var f scheduleFlags
+		cmd := &cobra.Command{Use: "schedule"}
+		bindScheduleFlags(cmd, &f)
+		require.NoError(t, cmd.Flags().Parse([]string{"--no-ai-summary"}))
+		cfg := config.Config{AISummaryDelay: "30m"}
+
+		applyScheduleFlags(cmd, &cfg, f)
+		assert.True(t, cfg.NoAISummary)
+		assert.Equal(t, "0s", cfg.AISummaryDelay)
+	})
+
+	t.Run("explicit-no-ai-summary-false", func(t *testing.T) {
+		var f scheduleFlags
+		cmd := &cobra.Command{Use: "schedule"}
+		bindScheduleFlags(cmd, &f)
+		require.NoError(t, cmd.Flags().Parse([]string{"--no-ai-summary=false"}))
+		cfg := config.Config{AISummaryDelay: "30m", NoAISummary: true}
+
+		applyScheduleFlags(cmd, &cfg, f)
+		assert.False(t, cfg.NoAISummary)
+		assert.Equal(t, "30m", cfg.AISummaryDelay)
+	})
+
+	t.Run("positive-per-meeting-delay", func(t *testing.T) {
+		delay := 5 * time.Minute
+		base := config.Config{AISummaryDelay: "0s", NoAISummary: true}
+
+		got := buildScheduleEntryConfig(base, scheduler.Entry{
+			Mode:           config.CaptureModePastRecap,
+			AISummaryDelay: &delay,
+		})
+		assert.False(t, got.NoAISummary)
+		assert.Equal(t, "5m0s", got.AISummaryDelay)
+	})
+
+	for _, tc := range []struct {
+		name  string
+		delay time.Duration
+	}{
+		{name: "zero-delay-preserves-inherited-disable", delay: 0},
+		{name: "negative-delay-preserves-inherited-disable", delay: -time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := config.Config{
+				CaptureMode:    config.CaptureModePastRecap,
+				NoAISummary:    true,
+				AISummaryDelay: "0s",
+			}
+
+			got := buildScheduleEntryConfig(base, scheduler.Entry{
+				Mode:           config.CaptureModePastRecap,
+				AISummaryDelay: &tc.delay,
+			})
+			assert.True(t, got.NoAISummary)
+			assert.Equal(t, tc.delay.String(), got.AISummaryDelay)
+		})
+	}
+
+	t.Run("schedule-help", func(t *testing.T) {
+		var f scheduleFlags
+		cmd := &cobra.Command{Use: "schedule"}
+
+		bindScheduleFlags(cmd, &f)
+		flag := cmd.Flags().Lookup("no-ai-summary")
+		require.NotNil(t, flag)
+		assert.Equal(t, "disable AI Summary capture for both Meeting Recaps and post-call enrichment", flag.Usage)
+	})
+
+	t.Run("startup-deferred-sweep-honors-global-disable", func(t *testing.T) {
+		queuePath := filepath.Join(t.TempDir(), "queue.txt")
+		require.NoError(t, os.WriteFile(queuePath, []byte(
+			"https://teams.microsoft.com/meet/synthetic --append-ai-summary transcript.md\n"+
+				"-u \"https://teams.microsoft.com/meet/synthetic\"\n",
+		), 0o600))
+		var busy atomic.Bool
+		var ordinaryCalls int
+		var ordinaryNoAI bool
+		d := &deps{
+			loadConfig: func(string) (config.Config, error) { return validConfig(), nil },
+			newRunner:  func(config.Config) browser.Runner { return &fakeRunner{} },
+			newMeeting: func(ctx context.Context, cfg config.Config, _ string) (browser.Meeting, context.Context, func(), error) {
+				ordinaryCalls++
+				ordinaryNoAI = cfg.NoAISummary
+				return nil, ctx, func() {}, nil
+			},
+			newSession: func(config.Config, string) meetingSession {
+				return recorderSession{&captureRecorder{}}
+			},
+		}
+
+		runDeferredAppendAISummarySweep(context.Background(), d, config.Config{
+			NoAISummary: true,
+			QueueFile:   queuePath,
+		}, "", &busy)
+
+		assert.False(t, busy.Load(), "disabled startup sweep must leave the busy gate untouched")
+		assert.Equal(t, 1, ordinaryCalls)
+		assert.True(t, ordinaryNoAI, "ordinary queued captures must inherit the global disable")
+		updated, err := os.ReadFile(queuePath)
+		require.NoError(t, err)
+		assert.Contains(t, string(updated), "--append-ai-summary transcript.md")
+		assert.Contains(t, string(updated), "::-u", "ordinary queue entries must still run")
+	})
+}
 
 func TestScheduleJobRunsCapture(t *testing.T) {
 	var meetingCalls int32

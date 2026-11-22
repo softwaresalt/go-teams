@@ -51,7 +51,7 @@ func bindScheduleFlags(cmd *cobra.Command, f *scheduleFlags) {
 	cmd.Flags().DurationVar(&f.duration, "duration", 0, "default nominal live capture duration (default 1h)")
 	cmd.Flags().DurationVar(&f.idleTimeout, "idle-timeout", 0, "default post-duration inactivity grace period (default 3m)")
 	cmd.Flags().DurationVar(&f.aiSummaryDelay, "ai-summary-delay", 0, "default delay after a live call ends before fetching the AI Summary (default 30m)")
-	cmd.Flags().BoolVar(&f.noAISummary, "no-ai-summary", false, "disable delayed post-call AI Summary capture")
+	cmd.Flags().BoolVar(&f.noAISummary, "no-ai-summary", false, "disable AI Summary capture for both Meeting Recaps and post-call enrichment")
 	cmd.Flags().DurationVar(&f.lobbyTimeout, "lobby-timeout", 0, "default maximum time to wait in pre-join or lobby before aborting")
 }
 
@@ -84,8 +84,20 @@ func applyScheduleFlags(cmd *cobra.Command, cfg *config.Config, f scheduleFlags)
 	}
 	if (cmd != nil && cmd.Flags().Changed("ai-summary-delay")) || f.aiSummaryDelay != 0 {
 		cfg.AISummaryDelay = f.aiSummaryDelay.String()
+		if f.aiSummaryDelay > 0 {
+			cfg.ExplicitAISummaryEnable = true
+		}
 	}
-	if f.noAISummary {
+	if cmd != nil && cmd.Flags().Changed("no-ai-summary") {
+		cfg.NoAISummary = f.noAISummary
+		if !f.noAISummary {
+			cfg.ExplicitAISummaryEnable = true
+		}
+		if f.noAISummary {
+			cfg.AISummaryDelay = "0s"
+		}
+	} else if f.noAISummary {
+		cfg.NoAISummary = true
 		cfg.AISummaryDelay = "0s"
 	}
 	if (cmd != nil && cmd.Flags().Changed("lobby-timeout")) || f.lobbyTimeout != 0 {
@@ -131,6 +143,10 @@ func buildScheduleEntryConfig(base config.Config, e scheduler.Entry) config.Conf
 		entryCfg.IdleTimeout = defaultScheduleIdleTimeout.String()
 	}
 	if e.AISummaryDelay != nil {
+		if *e.AISummaryDelay > 0 {
+			entryCfg.NoAISummary = false
+			entryCfg.ExplicitAISummaryEnable = true
+		}
 		entryCfg.AISummaryDelay = (*e.AISummaryDelay).String()
 	}
 	if e.LobbyTimeout > 0 {
@@ -273,7 +289,15 @@ func runDeferredAppendAISummarySweep(ctx context.Context, d *deps, cfg config.Co
 	if strings.TrimSpace(configPath) != "" {
 		inherited = append(inherited, "--config", configPath)
 	}
-	if err := runQueueFile(ctx, d, queuePath, inherited); err != nil {
+	if cfg.NoAISummary {
+		inherited = append(inherited, "--no-ai-summary")
+	}
+	skipLine := func(args []string) bool {
+		return cfg.NoAISummary &&
+			!queueLineEnablesAISummary(args) &&
+			extractQueueFlagValue(args, "--append-ai-summary") != ""
+	}
+	if err := runQueueFileFiltered(ctx, d, queuePath, inherited, skipLine); err != nil {
 		slog.Warn("schedule: startup deferred queue sweep completed with errors", "queue", queuePath, "err", err)
 	}
 }

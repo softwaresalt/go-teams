@@ -1,0 +1,2 @@
+{"timestamp":"2026-11-20T22:52:29.1118423-08:00","event_type":"P-005 violation=P-002 gate=Ship-Step4.1 action=halt reason=docs_only_shared_backlog_root_resolver_unavailable shipment=036-S task=036.009-T","payload":{}}
+{"timestamp":"2026-11-20T23:08:38.0372298-08:00","event_type":"TOOL_OK: checkpoint/get,shipment/get,task/get,sync_index via mcp; INDEX_SYNC_OK; CHECKPOINT_RESTORE_CONFIRMED; ENGRAM_DEGRADED: skipping engram prune on restore; summarizing checkpoint state_dump only","payload":{}}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,7 +94,10 @@ func queueLineEnablesAISummary(args []string) bool {
 			continue
 		}
 		value := strings.TrimSpace(strings.TrimPrefix(lower, prefix))
-		enabled = value == "false" || value == "0" || value == "off"
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			enabled = !parsed
+		}
 	}
 	return enabled
 }
@@ -170,7 +174,7 @@ func appendDeferredAISummaryQueueLineWithConfig(queuePath, meetingURL, transcrip
 		if cfg.Headless {
 			b.WriteString(" --headless")
 		}
-		if !cfg.NoAISummary {
+		if cfg.ExplicitAISummaryEnable && !cfg.NoAISummary {
 			b.WriteString(" --no-ai-summary=false")
 		}
 		lines = append(lines, b.String())

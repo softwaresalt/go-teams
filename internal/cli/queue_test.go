@@ -274,6 +274,9 @@ func TestQueueLineAISummaryOverrideDetection(t *testing.T) {
 	assert.False(t, queueLineEnablesAISummary([]string{"--append-ai-summary", "call.md", "--no-ai-summary=true"}))
 	assert.True(t, queueLineEnablesAISummary([]string{"--no-ai-summary=true", "--no-ai-summary=false"}))
 	assert.False(t, queueLineEnablesAISummary([]string{"--no-ai-summary=false", "--no-ai-summary=true"}))
+	assert.True(t, queueLineEnablesAISummary([]string{"--no-ai-summary=f"}))
+	assert.True(t, queueLineEnablesAISummary([]string{"--no-ai-summary=F"}))
+	assert.False(t, queueLineEnablesAISummary([]string{"--no-ai-summary=off"}))
 }
 
 func TestQueueFileHonorsPerEntryAudioAliasOverrides(t *testing.T) {
@@ -306,9 +309,10 @@ func TestAppendDeferredAISummaryQueueHelpers(t *testing.T) {
 	qPath := filepath.Join(dir, "transcription_queue.txt")
 	mdPath := filepath.Join(dir, "call.md")
 	cfg := config.Config{
-		ProfileDir:     `C:\Profiles\Alice\`,
-		DefaultAccount: "alice@contoso.com",
-		Headless:       true,
+		ProfileDir:              `C:\Profiles\Alice\`,
+		DefaultAccount:          "alice@contoso.com",
+		Headless:                true,
+		ExplicitAISummaryEnable: true,
 	}
 	require.NoError(t, appendDeferredAISummaryQueueLineWithConfig(qPath, "https://teams.microsoft.com/meet/123", mdPath, time.Now().UTC(), cfg))
 

@@ -84,9 +84,15 @@ func applyScheduleFlags(cmd *cobra.Command, cfg *config.Config, f scheduleFlags)
 	}
 	if (cmd != nil && cmd.Flags().Changed("ai-summary-delay")) || f.aiSummaryDelay != 0 {
 		cfg.AISummaryDelay = f.aiSummaryDelay.String()
+		if f.aiSummaryDelay > 0 {
+			cfg.ExplicitAISummaryEnable = true
+		}
 	}
 	if cmd != nil && cmd.Flags().Changed("no-ai-summary") {
 		cfg.NoAISummary = f.noAISummary
+		if !f.noAISummary {
+			cfg.ExplicitAISummaryEnable = true
+		}
 		if f.noAISummary {
 			cfg.AISummaryDelay = "0s"
 		}
@@ -139,6 +145,7 @@ func buildScheduleEntryConfig(base config.Config, e scheduler.Entry) config.Conf
 	if e.AISummaryDelay != nil {
 		if *e.AISummaryDelay > 0 {
 			entryCfg.NoAISummary = false
+			entryCfg.ExplicitAISummaryEnable = true
 		}
 		entryCfg.AISummaryDelay = (*e.AISummaryDelay).String()
 	}

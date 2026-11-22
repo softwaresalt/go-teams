@@ -220,9 +220,15 @@ func applyCaptureFlags(cmd *cobra.Command, cfg *config.Config, f captureFlags) {
 	}
 	if captureFlagChanged(cmd, "ai-summary-delay") || f.aiSummaryDelay != 0 {
 		cfg.AISummaryDelay = f.aiSummaryDelay.String()
+		if f.aiSummaryDelay > 0 {
+			cfg.ExplicitAISummaryEnable = true
+		}
 	}
 	if captureFlagChanged(cmd, "no-ai-summary") {
 		cfg.NoAISummary = f.noAISummary
+		if !f.noAISummary {
+			cfg.ExplicitAISummaryEnable = true
+		}
 		if f.noAISummary {
 			cfg.AISummaryDelay = "0s"
 		}

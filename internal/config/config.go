@@ -115,8 +115,10 @@ type Config struct {
 	NotBefore            string `yaml:"-"`
 	ExplicitCaptureAudio bool   `yaml:"-"`
 	// NoAISummary records an explicit --no-ai-summary CLI flag at runtime without YAML serialization.
-	NoAISummary bool              `yaml:"-"`
-	Meetings    []MeetingSchedule `yaml:"meetings"`
+	NoAISummary bool `yaml:"-"`
+	// ExplicitAISummaryEnable records a deliberate runtime opt-in that must survive queue replay.
+	ExplicitAISummaryEnable bool              `yaml:"-"`
+	Meetings                []MeetingSchedule `yaml:"meetings"`
 }
 
 // DefaultConfig returns a Config populated with platform-appropriate default
